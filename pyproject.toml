@@ -1,0 +1,20 @@
+[project]
+name = "CodeReviewer"
+version = "1.0.0"
+description = "A code review tool for developers"
+authors = [
+    { name = "Aya Yasser", email = "ayasser.tawfik@gmail.com" }
+]
+readme = "README.md"
+requires-python = ">=3.13"
+License = { file = "LICENSE" }  
+keywords = ["code review", "developer tools"]
+dependencies = [
+    "colorama>=0.4.6; sys_platform == 'win32'",
+    "concurrent-log-handler>=0.9.29",
+    "pydantic-settings>=2.15.0",
+    "structlog>=26.1.0",
+]
+
+[project.urls]
+Repository = ""

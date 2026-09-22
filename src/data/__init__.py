@@ -3,9 +3,12 @@ from data.models import Base, Repository, ReviewReport, User
 from data.repositories import RepositoryRepository, ReviewReportRepository, UserRepository
 from data.schemas import (
     AuthResponse,
+    IngestionRequest,
+    IngestionResponse,
     LoginRequest,
     ORMBase,
     RefreshTokenRequest,
+    RepositoryContextResponse,
     RepositoryCreate,
     RepositoryRead,
     RepositoryUpdate,
@@ -34,6 +37,9 @@ __all__ = [
     "LoginRequest",
     "RefreshTokenRequest",
     "Token",
+    "IngestionRequest",
+    "IngestionResponse",
+    "RepositoryContextResponse",
     "UserCreate",
     "UserRead",
     "UserUpdate",

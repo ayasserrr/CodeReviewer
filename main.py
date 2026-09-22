@@ -25,6 +25,13 @@ from config import settings  # noqa: E402
 from data import db_manager  # noqa: E402
 from helpers import limiter  # noqa: E402
 from system import logger  # noqa: E402
+from utils import (  # noqa: E402
+    AuthenticationError,
+    DiskError,
+    InvalidInputError,
+    NetworkError,
+    RepoNotFoundError,
+)
 
 
 @asynccontextmanager
@@ -76,6 +83,31 @@ async def connection_refused_handler(request: Request, _exc: ConnectionRefusedEr
         status_code=503,
         content={"detail": "Service temporarily unavailable."},
     )
+
+
+@app.exception_handler(InvalidInputError)
+async def invalid_input_error_handler(request: Request, exc: InvalidInputError) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(AuthenticationError)
+async def authentication_error_handler(request: Request, exc: AuthenticationError) -> JSONResponse:
+    return JSONResponse(status_code=401, content={"detail": str(exc)})
+
+
+@app.exception_handler(RepoNotFoundError)
+async def repo_not_found_error_handler(request: Request, exc: RepoNotFoundError) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(NetworkError)
+async def network_error_handler(request: Request, exc: NetworkError) -> JSONResponse:
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+
+@app.exception_handler(DiskError)
+async def disk_error_handler(request: Request, exc: DiskError) -> JSONResponse:
+    return JSONResponse(status_code=507, content={"detail": str(exc)})
 
 
 if __name__ == "__main__":

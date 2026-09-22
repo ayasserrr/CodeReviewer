@@ -77,6 +77,16 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(30, gt=0, description="Access token lifetime, in minutes")
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, gt=0, description="Refresh token lifetime, in days")
 
+    # ===========================
+    # Repository Ingestion Configuration
+    # ===========================
+    CLONED_REPOS_DIR: str = Field(
+        "cloned_repos", min_length=1, description="Directory (relative to PROJECT_ROOT unless absolute) for cloned repositories"
+    )
+    GIT_CLONE_TIMEOUT_SECONDS: int = Field(300, gt=0, description="Hard timeout for git clone operations, in seconds")
+    GITLAB_API_TIMEOUT_SECONDS: int = Field(15, gt=0, description="Timeout for GitLab API requests, in seconds")
+    MIN_FREE_DISK_MB: int = Field(500, gt=0, description="Minimum free disk space (MB) required before starting a clone")
+
     model_config = SettingsConfigDict(
         env_file=(".env", f".env.{_APP_ENV}"),
         env_file_encoding="utf-8",
@@ -131,6 +141,12 @@ class Settings(BaseSettings):
         """LOG_DIR resolved against PROJECT_ROOT when it's a relative path."""
         log_dir = Path(self.LOG_DIR)
         return log_dir if log_dir.is_absolute() else self.PROJECT_ROOT / log_dir
+
+    @property
+    def cloned_repos_path(self) -> Path:
+        """CLONED_REPOS_DIR resolved against PROJECT_ROOT when it's a relative path."""
+        repos_dir = Path(self.CLONED_REPOS_DIR)
+        return repos_dir if repos_dir.is_absolute() else self.PROJECT_ROOT / repos_dir
 
     @property
     def database_url(self) -> str:

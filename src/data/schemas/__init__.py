@@ -1,4 +1,5 @@
 from .base import ORMBase
+from .ingestion import IngestionRequest, IngestionResponse, RepositoryContextResponse
 from .repository import RepositoryCreate, RepositoryRead, RepositoryUpdate
 from .review_report import ReviewReportCreate, ReviewReportRead, ReviewReportUpdate
 from .user import UserCreate, UserRead, UserUpdate
@@ -10,6 +11,9 @@ __all__ = [
     "LoginRequest",
     "RefreshTokenRequest",
     "Token",
+    "IngestionRequest",
+    "IngestionResponse",
+    "RepositoryContextResponse",
     "RepositoryCreate",
     "RepositoryRead",
     "RepositoryUpdate",

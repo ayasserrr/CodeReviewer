@@ -8,7 +8,8 @@ at import time. That keeps constructing a ``DatabaseManager`` (or importing
 this module) cheap and side-effect free.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -98,11 +99,16 @@ class DatabaseManager:
             logger.critical("database_connection_failed")
             raise
 
-    async def get_db_session(self) -> AsyncGenerator[AsyncSession, None]:
-        """Yield a database session, rolling back automatically on error.
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        """Open a transactional session, committing on success or rolling back on error.
 
-        Designed for use as a FastAPI dependency or async context manager.
-        The session is closed when the generator exits.
+        Safe to use anywhere with ``async with`` — FastAPI route handlers,
+        LangGraph nodes, scripts. Unlike ``get_db_session``, exiting this
+        context manager early (e.g. via ``return`` inside its ``async with``
+        block) still runs the commit/rollback correctly, since it's a plain
+        context manager rather than a generator being driven by something
+        else's iteration protocol.
 
         Yields:
             AsyncSession: A transactional database session.
@@ -120,6 +126,21 @@ class DatabaseManager:
             except Exception:
                 await db_session.rollback()
                 raise
+
+    async def get_db_session(self) -> AsyncGenerator[AsyncSession, None]:
+        """Yield a database session, for use as a FastAPI dependency.
+
+        FastAPI drives this generator's lifecycle explicitly (resuming it in
+        a ``finally`` block after the request completes), which is what makes
+        the commit/rollback after ``yield`` actually run. Don't consume this
+        directly with ``async for ... : return`` outside of FastAPI's
+        dependency injection — use ``session()`` instead.
+
+        Yields:
+            AsyncSession: A transactional database session.
+        """
+        async with self.session() as db_session:
+            yield db_session
 
     async def dispose(self) -> None:
         """Dispose the engine and close all pooled connections.

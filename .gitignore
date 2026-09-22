@@ -2,5 +2,7 @@
 .env.local
 !.env.example
 storage/logs
+cloned_repos/
 __pycache__/
 *.pyc
+.pytest_cache/

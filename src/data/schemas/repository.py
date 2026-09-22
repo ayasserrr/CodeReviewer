@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from data.schemas import ORMBase
+from enums import SourceType
 
 
 class RepositoryBase(BaseModel):
@@ -45,14 +46,23 @@ class RepositoryUpdate(BaseModel):
 class RepositoryRead(RepositoryBase, ORMBase):
     """Schema for returning repository data to callers.
 
-    Adds server-managed fields (``id``, ``user_id``, ``created_at``).
+    Adds server-managed fields (``id``, ``user_id``, ingestion snapshot
+    metadata, ``created_at``).
 
     Attributes:
         id: Unique repository identifier.
         user_id: UUID of the owning user.
+        local_path: Absolute path to the last ingested clone, if any.
+        head_sha: Full commit SHA checked out at last ingestion, if any.
+        default_branch: Default branch resolved at last ingestion, if any.
+        source_type: Where this repository was ingested from, if any.
         created_at: When the repository was registered.
     """
 
     id: UUID = Field(..., description="Unique repository identifier.")
     user_id: UUID = Field(..., description="UUID of the owning user.")
+    local_path: str | None = Field(None, description="Absolute path to the last ingested clone.")
+    head_sha: str | None = Field(None, description="Full commit SHA checked out at last ingestion.")
+    default_branch: str | None = Field(None, description="Default branch resolved at last ingestion.")
+    source_type: SourceType | None = Field(None, description="Where this repository was ingested from.")
     created_at: datetime = Field(..., description="When the repository was registered.")

@@ -1,5 +1,6 @@
 from .exceptions import (
     AuthenticationError,
+    BootstrapError,
     DiscoveryError,
     DiskError,
     IngestionError,
@@ -19,6 +20,7 @@ from .manifest import (
     LanguageStat,
     RepositoryManifest,
 )
+from .finding import StaticFinding
 
 __all__ = [
     "IngestionError",
@@ -28,6 +30,7 @@ __all__ = [
     "NetworkError",
     "DiskError",
     "DiscoveryError",
+    "BootstrapError",
     "RepositoryContext",
     "RepositoryIngestionResult",
     "FileEntry",
@@ -39,4 +42,5 @@ __all__ = [
     "DependencyEntry",
     "DiscoveryStatistics",
     "RepositoryManifest",
+    "StaticFinding",
 ]

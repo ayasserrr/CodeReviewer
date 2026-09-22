@@ -12,7 +12,7 @@ from data.models import Base
 from enums import SourceType
 
 if TYPE_CHECKING:
-    from data.models import ManifestRecord, ReviewReport, User
+    from data.models import ManifestRecord, ReviewReport, StaticFindingRecord, User
 
 
 class Repository(Base):
@@ -35,6 +35,8 @@ class Repository(Base):
         created_at: When the repository was registered.
         user: Many-to-one back-reference to the owning ``User``.
         review_reports: One-to-many relationship to ``ReviewReport``; cascades delete-orphan.
+        manifests: One-to-many relationship to ``ManifestRecord``; cascades delete-orphan.
+        static_findings: One-to-many relationship to ``StaticFindingRecord``; cascades delete-orphan.
     """
 
     __tablename__ = "repositories"
@@ -101,6 +103,11 @@ class Repository(Base):
     )
 
     manifests: Mapped[list["ManifestRecord"]] = relationship(
+        back_populates="repository",
+        cascade="all, delete-orphan",
+    )
+
+    static_findings: Mapped[list["StaticFindingRecord"]] = relationship(
         back_populates="repository",
         cascade="all, delete-orphan",
     )

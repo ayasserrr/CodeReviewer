@@ -38,6 +38,16 @@ pythonpath = ["src"]
 asyncio_mode = "auto"
 
 [dependency-groups]
+analysis-tools = [
+    "bandit>=1.9.4",
+    "lizard>=1.24.0",
+    "pip-audit>=2.10.1",
+    "pyright>=1.1.414",
+    "radon>=6.0.1",
+    "ruff>=0.16.8",
+    "semgrep>=1.177.0",
+    "vulture>=2.16",
+]
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",

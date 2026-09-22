@@ -30,3 +30,15 @@ class DiscoveryError(Exception):
     design, discovery only fails outright when it can't proceed at all
     (``repo_path`` missing or completely inaccessible).
     """
+
+
+class BootstrapError(Exception):
+    """Raised when one or more required static-analysis/security CLI tools
+    are missing from the environment.
+
+    Deliberately strict: static analysis never runs in a degraded mode.
+    Installing the required tools is a build/deployment-time responsibility
+    (see pyproject.toml's ``analysis-tools`` dependency group and the
+    bundled ``src/assets/gitleaks`` binary), not something this code
+    attempts to fix at runtime.
+    """

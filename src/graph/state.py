@@ -4,16 +4,18 @@ Populated incrementally as each phase runs:
 - ``ingest`` sets ``result`` (the ``RepositoryIngestionResult`` wrapping the
   ``RepositoryContext`` snapshot everything downstream operates on).
 - ``discovery`` sets ``manifest`` (the versioned ``RepositoryManifest``).
+- ``static_analysis`` sets ``findings`` (content-hashed ``StaticFinding``s
+  from the structural + security tools) and ``tool_results`` (the raw
+  per-tool status/error contract, kept for observability/debugging).
 
-Later phases (static analysis, knowledge base construction, review
-generation) add their own keys here without needing to touch what earlier
-phases already set.
+Later phases (knowledge base construction, review generation) add their
+own keys here without needing to touch what earlier phases already set.
 """
 
-from typing import Optional, TypedDict
+from typing import Any, Optional, TypedDict
 from uuid import UUID
 
-from utils import RepositoryIngestionResult, RepositoryManifest
+from utils import RepositoryIngestionResult, RepositoryManifest, StaticFinding
 
 
 class PipelineState(TypedDict, total=False):
@@ -27,6 +29,8 @@ class PipelineState(TypedDict, total=False):
         user_id: The authenticated user this repository belongs to.
         result: The ingestion outcome, populated by ``ingest_node``.
         manifest: The discovery outcome, populated by ``discovery_node``.
+        findings: Normalized findings, populated by ``static_analysis_node``.
+        tool_results: Raw per-tool result contract, populated by ``static_analysis_node``.
     """
 
     gitlab_url: str
@@ -35,3 +39,5 @@ class PipelineState(TypedDict, total=False):
     user_id: UUID
     result: RepositoryIngestionResult
     manifest: RepositoryManifest
+    findings: list[StaticFinding]
+    tool_results: dict[str, dict[str, Any]]

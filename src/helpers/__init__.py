@@ -19,8 +19,12 @@ from .endpoint_detector import detect_endpoints_in_file, mark_duplicates
 from .entrypoint_detector import detect_entrypoints_in_file
 from .dependency_parser import parse_dependencies, parse_pyproject_toml, parse_requirements_txt
 from .manifest_cache import compute_cache_key, get_cached_manifest, save_manifest
+from .static_finding_persistence import save_static_findings
 from .dependencies import CurrentUser, DbSession, get_current_user, get_db_session
 from .rate_limiter import limiter
+from .tool_bootstrap import REQUIRED_TOOLS, resolve_gitleaks_bin, verify_tools_available
+from .tool_runner import ToolExitCodeError, run_tool
+from .finding_normalizers import NORMALIZERS, to_repo_relative_path
 
 __all__ = [
     "validate_gitlab_url",
@@ -57,9 +61,17 @@ __all__ = [
     "compute_cache_key",
     "get_cached_manifest",
     "save_manifest",
+    "save_static_findings",
     "get_db_session",
     "DbSession",
     "get_current_user",
     "CurrentUser",
     "limiter",
+    "REQUIRED_TOOLS",
+    "resolve_gitleaks_bin",
+    "verify_tools_available",
+    "ToolExitCodeError",
+    "run_tool",
+    "NORMALIZERS",
+    "to_repo_relative_path",
 ]

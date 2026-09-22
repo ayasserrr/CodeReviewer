@@ -1,6 +1,12 @@
 from data.db_manager import DatabaseManager, db_manager
-from data.models import Base, ManifestRecord, Repository, ReviewReport, User
-from data.repositories import ManifestRepository, RepositoryRepository, ReviewReportRepository, UserRepository
+from data.models import Base, ManifestRecord, Repository, ReviewReport, StaticFindingRecord, User
+from data.repositories import (
+    ManifestRepository,
+    RepositoryRepository,
+    ReviewReportRepository,
+    StaticFindingRepository,
+    UserRepository,
+)
 from data.schemas import (
     AuthResponse,
     IngestionRequest,
@@ -30,10 +36,12 @@ __all__ = [
     "Repository",
     "ReviewReport",
     "ManifestRecord",
+    "StaticFindingRecord",
     "UserRepository",
     "RepositoryRepository",
     "ReviewReportRepository",
     "ManifestRepository",
+    "StaticFindingRepository",
     "ORMBase",
     "AuthResponse",
     "LoginRequest",

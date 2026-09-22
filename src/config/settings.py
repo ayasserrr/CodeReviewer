@@ -97,6 +97,34 @@ class Settings(BaseSettings):
     DISCOVERY_TOTAL_TIMEOUT_SECONDS: float = Field(15.0, gt=0, description="Max wall-clock time for the whole discovery run")
     DISCOVERY_MAX_AST_FILE_SIZE_MB: float = Field(2.0, gt=0, description="Skip AST parsing for source files larger than this")
 
+    # ===========================
+    # Static Analysis Configuration (Track A — structural tools)
+    # ===========================
+    ANALYSIS_TIMEOUT_SECONDS: int = Field(60, gt=0, description="Per-tool subprocess timeout for structural tools, in seconds")
+    RUFF_CONFIG_PATH: Optional[str] = Field(
+        default_factory=lambda: str(_DEFAULT_PROJECT_ROOT / "src" / "assets" / "ruff.toml"),
+        description="Ruff config passed to every scanned repository; bundled at src/assets/ruff.toml "
+        "(same bundled-asset pattern as gitleaks) so scans get a consistent ruleset regardless of "
+        "whether the target repo ships its own config. Only passed to ruff when the file actually exists.",
+    )
+    PYRIGHT_CONFIG_PATH: Optional[str] = Field(
+        default_factory=lambda: str(_DEFAULT_PROJECT_ROOT / "src" / "assets" / "pyrightconfig.json"),
+        description="Pyright config (--project) passed to every scanned repository; bundled at "
+        "src/assets/pyrightconfig.json so type-checking behavior (strictness, python version) is "
+        "consistent regardless of whether the target repo ships its own config. Only passed when the "
+        "file actually exists.",
+    )
+    RADON_COMPLEXITY_RANKS_TO_IGNORE: str = Field("A,B", description="Comma-separated radon CC ranks that never become findings")
+    RADON_MI_RANKS_TO_IGNORE: str = Field("A", description="Comma-separated radon MI ranks that never become findings")
+    LIZARD_CCN_THRESHOLD: int = Field(10, gt=0, description="Cyclomatic complexity below which lizard results are skipped")
+    LIZARD_CCN_ERROR_THRESHOLD: int = Field(20, gt=0, description="Cyclomatic complexity above which a lizard finding is severity=error instead of warning")
+
+    # ===========================
+    # Security Engine Configuration (Track B — concurrent security tools)
+    # ===========================
+    SECURITY_TOOL_TIMEOUT: int = Field(300, gt=0, description="Per-tool subprocess timeout for security tools, in seconds")
+    SECURITY_MAX_WORKERS: int = Field(4, gt=0, description="Max concurrent security-tool subprocesses")
+
     model_config = SettingsConfigDict(
         env_file=(".env", f".env.{_APP_ENV}"),
         env_file_encoding="utf-8",
@@ -157,6 +185,16 @@ class Settings(BaseSettings):
         """CLONED_REPOS_DIR resolved against PROJECT_ROOT when it's a relative path."""
         repos_dir = Path(self.CLONED_REPOS_DIR)
         return repos_dir if repos_dir.is_absolute() else self.PROJECT_ROOT / repos_dir
+
+    @property
+    def radon_complexity_ranks_to_ignore(self) -> frozenset[str]:
+        """RADON_COMPLEXITY_RANKS_TO_IGNORE parsed into a set of rank letters."""
+        return frozenset(r.strip() for r in self.RADON_COMPLEXITY_RANKS_TO_IGNORE.split(",") if r.strip())
+
+    @property
+    def radon_mi_ranks_to_ignore(self) -> frozenset[str]:
+        """RADON_MI_RANKS_TO_IGNORE parsed into a set of rank letters."""
+        return frozenset(r.strip() for r in self.RADON_MI_RANKS_TO_IGNORE.split(",") if r.strip())
 
     @property
     def database_url(self) -> str:

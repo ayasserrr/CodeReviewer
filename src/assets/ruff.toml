@@ -1,0 +1,29 @@
+# Bundled ruff ruleset for the Static Analysis pipeline — same bundled-asset
+# pattern as src/assets/gitleaks[.exe]. Settings.RUFF_CONFIG_PATH
+# (src/config/settings.py) defaults to this file's path, so every repository
+# the pipeline scans gets checked against a consistent, real ruleset instead
+# of ruff's bare defaults (only passed when the file exists — a missing
+# bundled asset degrades to "no --config flag", never a hard failure).
+#
+# General-purpose on purpose: this runs against arbitrary third-party
+# repositories, not just CodeReviewer's own source, so it intentionally
+# avoids any CodeReviewer-specific per-file-ignores or path assumptions.
+#
+# Also usable for linting this project's own source: `ruff check --config
+# src/assets/ruff.toml .` — ruff won't auto-discover a config at this path,
+# since it isn't at the project root.
+
+target-version = "py313"
+line-length = 120
+
+[lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort (import sorting)
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific rules
+]

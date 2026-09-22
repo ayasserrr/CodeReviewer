@@ -2,10 +2,10 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from models import Environment, LogLevel, LogRenderer
+from enums import Environment, LogLevel, LogRenderer
 
 # The real OS environment decides which per-environment .env file to load.
 # Defaults to "development" when APP_ENV isn't set on the machine/process.
@@ -57,6 +57,25 @@ class Settings(BaseSettings):
     LOG_MAX_BYTES: int = Field(10 * 1024 * 1024, gt=0, description="The maximum size in bytes of each log file before rotation")
     LOG_BACKUP_COUNT: int = Field(10, ge=0, description="The number of backup log files to keep")
 
+    # ===========================
+    # Database (PostgreSQL) Configuration
+    # ===========================
+    POSTGRES_HOST: str = Field(..., min_length=1, description="The PostgreSQL server host")
+    POSTGRES_PORT: int = Field(5432, gt=0, le=65535, description="The PostgreSQL server port")
+    POSTGRES_DB: str = Field(..., min_length=1, description="The PostgreSQL database name")
+    POSTGRES_USER: str = Field(..., min_length=1, description="The PostgreSQL username")
+    POSTGRES_PASSWORD: SecretStr = Field(..., description="The PostgreSQL password")
+    POSTGRES_POOL_SIZE: int = Field(5, gt=0, description="Base number of persistent DB connections")
+    POSTGRES_MAX_OVERFLOW: int = Field(10, ge=0, description="Extra connections allowed above the pool size")
+
+    # ===========================
+    # JWT / Auth Configuration
+    # ===========================
+    JWT_SECRET_KEY: SecretStr = Field(..., description="Secret key used to sign and verify JWTs")
+    JWT_ALGORITHM: str = Field("HS256", min_length=1, description="JWT signing algorithm")
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(30, gt=0, description="Access token lifetime, in minutes")
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = Field(30, gt=0, description="Refresh token lifetime, in days")
+
     model_config = SettingsConfigDict(
         env_file=(".env", f".env.{_APP_ENV}"),
         env_file_encoding="utf-8",
@@ -79,6 +98,13 @@ class Settings(BaseSettings):
             raise ValueError("LOG_DIR must not be empty")
         return value
 
+    @field_validator("JWT_SECRET_KEY")
+    @classmethod
+    def validate_jwt_secret_key(cls, value: SecretStr) -> SecretStr:
+        if len(value.get_secret_value()) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")
+        return value
+
     @model_validator(mode="after")
     def apply_environment_defaults(self) -> "Settings":
         """Fill in any field left unset by the environment using ENV_DEFAULTS."""
@@ -96,6 +122,22 @@ class Settings(BaseSettings):
         """LOG_DIR resolved against PROJECT_ROOT when it's a relative path."""
         log_dir = Path(self.LOG_DIR)
         return log_dir if log_dir.is_absolute() else self.PROJECT_ROOT / log_dir
+
+    @property
+    def database_url(self) -> str:
+        """Async DSN (asyncpg) used by the application's SQLAlchemy engine."""
+        return (
+            f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD.get_secret_value()}"
+            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
+
+    @property
+    def database_url_sync(self) -> str:
+        """Sync DSN (psycopg) used by Alembic migrations."""
+        return (
+            f"postgresql+psycopg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD.get_secret_value()}"
+            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
 
 
 def get_settings() -> Settings:

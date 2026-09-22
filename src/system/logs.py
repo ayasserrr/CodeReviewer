@@ -6,7 +6,7 @@ import structlog
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 
 from config import settings
-from models import Environment, LogRenderer
+from enums import Environment, LogRenderer
 
 
 def get_log_file_path() -> Path:
@@ -42,7 +42,6 @@ def get_structlog_processors(include_file_info: bool = True) -> list[structlog.t
     """
     processors: list[structlog.typing.Processor] = [
         structlog.contextvars.merge_contextvars,
-        structlog.stdlib.filter_by_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.stdlib.PositionalArgumentsFormatter(),

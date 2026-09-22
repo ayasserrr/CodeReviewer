@@ -2,3 +2,5 @@
 .env.local
 !.env.example
 storage/logs
+__pycache__/
+*.pyc

@@ -10,11 +10,21 @@ requires-python = ">=3.13"
 License = { file = "LICENSE" }  
 keywords = ["code review", "developer tools"]
 dependencies = [
+    "alembic>=1.13",
+    "argon2-cffi>=23.1",
+    "asyncpg>=0.29",
     "colorama>=0.4.6; sys_platform == 'win32'",
     "concurrent-log-handler>=0.9.29",
+    "email-validator>=2.0",
+    "psycopg[binary]>=3.1",
     "pydantic-settings>=2.15.0",
+    "pyjwt>=2.8",
+    "sqlalchemy[asyncio]>=2.0.36",
     "structlog>=26.1.0",
 ]
 
 [project.urls]
 Repository = ""
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

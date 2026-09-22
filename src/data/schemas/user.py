@@ -48,6 +48,13 @@ class UserCreate(UserBase):
         """
         password = value.get_secret_value()
 
+        # bcrypt silently truncates at 72 bytes, so two different passwords sharing
+        # the same first 72 bytes would hash identically and both would authenticate.
+        # A 64-character cap doesn't prevent this once multi-byte UTF-8 is involved,
+        # so check the actual encoded length rather than relying on max_length alone.
+        if len(password.encode("utf-8")) > 72:
+            raise ValueError("Password must not exceed 72 bytes when UTF-8 encoded")
+
         if not re.search(r"[A-Z]", password):
             raise ValueError("Password must contain at least one uppercase letter")
 

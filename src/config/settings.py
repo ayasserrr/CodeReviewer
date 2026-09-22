@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     APP_ENV: Environment = Field(..., description="The environment in which the application is running")
     VERSION: str = Field(..., min_length=1, description="The version of the application")
     DEBUG: Optional[bool] = Field(None, description="Whether to run the application in debug mode")
+    API_VERSION: str = Field("/api/v1", min_length=1, description="URL prefix for the versioned API")
     PROJECT_ROOT: Path = Field(
         default_factory=lambda: _DEFAULT_PROJECT_ROOT,
         description="The root directory of the project",
@@ -89,6 +90,14 @@ class Settings(BaseSettings):
         if not path.is_dir():
             raise ValueError(f"PROJECT_ROOT does not exist or is not a directory: {path}")
         return path
+
+    @field_validator("API_VERSION")
+    @classmethod
+    def validate_api_version(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if not value.startswith("/"):
+            raise ValueError("API_VERSION must start with '/' (e.g. '/api/v1')")
+        return value
 
     @field_validator("LOG_DIR")
     @classmethod

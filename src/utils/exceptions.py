@@ -20,3 +20,13 @@ class NetworkError(IngestionError):
 
 class DiskError(IngestionError):
     """Raised on insufficient disk space or clone/publish integrity failures."""
+
+
+class DiscoveryError(Exception):
+    """Raised only for critical, whole-node discovery failures.
+
+    File- and directory-level problems (syntax errors, PermissionError on a
+    subdirectory) are recorded in the manifest and never raise this — by
+    design, discovery only fails outright when it can't proceed at all
+    (``repo_path`` missing or completely inaccessible).
+    """

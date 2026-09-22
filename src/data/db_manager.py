@@ -17,7 +17,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from config import settings
-from system import logger
+from system import get_logger
+
+logger = get_logger(__name__)
 
 
 class DatabaseManager:

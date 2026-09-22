@@ -12,7 +12,7 @@ from data.models import Base
 from enums import SourceType
 
 if TYPE_CHECKING:
-    from data.models import ReviewReport, User
+    from data.models import ManifestRecord, ReviewReport, User
 
 
 class Repository(Base):
@@ -96,6 +96,11 @@ class Repository(Base):
     )
 
     review_reports: Mapped[list["ReviewReport"]] = relationship(
+        back_populates="repository",
+        cascade="all, delete-orphan",
+    )
+
+    manifests: Mapped[list["ManifestRecord"]] = relationship(
         back_populates="repository",
         cascade="all, delete-orphan",
     )

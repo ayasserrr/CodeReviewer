@@ -12,8 +12,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from config import settings
-from system import logger
+from system import get_logger
 from utils import DiskError
+
+logger = get_logger(__name__)
 
 
 def _clear_readonly_and_retry(func, path_str: str, exc: BaseException) -> None:

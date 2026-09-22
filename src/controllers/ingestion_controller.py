@@ -35,8 +35,10 @@ from helpers import (
     validate_repo_id,
     verify_clone_integrity,
 )
-from system import logger
+from system import get_logger
 from utils import DiskError, RepoNotFoundError, RepositoryContext, RepositoryIngestionResult
+
+logger = get_logger(__name__)
 
 
 class IngestionController:

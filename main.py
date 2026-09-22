@@ -24,7 +24,7 @@ from api import router  # noqa: E402
 from config import settings  # noqa: E402
 from data import db_manager  # noqa: E402
 from helpers import limiter  # noqa: E402
-from system import logger  # noqa: E402
+from system import get_logger  # noqa: E402
 from utils import (  # noqa: E402
     AuthenticationError,
     DiskError,
@@ -32,6 +32,8 @@ from utils import (  # noqa: E402
     NetworkError,
     RepoNotFoundError,
 )
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager

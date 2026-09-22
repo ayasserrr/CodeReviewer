@@ -6,8 +6,10 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from config import settings
-from system import logger
+from system import get_logger
 from utils import AuthenticationError, NetworkError, RepoNotFoundError
+
+logger = get_logger(__name__)
 
 
 async def resolve_project(base_url: str, project_path: str, access_token: str) -> dict[str, Any]:

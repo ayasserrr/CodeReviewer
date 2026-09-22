@@ -129,5 +129,17 @@ def setup_logging() -> None:
 # Initialize logging
 setup_logging()
 
-# Create logger instance
-logger = structlog.get_logger()
+
+def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
+    """Return a structlog logger bound to ``name`` — pass ``__name__`` from the calling module.
+
+    Deliberately NOT a single shared singleton: with ``cache_logger_on_first_use=True``,
+    structlog resolves and caches a logger's name lazily on its first actual log
+    call. A single logger object imported everywhere (``logger = structlog.get_logger()``)
+    would cache whichever module happened to log *first* in the process, and
+    every other module's log lines would silently inherit that same wrong
+    name for the rest of the process's life. Passing an explicit ``name``
+    (``__name__``) sidesteps that entirely — each module gets its own
+    correctly-named, independently-cached logger.
+    """
+    return structlog.get_logger(name)

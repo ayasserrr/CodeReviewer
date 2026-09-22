@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     GITLAB_API_TIMEOUT_SECONDS: int = Field(15, gt=0, description="Timeout for GitLab API requests, in seconds")
     MIN_FREE_DISK_MB: int = Field(500, gt=0, description="Minimum free disk space (MB) required before starting a clone")
 
+    # ===========================
+    # Repository Discovery Configuration
+    # ===========================
+    DISCOVERY_ENGINE_VERSION: str = Field("1.0.0", min_length=1, description="Version of the discovery algorithm/heuristics")
+    DISCOVERY_SCHEMA_VERSION: str = Field("1.0.0", min_length=1, description="Version of the RepositoryManifest schema")
+    DISCOVERY_TRAVERSAL_TIMEOUT_SECONDS: float = Field(5.0, gt=0, description="Max wall-clock time for filesystem traversal")
+    DISCOVERY_AST_PER_FILE_TIMEOUT_MS: int = Field(50, gt=0, description="Max time to spend AST-parsing a single file")
+    DISCOVERY_TOTAL_TIMEOUT_SECONDS: float = Field(15.0, gt=0, description="Max wall-clock time for the whole discovery run")
+    DISCOVERY_MAX_AST_FILE_SIZE_MB: float = Field(2.0, gt=0, description="Skip AST parsing for source files larger than this")
+
     model_config = SettingsConfigDict(
         env_file=(".env", f".env.{_APP_ENV}"),
         env_file_encoding="utf-8",

@@ -1,15 +1,17 @@
-from .base_controller import BaseController
 from .auth_controller import AuthController
-from .ingestion_controller import IngestionController
+from .base_controller import BaseController
+from .dependency_graph_controller import DependencyGraphController
 from .discovery_controller import DiscoveryController
-from .static_analysis_controller import StaticAnalysisController
+from .ingestion_controller import IngestionController
 from .security_engine_controller import SecurityEngineController
+from .static_analysis_controller import StaticAnalysisController
 
 __all__ = [
-    "BaseController",
     "AuthController",
-    "IngestionController",
+    "BaseController",
+    "DependencyGraphController",
     "DiscoveryController",
-    "StaticAnalysisController",
+    "IngestionController",
     "SecurityEngineController",
+    "StaticAnalysisController",
 ]

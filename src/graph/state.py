@@ -7,15 +7,22 @@ Populated incrementally as each phase runs:
 - ``static_analysis`` sets ``findings`` (content-hashed ``StaticFinding``s
   from the structural + security tools) and ``tool_results`` (the raw
   per-tool status/error contract, kept for observability/debugging).
+- ``dependency_graph`` sets ``dependency_graph`` (the tree-sitter + grimp
+  ``DependencyGraph`` — functions, classes, containment, calls, imports).
 
 Later phases (knowledge base construction, review generation) add their
 own keys here without needing to touch what earlier phases already set.
 """
 
-from typing import Any, Optional, TypedDict
+from typing import Any, TypedDict
 from uuid import UUID
 
-from utils import RepositoryIngestionResult, RepositoryManifest, StaticFinding
+from utils import (
+    DependencyGraph,
+    RepositoryIngestionResult,
+    RepositoryManifest,
+    StaticFinding,
+)
 
 
 class PipelineState(TypedDict, total=False):
@@ -31,13 +38,16 @@ class PipelineState(TypedDict, total=False):
         manifest: The discovery outcome, populated by ``discovery_node``.
         findings: Normalized findings, populated by ``static_analysis_node``.
         tool_results: Raw per-tool result contract, populated by ``static_analysis_node``.
+        dependency_graph: The tree-sitter + grimp dependency graph, populated
+            by ``dependency_graph_node``.
     """
 
     gitlab_url: str
     access_token: str
-    repo_id: Optional[str]
+    repo_id: str | None
     user_id: UUID
     result: RepositoryIngestionResult
     manifest: RepositoryManifest
     findings: list[StaticFinding]
     tool_results: dict[str, dict[str, Any]]
+    dependency_graph: DependencyGraph

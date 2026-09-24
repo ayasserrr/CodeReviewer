@@ -1,3 +1,13 @@
+from .dependency_graph import (
+    CallEdge,
+    ClassNode,
+    ContainsEdge,
+    DependencyGraph,
+    DependencyGraphFailure,
+    DependencyGraphStatistics,
+    FunctionNode,
+    ImportEdge,
+)
 from .exceptions import (
     AuthenticationError,
     BootstrapError,
@@ -8,7 +18,7 @@ from .exceptions import (
     NetworkError,
     RepoNotFoundError,
 )
-from .models import RepositoryContext, RepositoryIngestionResult
+from .finding import StaticFinding
 from .manifest import (
     DependencyEntry,
     DiscoveryStatistics,
@@ -20,27 +30,35 @@ from .manifest import (
     LanguageStat,
     RepositoryManifest,
 )
-from .finding import StaticFinding
+from .models import RepositoryContext, RepositoryIngestionResult
 
 __all__ = [
+    "AuthenticationError",
+    "BootstrapError",
+    "CallEdge",
+    "ClassNode",
+    "ContainsEdge",
+    "DependencyEntry",
+    "DependencyGraph",
+    "DependencyGraphFailure",
+    "DependencyGraphStatistics",
+    "DiscoveryError",
+    "DiscoveryStatistics",
+    "DiskError",
+    "Endpoint",
+    "Entrypoint",
+    "FileEntry",
+    "FrameworkDetection",
+    "FrameworkEvidence",
+    "FunctionNode",
+    "ImportEdge",
     "IngestionError",
     "InvalidInputError",
-    "AuthenticationError",
-    "RepoNotFoundError",
+    "LanguageStat",
     "NetworkError",
-    "DiskError",
-    "DiscoveryError",
-    "BootstrapError",
+    "RepoNotFoundError",
     "RepositoryContext",
     "RepositoryIngestionResult",
-    "FileEntry",
-    "LanguageStat",
-    "FrameworkEvidence",
-    "FrameworkDetection",
-    "Entrypoint",
-    "Endpoint",
-    "DependencyEntry",
-    "DiscoveryStatistics",
     "RepositoryManifest",
     "StaticFinding",
 ]

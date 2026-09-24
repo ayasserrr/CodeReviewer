@@ -125,6 +125,19 @@ class Settings(BaseSettings):
     SECURITY_TOOL_TIMEOUT: int = Field(300, gt=0, description="Per-tool subprocess timeout for security tools, in seconds")
     SECURITY_MAX_WORKERS: int = Field(4, gt=0, description="Max concurrent security-tool subprocesses")
 
+    # ===========================
+    # DependencyGraph Configuration (tree-sitter + grimp)
+    # ===========================
+    DEPENDENCY_GRAPH_ENGINE_VERSION: str = Field(
+        "1.0.0", min_length=1, description="Version of the extraction/call-resolution heuristics"
+    )
+    DEPENDENCY_GRAPH_SCHEMA_VERSION: str = Field(
+        "1.0.0", min_length=1, description="Version of the DependencyGraph schema"
+    )
+    GRIMP_TIMEOUT_SECONDS: int = Field(
+        60, gt=0, description="Timeout for the isolated grimp import-graph subprocess, in seconds"
+    )
+
     model_config = SettingsConfigDict(
         env_file=(".env", f".env.{_APP_ENV}"),
         env_file_encoding="utf-8",

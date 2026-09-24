@@ -17,6 +17,7 @@ dependencies = [
     "concurrent-log-handler>=0.9.29",
     "email-validator>=2.0",
     "fastapi>=0.115",
+    "grimp>=3.4",
     "httpx>=0.28.1",
     "langgraph>=1.2.12",
     "passlib[bcrypt]>=1.7.4",
@@ -26,6 +27,8 @@ dependencies = [
     "slowapi>=0.1.9",
     "sqlalchemy[asyncio]>=2.0.36",
     "structlog>=26.1.0",
+    "tree-sitter>=0.23",
+    "tree-sitter-python>=0.23",
     "uvicorn[standard]>=0.30",
     "uvloop>=0.19; sys_platform != 'win32'",
 ]

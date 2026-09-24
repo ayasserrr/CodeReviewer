@@ -1,7 +1,27 @@
-from .validators import validate_access_token, validate_gitlab_url, validate_repo_id
-from .gitlab_client import resolve_project
-from .git_operations import clone_repository, get_current_branch, get_head_sha, verify_clone_integrity
-from .storage import check_disk_space, get_cloned_repos_root, publish_atomically, temporary_workspace
+from .ast_analyzer import ParseOutcome, parse_file_ast
+from .call_resolution import CallResolutionResult, build_name_table, resolve_calls
+from .dependencies import CurrentUser, DbSession, get_current_user, get_db_session
+from .dependency_ast_extractor import (
+    build_python_parser,
+    extract_file_elements,
+    parse_file,
+)
+from .dependency_graph_cache import (
+    compute_cache_key as compute_dependency_graph_cache_key,
+)
+from .dependency_graph_cache import (
+    get_cached_dependency_graph,
+    save_dependency_graph,
+)
+from .dependency_parser import (
+    parse_dependencies,
+    parse_pyproject_toml,
+    parse_requirements_txt,
+)
+from .endpoint_detector import detect_endpoints_in_file, mark_duplicates
+from .entrypoint_detector import detect_entrypoints_in_file
+from .finding_normalizers import NORMALIZERS, to_repo_relative_path
+from .framework_detector import FRAMEWORK_REGISTRY, FrameworkEvidenceCollector
 from .fs_scanner import (
     IGNORED_DIR_NAMES,
     ROOT_CONFIG_FILE_NAMES,
@@ -13,65 +33,84 @@ from .fs_scanner import (
     rapid_surface_scan,
     targeted_deep_traversal,
 )
-from .ast_analyzer import ParseOutcome, parse_file_ast
-from .framework_detector import FRAMEWORK_REGISTRY, FrameworkEvidenceCollector
-from .endpoint_detector import detect_endpoints_in_file, mark_duplicates
-from .entrypoint_detector import detect_entrypoints_in_file
-from .dependency_parser import parse_dependencies, parse_pyproject_toml, parse_requirements_txt
+from .git_operations import (
+    clone_repository,
+    get_current_branch,
+    get_head_sha,
+    verify_clone_integrity,
+)
+from .gitlab_client import resolve_project
+from .import_graph_helper import build_import_graph, discover_package_names
 from .manifest_cache import compute_cache_key, get_cached_manifest, save_manifest
-from .static_finding_persistence import save_static_findings
-from .dependencies import CurrentUser, DbSession, get_current_user, get_db_session
 from .rate_limiter import limiter
+from .static_finding_persistence import save_static_findings
+from .storage import (
+    check_disk_space,
+    get_cloned_repos_root,
+    publish_atomically,
+    temporary_workspace,
+)
 from .tool_bootstrap import REQUIRED_TOOLS, resolve_gitleaks_bin, verify_tools_available
 from .tool_runner import ToolExitCodeError, run_tool
-from .finding_normalizers import NORMALIZERS, to_repo_relative_path
+from .validators import validate_access_token, validate_gitlab_url, validate_repo_id
 
 __all__ = [
-    "validate_gitlab_url",
-    "validate_access_token",
-    "validate_repo_id",
-    "resolve_project",
-    "clone_repository",
-    "verify_clone_integrity",
-    "get_head_sha",
-    "get_current_branch",
-    "get_cloned_repos_root",
-    "check_disk_space",
-    "temporary_workspace",
-    "publish_atomically",
-    "SurfaceScanResult",
-    "TraversalResult",
-    "rapid_surface_scan",
-    "targeted_deep_traversal",
-    "classify_language",
-    "is_sensitive_env_file",
-    "SOURCE_ROOT_CANDIDATES",
-    "ROOT_CONFIG_FILE_NAMES",
-    "IGNORED_DIR_NAMES",
-    "ParseOutcome",
-    "parse_file_ast",
-    "FrameworkEvidenceCollector",
     "FRAMEWORK_REGISTRY",
+    "IGNORED_DIR_NAMES",
+    "NORMALIZERS",
+    "REQUIRED_TOOLS",
+    "ROOT_CONFIG_FILE_NAMES",
+    "SOURCE_ROOT_CANDIDATES",
+    "CallResolutionResult",
+    "CurrentUser",
+    "DbSession",
+    "FrameworkEvidenceCollector",
+    "ParseOutcome",
+    "SurfaceScanResult",
+    "ToolExitCodeError",
+    "TraversalResult",
+    "build_import_graph",
+    "build_name_table",
+    "build_python_parser",
+    "check_disk_space",
+    "classify_language",
+    "clone_repository",
+    "compute_cache_key",
+    "compute_dependency_graph_cache_key",
     "detect_endpoints_in_file",
-    "mark_duplicates",
     "detect_entrypoints_in_file",
+    "discover_package_names",
+    "extract_file_elements",
+    "get_cached_dependency_graph",
+    "get_cached_manifest",
+    "get_cloned_repos_root",
+    "get_current_branch",
+    "get_current_user",
+    "get_db_session",
+    "get_head_sha",
+    "is_sensitive_env_file",
+    "limiter",
+    "mark_duplicates",
     "parse_dependencies",
+    "parse_file",
+    "parse_file_ast",
     "parse_pyproject_toml",
     "parse_requirements_txt",
-    "compute_cache_key",
-    "get_cached_manifest",
+    "publish_atomically",
+    "rapid_surface_scan",
+    "resolve_calls",
+    "resolve_gitleaks_bin",
+    "resolve_project",
+    "run_tool",
+    "save_dependency_graph",
     "save_manifest",
     "save_static_findings",
-    "get_db_session",
-    "DbSession",
-    "get_current_user",
-    "CurrentUser",
-    "limiter",
-    "REQUIRED_TOOLS",
-    "resolve_gitleaks_bin",
-    "verify_tools_available",
-    "ToolExitCodeError",
-    "run_tool",
-    "NORMALIZERS",
+    "targeted_deep_traversal",
+    "temporary_workspace",
     "to_repo_relative_path",
+    "validate_access_token",
+    "validate_gitlab_url",
+    "validate_repo_id",
+    "verify_clone_integrity",
+    "verify_tools_available",
 ]

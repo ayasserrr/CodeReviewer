@@ -4,7 +4,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, String, func
+from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,7 +13,13 @@ from data.models import Base
 from enums import SourceType
 
 if TYPE_CHECKING:
-    from data.models import ManifestRecord, ReviewReport, StaticFindingRecord, User
+    from data.models import (
+        DependencyGraphRecord,
+        ManifestRecord,
+        ReviewReport,
+        StaticFindingRecord,
+        User,
+    )
 
 
 class Repository(Base):
@@ -37,6 +44,7 @@ class Repository(Base):
         review_reports: One-to-many relationship to ``ReviewReport``; cascades delete-orphan.
         manifests: One-to-many relationship to ``ManifestRecord``; cascades delete-orphan.
         static_findings: One-to-many relationship to ``StaticFindingRecord``; cascades delete-orphan.
+        dependency_graphs: One-to-many relationship to ``DependencyGraphRecord``; cascades delete-orphan.
     """
 
     __tablename__ = "repositories"
@@ -108,6 +116,11 @@ class Repository(Base):
     )
 
     static_findings: Mapped[list["StaticFindingRecord"]] = relationship(
+        back_populates="repository",
+        cascade="all, delete-orphan",
+    )
+
+    dependency_graphs: Mapped[list["DependencyGraphRecord"]] = relationship(
         back_populates="repository",
         cascade="all, delete-orphan",
     )

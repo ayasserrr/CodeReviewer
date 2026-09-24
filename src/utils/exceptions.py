@@ -42,3 +42,13 @@ class BootstrapError(Exception):
     bundled ``src/assets/gitleaks`` binary), not something this code
     attempts to fix at runtime.
     """
+
+
+class DeepReviewError(Exception):
+    """Raised when the Deep Review node cannot run at all.
+
+    Only configuration-level problems (no API key for the selected provider,
+    an invalid review_config.toml) raise this. A single review agent failing
+    or timing out never does — its category is recorded as not reviewed and
+    the rest of the report is still produced.
+    """

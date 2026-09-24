@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, String, func
+from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -28,7 +28,17 @@ class ReviewReport(Base):
         commit_sha: Git commit SHA that was reviewed.
         branch: Branch that was reviewed.
         status: Current lifecycle status of the review.
-        issues_summary: Structured summary of issues found during the review.
+        issues_summary: Structured summary of issues found during the review
+            (severity counts, per-category counts).
+        cache_key: ``hash(repository_id + head_sha + engine/config/model)``;
+            a COMPLETED row with the same key is reused instead of re-running.
+        engine_version: Deep-review engine version that produced it.
+        provider: LLM provider the review agents ran on.
+        model: Model id the review agents ran on.
+        report_markdown: The rendered report.
+        report_data: The full ``DeepReviewReport`` as JSON (re-renderable).
+        error: Why the review failed, when ``status`` is FAILED.
+        completed_at: When the review finished (successfully or not).
         created_at: When the review report was created.
         repository: Many-to-one back-reference to the owning ``Repository``.
     """
@@ -69,6 +79,47 @@ class ReviewReport(Base):
 
     issues_summary: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,
+        nullable=True,
+    )
+
+    cache_key: Mapped[str | None] = mapped_column(
+        String(64),
+        index=True,
+        nullable=True,
+    )
+
+    engine_version: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+
+    provider: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+
+    model: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+
+    report_markdown: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    report_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
         nullable=True,
     )
 

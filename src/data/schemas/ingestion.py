@@ -1,6 +1,7 @@
 """Pydantic DTO schemas for the repository ingestion endpoint."""
 
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -53,8 +54,13 @@ class IngestionResponse(BaseModel):
         context: The resulting immutable repository snapshot.
         duration_seconds: Wall-clock time the ingestion pipeline took.
         ingested_at: When ingestion completed, in UTC.
+        review_report_id: The deep-review report for this snapshot, fetchable
+            via ``GET /reviews/{id}`` (``None`` when deep review is disabled).
+        review_status: ``completed`` / ``failed`` / ``skipped``.
     """
 
     context: RepositoryContextResponse
     duration_seconds: float
     ingested_at: datetime
+    review_report_id: UUID | None = None
+    review_status: str | None = None

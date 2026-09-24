@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from data.models import ReviewReport
+from enums import ReviewStatus
 
 
 class ReviewReportRepository:
@@ -32,6 +33,23 @@ class ReviewReportRepository:
         """
         return await self._db_session.get(ReviewReport, review_report_id)
 
+    async def get_completed_by_cache_key(self, cache_key: str) -> ReviewReport | None:
+        """Fetch the most recent COMPLETED review report with this cache key.
+
+        Args:
+            cache_key: ``hash(repository_id + head_sha + engine/config/model)``.
+
+        Returns:
+            The newest completed ``ReviewReport``, or ``None`` on a cache miss.
+        """
+        result = await self._db_session.execute(
+            select(ReviewReport)
+            .where(ReviewReport.cache_key == cache_key, ReviewReport.status == ReviewStatus.COMPLETED)
+            .order_by(ReviewReport.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_all_by_repository_id(
         self, repository_id: UUID, page: int = 1, page_size: int = 20
     ) -> list[ReviewReport]:
@@ -49,6 +67,7 @@ class ReviewReportRepository:
         result = await self._db_session.execute(
             select(ReviewReport)
             .where(ReviewReport.repository_id == repository_id)
+            .order_by(ReviewReport.created_at.desc())
             .offset(offset)
             .limit(page_size)
         )

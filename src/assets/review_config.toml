@@ -1,0 +1,427 @@
+# Deep Review configuration — the single source of truth for WHAT the
+# deep-review agents look for. Settings.DEEP_REVIEW_CONFIG_PATH
+# (src/config/settings.py) defaults to this file (same bundled-asset pattern
+# as ruff.toml / pyrightconfig.json / gitleaks).
+#
+# Editing this file changes the review without touching code:
+#   * [[categories]]      -> one specialist subagent per enabled category,
+#                            all run in parallel; the order here is the
+#                            section order in the final report.
+#   * [[security_kpis]]   -> the mandatory security checklist the `security`
+#                            specialist must assess one by one (report §0.1).
+#   * [static_analysis]   -> which specialist owns (triages) which tool's
+#                            findings, so every static finding is judged by
+#                            exactly one agent and never twice.
+#
+# The content hash of this file is part of the review cache key, so any edit
+# here automatically invalidates previously cached reports.
+
+[review]
+# Suffix of the report H1: "<repo name> — <title_suffix>".
+title_suffix = "Full Engineering Review"
+# The reference report format is findings-only (what is wrong, the evidence,
+# the impact). Flip to true to also ask agents for a remediation line.
+include_remediation = false
+# Ordered most -> least severe. Used for validation, sorting and the legend.
+severity_levels = ["Critical", "High", "Medium", "Low"]
+# Findings at these severities get an independent verification pass by a
+# second agent (the rest are kept as reported). Verification is what keeps
+# false positives out of the top of the report.
+verify_severities = ["Critical", "High", "Medium", "Low"]
+# Hard cap per category so one noisy specialist can't drown the report.
+max_findings_per_category = 30
+# Findings the specialist itself rated below this confidence are dropped.
+# One of: low | medium | high.
+min_confidence = "medium"
+
+[static_analysis]
+# tool -> owning category id. The owner triages every finding from that tool
+# (true_positive / false_positive / low_value). Every specialist can still
+# *read* all static findings as context.
+[static_analysis.owners]
+ruff = "maintainability"
+vulture = "maintainability"
+jscpd = "maintainability"
+radon = "maintainability"
+lizard = "maintainability"
+pyright = "correctness"
+bandit = "security"
+semgrep = "security"
+gitleaks = "secrets"
+pip_audit = "dependencies"
+
+# ---------------------------------------------------------------------------
+# Review categories (one specialist agent each, run concurrently)
+# ---------------------------------------------------------------------------
+
+[[categories]]
+id = "integration"
+title = "Integration & Configuration"
+code = "INT"
+enabled = true
+focus = """
+- Base URLs, hostnames and service endpoints: where each is defined, whether
+  defaults point at localhost / dev hosts, and whether several modules build
+  the same externally-facing URL from different defaults.
+- Configuration sources: multiple/contradictory .env templates, config read
+  ad hoc via os.getenv with inline defaults scattered across modules instead
+  of one validated settings object, the same key overloaded for several uses.
+- Frontend <-> backend contract: API base URL wiring, routes the client calls
+  that the server does not expose (and vice versa), request/response shape
+  drift, CORS configuration vs. the real deployed origins.
+- Transport-layer quirks: global side effects inside HTTP helpers, blind
+  retries of non-idempotent requests, missing timeouts on outbound calls.
+- Anything that would make this service fail when deployed on a different
+  host than the developer's machine.
+"""
+
+[[categories]]
+id = "security"
+title = "Security & Authorization"
+code = "SEC"
+enabled = true
+owns_security_kpis = true
+focus = """
+- Authorization: routes missing auth dependencies, identity taken from
+  client-controlled input (headers, body, query) instead of a verified token,
+  object-level access checks (IDOR) on every data/file endpoint, role checks
+  that only test for presence.
+- Injection: SQL/NoSQL (string-built queries, raw text() with model/user
+  input), command injection (subprocess with shell=True / untrusted args),
+  path traversal (client filenames joined into filesystem paths), SSRF,
+  template/HTML injection, header injection.
+- Unsafe deserialization, eval/exec, insecure YAML/pickle loading.
+- LLM-specific: prompt injection via untrusted documents fed to models,
+  model output rendered as HTML/markdown or executed, tool calls with write
+  access driven by model output.
+- Transport/browser security: CORS with credentials, missing security
+  headers, cookies without Secure/HttpOnly/SameSite, CSRF on cookie auth.
+- Triage bandit / semgrep findings: confirm real exploitable issues, dismiss
+  false positives (test code, constant inputs, already-sanitized values).
+"""
+
+[[categories]]
+id = "auth"
+title = "Authentication, Sessions & Token Lifecycle"
+code = "AUTH"
+enabled = true
+focus = """
+- JWT / session handling: secret source and fallback defaults, algorithm
+  pinning, expiry, clock handling (naive vs aware datetimes), refresh-token
+  rotation and reuse detection, token type confusion (refresh used as access).
+- Logout / revocation that doesn't actually revoke; password reset and OTP
+  flows (entropy, expiry, attempt limits, plaintext storage).
+- Password hashing (algorithm, work factor, timing-safe comparison), user
+  enumeration via different error messages or timings.
+- Account-creation paths that bypass verification, privilege escalation via
+  self-service endpoints, API keys compared non-constant-time or accepted in
+  query strings.
+- Startup validation of auth-critical settings: does the app fail closed or
+  boot with insecure defaults?
+- Frontend route guards that mount protected pages before auth completes.
+"""
+
+[[categories]]
+id = "observability"
+title = "Logging, Observability & Governance"
+code = "OBS"
+enabled = true
+focus = """
+- Request/correlation IDs: can one request be traced end to end (API -> DB ->
+  external calls -> background jobs)? contextvars / middleware present?
+- Logging quality: print() used as logging, unstructured logs, missing levels,
+  swallowed exceptions (bare except / except Exception: pass), errors logged
+  without context, secrets or PII written to logs.
+- Health checks that report healthy without checking dependencies.
+- Metrics: latency, error rate, queue depth, external-call durations, LLM
+  token/cost accounting — present or absent?
+- Durability of failure information across restarts; background task errors
+  that vanish silently.
+"""
+
+[[categories]]
+id = "testing"
+title = "Testing & CI"
+code = "TST"
+enabled = true
+focus = """
+- Is there an automated test suite? What does it actually cover (units only,
+  or routes/integration/contracts)? Which critical paths (auth, authorization,
+  uploads, payments, data mutation, pipelines) have zero tests?
+- Tests that hit live external services, hardcoded credentials in tests,
+  tests that can never fail (no assertions, broad mocks).
+- CI: is there a pipeline config? Does it run tests/lint/type-check/security
+  scans, or only build and deploy?
+- Frontend <-> backend contract checks, migration tests, fixture hygiene.
+- Report missing coverage as findings with the specific untested modules.
+"""
+
+[[categories]]
+id = "secrets"
+title = "Environment & Secrets Handling"
+code = "ENV"
+enabled = true
+focus = """
+- Hardcoded credentials, API keys, tokens, private keys and connection strings
+  in source, config, docs, scripts, notebooks and tests (triage gitleaks
+  findings: real secret vs placeholder/example/test fixture).
+- Insecure defaults for secrets (os.getenv("SECRET", "secret")), secrets with
+  too-short length, secrets committed in example files with real values.
+- Missing startup validation of required environment variables; secrets that
+  are optional when they must be mandatory.
+- Duplicate keys in env templates, env files or deployment manifests that
+  make the effective value order-dependent.
+- Secrets exposed to browsers (VITE_/NEXT_PUBLIC_/REACT_APP_ prefixed keys).
+- NEVER open real .env files — their existence is given to you in the brief.
+"""
+
+[[categories]]
+id = "performance"
+title = "Performance & Scalability"
+code = "PERF"
+enabled = true
+focus = """
+- Blocking work on the async event loop (sync I/O, CPU-heavy work, sync SDK
+  calls, time.sleep, subprocess without to_thread inside async def).
+- Single-process state that blocks horizontal scaling: in-memory caches,
+  semaphores, locks, job queues, progress buses, local file stores.
+- N+1 queries, missing pagination, unbounded SELECTs, loading whole tables or
+  files into memory, missing indexes implied by query patterns.
+- Algorithmic hot spots (O(n^2) loops over growing data, repeated recomputation
+  of the same value, work redone per request that could be cached).
+- Missing timeouts / backoff / circuit breakers on external calls; unbounded
+  concurrency or no concurrency where work is embarrassingly parallel.
+- Startup that loads heavy resources synchronously or fails all-or-nothing.
+- Use the dependency graph's fan-in (most-called functions) to find hot paths.
+"""
+
+[[categories]]
+id = "llm"
+title = "AI/LLM Usage: Memory, Tokens & Cost"
+code = "LLM"
+enabled = true
+focus = """
+Only applicable if the repository calls LLM / embedding / ML model APIs. If
+it does not, record nothing and say "not applicable" in your final message.
+- Conversation memory: is state/checkpointing used, or is every turn stateless?
+- Token growth: whole histories or unbounded tool outputs resent every turn,
+  no input/context guards, no per-user/session budget.
+- Usage/cost metadata discarded instead of logged/persisted.
+- Model clients constructed at import time with network calls, missing
+  timeouts/retries around model calls, no structured-output validation.
+- Prompt construction from untrusted input (hand off exploitable injection
+  to the security narrative, but record cost/robustness impact here).
+"""
+
+[[categories]]
+id = "inputs"
+title = "Upload Governance & Input Controls"
+code = "INP"
+enabled = true
+focus = """
+- File uploads: size limits enforced before reading the body, type validation
+  by magic bytes vs trusting client Content-Type/extension, filename
+  normalization, storage location, deduplication, quotas, cleanup of orphans.
+- Parser abuse: decompression bombs, XML entity expansion, huge PDFs/images,
+  external binaries invoked without timeouts.
+- Request validation: unbounded string/list fields, missing length limits on
+  chat/free-text inputs, missing pagination limits, trusting client-supplied
+  IDs.
+- Rate limiting and per-user/IP quotas on expensive endpoints (uploads, jobs,
+  model calls), job cancellation, stuck-lock recovery.
+Produce a markdown table (input path | type check | size limit | other gaps)
+inside the description of a summary finding when there are several upload
+paths.
+"""
+
+[[categories]]
+id = "correctness"
+title = "Correctness & Data-Integrity Bugs"
+code = "BUG"
+enabled = true
+focus = """
+- Logic errors, wrong conditions, off-by-one, incorrect error handling paths,
+  exceptions swallowed so bad state persists, race conditions, locks/flags
+  that are never released on failure paths.
+- Data mutation bugs: silently "correcting" user data, lossy transformations,
+  inconsistent normalization between code paths, ID generation collisions,
+  heuristics that treat data shape as meaning.
+- Transaction boundaries: partial writes, missing rollbacks, commits inside
+  loops, async sessions shared across tasks.
+- Timezone/naive datetime bugs, float/decimal money handling, encoding bugs.
+- Reliance on private APIs of third-party libraries.
+- Triage pyright findings: which are real runtime bugs vs typing noise.
+"""
+
+[[categories]]
+id = "maintainability"
+title = "Dead Code, Duplication & Architecture"
+code = "MNT"
+enabled = true
+focus = """
+- Dead code: unused modules/packages, orphaned entrypoints, commented-out
+  subsystems, legacy directories, unused dependencies (triage vulture).
+  Prove every dead-code claim with find_references: functions registered as
+  values (routes, graph nodes, callbacks, DI) or called at module level ARE used.
+- Dead or orphaned endpoints: routes no client calls, duplicated endpoints,
+  endpoints that should not exist (bulk delete guarded only by a shared key).
+- Duplicated implementations (triage jscpd): near-identical functions/modules,
+  multiple code generations coexisting.
+- Complexity hot spots (triage radon / lizard): only report the ones that
+  genuinely hurt comprehension or hide bugs, grouped, not one per function.
+- Layering violations, circular imports (use the import graph), god modules.
+- Triage ruff findings in bulk by rule; report only what matters as grouped
+  findings (never one finding per lint hit).
+"""
+
+[[categories]]
+id = "dependencies"
+title = "Dependencies & Supply Chain"
+code = "DEP"
+enabled = true
+focus = """
+- Known-vulnerable packages (triage pip-audit: is the vulnerable code path
+  reachable/used? is a fixed version available?).
+- Unpinned or half-pinned runtime dependencies, missing lockfile, duplicated
+  libraries doing the same job (several PDF libs, several DB drivers, several
+  HTTP clients), heavyweight packages used only by dead code.
+- Dependencies declared but never imported, imported but never declared.
+- Build/deploy artifacts pulling from unverified sources.
+"""
+
+# ---------------------------------------------------------------------------
+# Mandatory security KPIs (assessed one by one by the `security` specialist;
+# rendered as report section 0.1). Status per KPI is one of:
+#   open | partially_open | closed | not_applicable | not_verified
+# ---------------------------------------------------------------------------
+
+[[security_kpis]]
+id = "KPI-01"
+title = "No Rate Limiting on Authentication"
+description = "Login, registration, OTP, password-reset and token-refresh endpoints must have per-IP and per-account throttling, attempt counters and lockout."
+look_for = """
+Every auth route (login/register/refresh/forgot/reset/verify-otp): is a rate
+limiter decorator/middleware applied (slowapi, fastapi-limiter, nginx
+config)? Per-IP only, or also per-account? Attempt counters / lockout in the
+service layer? Is the limiter storage shared across workers (memory:// only
+works per process)? Refresh endpoints without limits count.
+"""
+
+[[security_kpis]]
+id = "KPI-02"
+title = "Exposed Swagger/OpenAPI Documentation in Production"
+description = "API docs (/docs, /redoc, /openapi.json) must be disabled or protected in production."
+look_for = """
+FastAPI(...)/app factories: docs_url, redoc_url, openapi_url — are they
+disabled or gated on environment? Flask-RESTX/drf-spectacular/springdoc
+equivalents. Reverse-proxy config blocking them.
+"""
+
+[[security_kpis]]
+id = "KPI-03"
+title = "Debug Endpoints Exposed in Production"
+description = "No debug, test, demo, admin-bypass or introspection routes/tools may be reachable in production; DEBUG flags must default to off."
+look_for = """
+Routes with debug/test/demo/internal/dev in path or name, unauthenticated
+health/info routes leaking versions/config, DEBUG=True defaults, framework
+debug toolbars, uvicorn reload in prod, Streamlit/Gradio demo apps, stack
+traces returned to clients, unsafe_allow_html in demo UIs.
+"""
+
+[[security_kpis]]
+id = "KPI-04"
+title = "Excel Formula Injection via LLM Chat"
+description = "Model-generated or chat-derived content written to spreadsheets/CSV must neutralize formula prefixes (=, +, -, @, tab, CR)."
+look_for = """
+Any CSV/XLSX export (openpyxl, xlsxwriter, pandas.to_excel/to_csv, csv
+module, SheetJS/xlsx, exceljs, papaparse unparse) whose cell values come from
+LLM output or chat messages. Is there escaping (prefix with ') of values
+starting with = + - @ \\t \\r?
+"""
+
+[[security_kpis]]
+id = "KPI-05"
+title = "Stored XSS via LLM Chat Workflow"
+description = "LLM/chat output that is stored and later rendered must never reach the DOM as raw HTML."
+look_for = """
+dangerouslySetInnerHTML, v-html, innerHTML, markdown renderers with raw HTML
+enabled (rehype-raw, marked without sanitize), iframes with srcdoc and
+sandbox="allow-scripts allow-same-origin", Jinja |safe / Markup() on model
+output, streamlit unsafe_allow_html, HTML emails built from model output
+without escaping. Trace stored chat/model output to its render sites.
+"""
+
+[[security_kpis]]
+id = "KPI-06"
+title = "IDOR on Image/File Serving Endpoint"
+description = "Every file/image download or static mount serving user content must enforce authentication and object-level authorization; paths must not be guessable."
+look_for = """
+StaticFiles/app.mount/send_file/FileResponse/serve_static of upload
+directories; do app-level auth dependencies actually apply (mounted
+sub-apps do NOT inherit FastAPI dependencies)? Is ownership checked for the
+requested file id/path? Are filenames/IDs sequential or guessable? Signed
+URLs with expiry?
+"""
+
+[[security_kpis]]
+id = "KPI-07"
+title = "Server File Path Disclosure"
+description = "Error responses, logs returned to clients, and API payloads must not reveal absolute server paths or stack traces."
+look_for = """
+str(exc)/repr(exc)/traceback returned in HTTP responses (detail=str(e)),
+FileNotFoundError/OSError messages passed through, absolute paths returned
+in JSON (local_path, file_path fields), debug error pages, default exception
+handlers leaking internals.
+"""
+
+[[security_kpis]]
+id = "KPI-08"
+title = "Content-Disposition Header Injection"
+description = "Filenames placed in Content-Disposition (downloads, email attachments) must be sanitized (no CR/LF/quotes) and RFC 6266/5987 encoded."
+look_for = """
+Response headers built with f-strings from filenames
+(f'attachment; filename="{name}"'), FileResponse(filename=user_value),
+email MIMEBase add_header('Content-Disposition', ...) with user/LLM
+controlled names, missing newline rejection / ASCII fallback.
+"""
+
+[[security_kpis]]
+id = "KPI-09"
+title = "Missing HTTP Security Headers"
+description = "Responses must set HSTS, Content-Security-Policy, X-Content-Type-Options, Referrer-Policy, frame-ancestors/X-Frame-Options and Permissions-Policy (in app middleware or the reverse proxy)."
+look_for = """
+Security-header middleware (secure, starlette middleware, helmet, Django
+SecurityMiddleware settings), nginx/ingress/Caddy configs in the repo, meta
+CSP tags in the SPA index.html. Absence everywhere = open.
+"""
+
+[[security_kpis]]
+id = "KPI-10"
+title = "Internal IP Address Leakage"
+description = "Internal hostnames, private IPs and localhost URLs must not leak via responses, generated links, emails, docs or logs shipped to clients."
+look_for = """
+Hardcoded 10.x/172.16-31.x/192.168.x/127.0.0.1/localhost/internal DNS names
+in code defaults that end up in URLs sent to clients or emails, API docs,
+error messages, response headers (Server/X-Powered-By/Via), CORS origin lists.
+"""
+
+[[security_kpis]]
+id = "KPI-11"
+title = "Content-Type Spoofing on File Upload"
+description = "Uploads must be validated by content (magic bytes) and extension together, with a size cap enforced before the body is read."
+look_for = """
+UploadFile.content_type / request.files[...].mimetype / file.type used as the
+only check, extension-or-content-type (either/or) logic, full await
+file.read() before validation, no python-magic/filetype/puremagic sniffing,
+no body-size limit at app or proxy level.
+"""
+
+[[security_kpis]]
+id = "KPI-12"
+title = "Stored XSS in Excel Exports"
+description = "Stored user/candidate/LLM fields exported to .xlsx/.csv must be neutralized for formulas and control characters, and HTML exports must be escaped."
+look_for = """
+Export code paths that read stored records (DB rows, saved chat, profiles)
+and write them into spreadsheets or HTML reports: formula neutralization,
+control-character stripping, HTML escaping of exported HTML tables.
+"""

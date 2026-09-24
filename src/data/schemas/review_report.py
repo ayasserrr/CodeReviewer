@@ -63,3 +63,21 @@ class ReviewReportRead(ReviewReportBase, ORMBase):
     status: ReviewStatus = Field(..., description="Current review status.")
     issues_summary: dict[str, Any] | None = Field(None, description="Structured summary of issues found.")
     created_at: datetime = Field(..., description="When the review report was created.")
+    engine_version: str | None = Field(None, description="Deep-review engine version.")
+    provider: str | None = Field(None, description="LLM provider the review ran on.")
+    model: str | None = Field(None, description="Model id the review ran on.")
+    error: str | None = Field(None, description="Failure reason when status is failed.")
+    completed_at: datetime | None = Field(None, description="When the review finished.")
+
+
+class ReviewReportDetail(ReviewReportRead):
+    """A review report including the rendered markdown and the structured report.
+
+    Attributes:
+        report_markdown: The rendered engineering review.
+        report_data: The full structured ``DeepReviewReport`` (findings, KPI
+            assessments, static-analysis triage, agent run statistics).
+    """
+
+    report_markdown: str | None = Field(None, description="The rendered engineering review (markdown).")
+    report_data: dict[str, Any] | None = Field(None, description="The full structured report.")

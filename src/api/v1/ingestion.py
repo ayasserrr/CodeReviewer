@@ -31,4 +31,6 @@ async def ingest_repository(request: Request, payload: IngestionRequest, current
         ),
         duration_seconds=result.duration_seconds,
         ingested_at=result.ingested_at,
+        review_report_id=final_state.get("review_report_id"),
+        review_status=final_state.get("review_status"),
     )

@@ -1,7 +1,7 @@
 from .base import ORMBase
 from .ingestion import IngestionRequest, IngestionResponse, RepositoryContextResponse
 from .repository import RepositoryCreate, RepositoryRead, RepositoryUpdate
-from .review_report import ReviewReportCreate, ReviewReportRead, ReviewReportUpdate
+from .review_report import ReviewReportCreate, ReviewReportDetail, ReviewReportRead, ReviewReportUpdate
 from .user import UserCreate, UserRead, UserUpdate
 from .auth import AuthResponse, LoginRequest, RefreshTokenRequest, Token
 
@@ -18,6 +18,7 @@ __all__ = [
     "RepositoryRead",
     "RepositoryUpdate",
     "ReviewReportCreate",
+    "ReviewReportDetail",
     "ReviewReportRead",
     "ReviewReportUpdate",
     "UserCreate",

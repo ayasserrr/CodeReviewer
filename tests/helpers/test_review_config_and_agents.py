@@ -197,3 +197,45 @@ class TestRunAgentSubagentStats:
         )
 
         assert stats.subagent_calls == 0
+
+
+class _FakeAgent:
+    """Returns scripted final message lists, one per ``ainvoke``, recording what it was given."""
+
+    def __init__(self, finals: list[AIMessage]) -> None:
+        self.finals = finals
+        self.inputs: list[dict] = []
+
+    async def ainvoke(self, state, config=None):
+        self.inputs.append(state)
+        return {"messages": [*state["messages"], self.finals[len(self.inputs) - 1]], "files": state["files"]}
+
+
+class TestRunAgentResume:
+    async def test_empty_final_turn_is_resumed_with_history(self):
+        from helpers.review_agents import run_agent
+
+        agent = _FakeAgent([AIMessage(content=""), AIMessage(content="Done.")])
+        stats = await run_agent(agent, name="specialist:x", kickoff="go", files={}, timeout_seconds=30)
+
+        assert stats.status == "completed"
+        assert len(agent.inputs) == 2
+        resumed = agent.inputs[1]["messages"]
+        assert resumed[0].content == "go" and "previous reply was empty" in resumed[-1].content
+
+    async def test_still_empty_after_resumes_is_incomplete_not_completed(self):
+        from helpers.review_agents import run_agent
+
+        agent = _FakeAgent([AIMessage(content="")] * 3)
+        stats = await run_agent(agent, name="specialist:x", kickoff="go", files={}, timeout_seconds=30)
+
+        assert stats.status == "incomplete"
+        assert "empty model turn" in stats.error
+        assert len(agent.inputs) == 3
+
+    def test_thinking_is_capped_below_the_output_budget(self, monkeypatch):
+        from pydantic import SecretStr
+
+        monkeypatch.setattr(settings, "GEMINI_API_KEY", SecretStr("test-key"))
+        model = build_chat_model(settings, "specialist")
+        assert 0 < model.thinking_budget < settings.DEEP_REVIEW_MAX_OUTPUT_TOKENS

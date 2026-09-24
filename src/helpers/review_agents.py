@@ -120,7 +120,11 @@ def build_chat_model(settings: Settings, role: Role) -> BaseChatModel:
         max_output_tokens=settings.DEEP_REVIEW_MAX_OUTPUT_TOKENS,
         # -1 = dynamic thinking (the model decides per turn); the explorer gets
         # a small fixed budget because its job is retrieval, not judgment.
-        thinking_budget=-1 if deep else 1024,
+        # Gemini 2.5 counts thinking tokens against max_output_tokens. Dynamic
+        # thinking (-1) can burn the whole budget on a long prompt and return
+        # no tool call at all (finish_reason=MAX_TOKENS), which silently ends
+        # the agent — so the deep roles get a fixed cap well under the limit.
+        thinking_budget=min(8192, settings.DEEP_REVIEW_MAX_OUTPUT_TOKENS // 2) if deep else 1024,
         max_retries=6,
         timeout=300,
     )
@@ -173,6 +177,12 @@ def _filesystem_middleware(backend: CompositeBackend, settings: Settings) -> Fil
     )
 
 
+_EMPTY_TURN_NUDGE = (
+    "Your previous reply was empty. Continue your task: call the next tool you need, "
+    "or, if your work is complete, reply with your short final summary."
+)
+
+
 class _EmptyTurnRetryMiddleware(AgentMiddleware):
     """Re-issue model turns that return neither text nor a tool call.
 
@@ -198,13 +208,18 @@ class _EmptyTurnRetryMiddleware(AgentMiddleware):
         malformed = message.response_metadata.get("finish_reason") == "MALFORMED_FUNCTION_CALL"
         return malformed or not (message.text or "").strip()
 
+    @staticmethod
+    def _nudged(request: ModelRequest) -> ModelRequest:
+        """The same request plus a transient nudge — a verbatim resend tends to fail the same way."""
+        return request.override(messages=[*request.messages, HumanMessage(content=_EMPTY_TURN_NUDGE)])
+
     def wrap_model_call(self, request: ModelRequest, handler):
         response = handler(request)
         for attempt in range(self.max_retries):
             if not self._is_empty(response):
                 break
             logger.warning("deep_review_empty_model_turn_retry", attempt=attempt + 1)
-            response = handler(request)
+            response = handler(self._nudged(request))
         return response
 
     async def awrap_model_call(self, request: ModelRequest, handler):
@@ -213,7 +228,7 @@ class _EmptyTurnRetryMiddleware(AgentMiddleware):
             if not self._is_empty(response):
                 break
             logger.warning("deep_review_empty_model_turn_retry", attempt=attempt + 1)
-            response = await handler(request)
+            response = await handler(self._nudged(request))
         return response
 
 
@@ -399,6 +414,16 @@ class _UsageCounter(BaseCallbackHandler):
             self.subagent_calls += 1
 
 
+_MAX_RESUMES = 2
+"""How many times an agent that ended on an empty model turn is resumed."""
+
+
+def _ended_empty(messages: list) -> bool:
+    """True when the run's last model turn produced neither text nor a tool call."""
+    last = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+    return last is not None and not last.tool_calls and not (last.text or "").strip()
+
+
 async def run_agent(
     agent,
     *,
@@ -410,21 +435,37 @@ async def run_agent(
     """Run one agent to completion under a wall-clock cap; never raises.
 
     Whatever the agent recorded through the workspace tools before a timeout
-    or failure is kept — the collector lives outside the agent.
+    or failure is kept — the collector lives outside the agent. An agent
+    whose last turn came back empty (even after ``_EmptyTurnRetryMiddleware``)
+    is resumed with its full history up to ``_MAX_RESUMES`` times; if it still
+    ends empty the run is reported ``incomplete`` — never silently "completed"
+    with its section of the report missing.
     """
     usage = _UsageCounter()
     start = time.monotonic()
-    status: Literal["completed", "timed_out", "failed"] = "completed"
+    status: Literal["completed", "incomplete", "timed_out", "failed"] = "completed"
     error: str | None = None
+    config = {"callbacks": [usage], "recursion_limit": 1000, "run_name": name}
     logger.info("deep_review_agent_started", agent=name)
+
+    async def run_with_resume() -> bool:
+        state: dict[str, Any] = {"messages": [HumanMessage(content=kickoff)], "files": files}
+        for resume in range(_MAX_RESUMES + 1):
+            result = await agent.ainvoke(state, config=config)
+            messages = result.get("messages", [])
+            if not _ended_empty(messages):
+                return True
+            if resume < _MAX_RESUMES:
+                logger.warning("deep_review_agent_resumed", agent=name, resume=resume + 1)
+                state = {
+                    "messages": [*messages, HumanMessage(content=_EMPTY_TURN_NUDGE)],
+                    "files": result.get("files", files),
+                }
+        return False
+
     try:
-        await asyncio.wait_for(
-            agent.ainvoke(
-                {"messages": [HumanMessage(content=kickoff)], "files": files},
-                config={"callbacks": [usage], "recursion_limit": 1000, "run_name": name},
-            ),
-            timeout=timeout_seconds,
-        )
+        if not await asyncio.wait_for(run_with_resume(), timeout=timeout_seconds):
+            status, error = "incomplete", f"ended on an empty model turn after {_MAX_RESUMES} resumes"
     except TimeoutError:
         status, error = "timed_out", f"exceeded {timeout_seconds}s"
     except Exception as exc:  # noqa: BLE001 -- one agent's failure must never abort the review

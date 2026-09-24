@@ -268,7 +268,7 @@ class AgentRunStats(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent: str
-    status: Literal["completed", "timed_out", "failed", "skipped"]
+    status: Literal["completed", "incomplete", "timed_out", "failed", "skipped"]
     duration_seconds: float = 0.0
     model_calls: int = 0
     input_tokens: int = 0

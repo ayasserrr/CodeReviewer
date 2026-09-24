@@ -229,7 +229,7 @@ def render_report(report: DeepReviewReport) -> str:
         f"({stats.static_false_positives} false positives); {stats.duration_seconds / 60:.1f} min wall-clock, "
         f"{stats.input_tokens + stats.output_tokens:,} tokens.*"
     )
-    incomplete = [run for run in report.agent_runs if run.status != "completed"]
+    incomplete = [run for run in report.agent_runs if run.status not in ("completed", "skipped")]
     if incomplete:
         out.append("")
         out.append(

@@ -51,7 +51,7 @@ export function NewReviewPage() {
           <p className="subtitle">Review a GitLab repository's default branch end to end</p>
         </div>
       </div>
-      <div className="grid-2" style={{ gridTemplateColumns: "minmax(0,3fr) minmax(0,2fr)", alignItems: "start" }}>
+      <div className="grid-form">
         <form className="card card-pad stack" style={{ gap: 16 }} onSubmit={submit}>
           {error && <div className="alert alert-error">{error}</div>}
           {repos.length > 0 && (

@@ -71,20 +71,20 @@ export function DashboardPage() {
               <h2>Recent reviews</h2>
               <Link to="/reviews" className="btn btn-ghost btn-sm">View all</Link>
             </div>
-            <table className="table">
-              <thead><tr><th>Repository</th><th>Status</th><th>Commit</th><th>Findings</th><th className="num">Started</th></tr></thead>
+            <div className="table-wrap"><table className="table">
+              <thead><tr><th>Repository</th><th>Status</th><th className="hide-sm">Commit</th><th>Findings</th><th className="num">Started</th></tr></thead>
               <tbody>
                 {reviews.slice(0, 8).map((r) => (
                   <tr key={r.id} className="clickable" onClick={() => navigate(`/reviews/${r.id}`)}>
                     <td className="strong">{r.repository_name}</td>
                     <td><StatusBadge status={r.status} /></td>
-                    <td className="mono muted-2">{shortSha(r.commit_sha)}{r.branch && <span className="muted"> · {r.branch}</span>}</td>
+                    <td className="mono muted-2 hide-sm">{shortSha(r.commit_sha)}{r.branch && <span className="muted"> · {r.branch}</span>}</td>
                     <td>{r.status === "completed" ? <SeverityCounts counts={r.issues_summary?.by_severity} /> : <span className="muted small">{r.status === "failed" ? "—" : "in progress…"}</span>}</td>
                     <td className="num muted">{timeAgo(r.created_at)}</td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
         </>
       )}

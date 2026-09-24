@@ -76,3 +76,24 @@ export function parseAgent(name: string): { role: string; category: string; part
   const [category, part] = rest.split(/-(kpis)$/);
   return { role, category: category || rest, part: part ?? null };
 }
+
+const CATEGORY_NAMES: Record<string, string> = {
+  integration: "Integration",
+  security: "Security",
+  auth: "Auth & sessions",
+  observability: "Observability",
+  testing: "Testing & CI",
+  secrets: "Secrets",
+  performance: "Performance",
+  llm: "AI / LLM usage",
+  inputs: "Input controls",
+  correctness: "Correctness",
+  maintainability: "Maintainability",
+  dependencies: "Dependencies",
+  synthesis: "Synthesis",
+};
+
+/** Short display name for a review category id (falls back to a humanized id). */
+export function categoryName(id: string): string {
+  return CATEGORY_NAMES[id] ?? id.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+}

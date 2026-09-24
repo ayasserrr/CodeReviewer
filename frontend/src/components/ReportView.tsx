@@ -114,7 +114,7 @@ function Overview({ report, onOpenFinding }: { report: DeepReviewReport; onOpenF
           <div className="card-header"><h2>Findings by category</h2></div>
           <div className="card-body stack" style={{ gap: 9 }}>
             {byCategory.length ? byCategory.map(({ cat, findings }) => (
-              <div key={cat.id} title={`${cat.title}: ${findings.length}`} style={{ display: "grid", gridTemplateColumns: "150px 1fr 26px", gap: 10, alignItems: "center" }}>
+              <div key={cat.id} title={`${cat.title}: ${findings.length}`} className="cat-bar">
                 <span className="small muted-2 truncate">{cat.title.split(/[,&:]/)[0].trim()}</span>
                 <div style={{ display: "flex", gap: 2, height: 8 }}>
                   {SEVERITIES.map((sev) => {
@@ -202,7 +202,7 @@ function Findings({ report, focus }: { report: DeepReviewReport; focus: string |
 
   return (
     <div className="stack" style={{ gap: 14 }}>
-      <div className="row" style={{ gap: 8 }}>
+      <div className="row filters" style={{ gap: 8 }}>
         {SEVERITIES.map((s) => {
           const n = report.findings.filter((f) => f.severity === s).length;
           return (
@@ -213,15 +213,15 @@ function Findings({ report, focus }: { report: DeepReviewReport; focus: string |
           );
         })}
         <span className="spacer" />
-        <select className="select" style={{ width: 230, height: 32 }} value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Category">
+        <select className="select filter-select" style={{ height: 32 }} value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Category">
           <option value="all">All categories</option>
           {report.categories.map((c) => (
             <option key={c.id} value={c.id}>{c.title}</option>
           ))}
         </select>
-        <div style={{ position: "relative" }}>
+        <div className="filter-search" style={{ position: "relative" }}>
           <Icon name="search" size={14} style={{ position: "absolute", left: 10, top: 9, color: "var(--muted)" }} />
-          <input className="input" style={{ height: 32, width: 220, paddingLeft: 30 }} placeholder="Search findings or files…"
+          <input className="input" style={{ height: 32, paddingLeft: 30 }} placeholder="Search findings or files…"
             value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
       </div>
@@ -258,13 +258,13 @@ function FindingCard({ finding, number, defaultOpen }: { finding: Finding; numbe
     <article className="card" style={{ borderLeft: `3px solid ${SEVERITY_COLOR[finding.severity]}` }}
       ref={(el) => { if (el && defaultOpen) el.scrollIntoView({ block: "center" }); }}>
       <button onClick={() => setOpen(!open)} aria-expanded={open}
-        style={{ all: "unset", cursor: "pointer", display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 12, alignItems: "center", padding: "14px 18px", width: "100%", boxSizing: "border-box" }}>
+        className="finding-head">
         <SeverityBadge severity={finding.severity} />
         <span className="stack" style={{ gap: 3, minWidth: 0 }}>
           <span className="strong" style={{ fontSize: 14 }}><span className="muted mono" style={{ marginRight: 8 }}>{number}</span>{finding.title}</span>
           <span className="muted small truncate mono">{finding.evidence.map((e) => loc(e)).join("  ·  ")}</span>
         </span>
-        <span className="row" style={{ gap: 8 }}>
+        <span className="row finding-meta" style={{ gap: 8 }}>
           {v?.verdict === "confirmed" && <Badge color="var(--ok)"><Icon name="check" size={12} />Verified</Badge>}
           {v?.verdict === "adjusted" && <Badge color="var(--warn)">Re-rated from {v.original_severity}</Badge>}
           {finding.kpi_ids.map((k) => <Badge key={k}><Icon name="shield" size={12} />{k}</Badge>)}
@@ -385,7 +385,7 @@ function StaticAnalysis({ report }: { report: DeepReviewReport }) {
         the findings; false positives and noise are filtered out here.
       </div>
       <div className="card">
-        <div className="card-header">
+        <div className="card-header wrap">
           <h2>Triage by tool</h2>
           <span className="row small" style={{ gap: 12 }}>
             {TRIAGE_SEGMENTS.map((s) => (
@@ -393,7 +393,7 @@ function StaticAnalysis({ report }: { report: DeepReviewReport }) {
             ))}
           </span>
         </div>
-        <table className="table">
+        <div className="table-wrap"><table className="table">
           <thead>
             <tr><th>Tool</th><th>Status</th><th style={{ width: "45%" }}>Triage</th><th className="num">Findings</th><th className="num">Real</th><th className="num">False +</th></tr>
           </thead>
@@ -418,7 +418,7 @@ function StaticAnalysis({ report }: { report: DeepReviewReport }) {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       </div>
       {dismissed.length > 0 && (
         <div className="card">
@@ -455,7 +455,7 @@ function FullReport({ review }: { review: ReviewDetail }) {
         <h2>Engineering review (markdown)</h2>
         <button className="btn btn-sm" onClick={download}><Icon name="download" size={14} />Download .md</button>
       </div>
-      <div className="card-body" style={{ padding: "20px 28px" }}>
+      <div className="card-body report-body">
         {review.report_markdown ? <Markdown>{review.report_markdown}</Markdown> : <span className="muted">No report.</span>}
       </div>
     </div>

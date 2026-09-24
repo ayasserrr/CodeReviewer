@@ -63,20 +63,20 @@ export function RepositoryPage() {
       <div className="card">
         <div className="card-header"><h2>Review history</h2><span className="hint">{reviews.length} review{reviews.length === 1 ? "" : "s"}</span></div>
         {reviews.length === 0 ? <EmptyState title="No reviews yet" /> : (
-          <table className="table">
-            <thead><tr><th>Status</th><th>Commit</th><th>Findings</th><th className="num">Duration</th><th className="num">Started</th></tr></thead>
+          <div className="table-wrap"><table className="table">
+            <thead><tr><th>Status</th><th className="hide-sm">Commit</th><th>Findings</th><th className="num hide-sm">Duration</th><th className="num">Started</th></tr></thead>
             <tbody>
               {reviews.map((r) => (
                 <tr key={r.id} className="clickable" onClick={() => navigate(`/reviews/${r.id}`)}>
                   <td><StatusBadge status={r.status} /></td>
-                  <td className="mono muted-2">{shortSha(r.commit_sha)}{r.branch && <span className="muted"> · {r.branch}</span>}</td>
+                  <td className="mono muted-2 hide-sm">{shortSha(r.commit_sha)}{r.branch && <span className="muted"> · {r.branch}</span>}</td>
                   <td>{r.status === "completed" ? <SeverityCounts counts={r.issues_summary?.by_severity} /> : <span className="muted small">{r.status === "failed" ? "failed" : "in progress…"}</span>}</td>
-                  <td className="num muted">{r.completed_at ? formatDuration(secondsBetween(r.created_at, r.completed_at)) : "—"}</td>
+                  <td className="num muted hide-sm">{r.completed_at ? formatDuration(secondsBetween(r.created_at, r.completed_at)) : "—"}</td>
                   <td className="num muted">{timeAgo(r.created_at)}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
     </div>

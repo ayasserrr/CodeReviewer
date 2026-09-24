@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { AgentProgress, ReviewRead } from "../api/types";
-import { formatDuration, parseAgent, PIPELINE_STAGES, secondsBetween } from "../lib/format";
+import { categoryName, formatDuration, parseAgent, PIPELINE_STAGES, secondsBetween } from "../lib/format";
 import { Icon, Spinner } from "./ui";
 
 type StepState = "done" | "running" | "failed" | "waiting";
@@ -49,7 +49,7 @@ export function PipelineTracker({ review }: { review: ReviewRead }) {
         </span>
       </div>
       <div className="card-body">
-        <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gridTemplateColumns: `repeat(${PIPELINE_STAGES.length}, minmax(0,1fr))`, gap: 10 }}>
+        <ol className="stepper">
           {PIPELINE_STAGES.map((stage, i) => {
             const state = stepState(review, stage.id, i);
             const entry = review.progress?.stages?.[stage.id];
@@ -116,7 +116,7 @@ function AgentBoard({ agents }: { agents: Record<string, AgentProgress> | undefi
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 8 }}>
           {[...groups.entries()].map(([group, items]) => (
             <div key={group} style={{ background: "var(--surface-2)", border: "1px solid var(--border-soft)", borderRadius: 8, padding: "10px 12px", display: "grid", gap: 6 }}>
-              <span className="strong" style={{ textTransform: "capitalize", fontSize: 13 }}>{group.replace(/_/g, " ")}</span>
+              <span className="strong" style={{ fontSize: 13 }}>{categoryName(group)}</span>
               {items.map(({ name, label, info }) => (
                 <div key={name} className="row small" style={{ gap: 8, flexWrap: "nowrap" }} title={`${name}: ${info.status}`}>
                   {info.status === "running" ? <Spinner /> : <span className="dot" style={{ color: AGENT_STATUS_COLOR[info.status] }} />}

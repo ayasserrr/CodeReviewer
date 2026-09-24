@@ -34,21 +34,21 @@ export function ReviewsPage() {
       </div>
       <div className="card">
         {shown.length === 0 ? <EmptyState title="No reviews here yet" /> : (
-          <table className="table">
-            <thead><tr><th>Repository</th><th>Status</th><th>Commit</th><th>Findings</th><th className="num">Duration</th><th className="num">Started</th></tr></thead>
+          <div className="table-wrap"><table className="table">
+            <thead><tr><th>Repository</th><th>Status</th><th className="hide-sm">Commit</th><th>Findings</th><th className="num hide-sm">Duration</th><th className="num">Started</th></tr></thead>
             <tbody>
               {shown.map((r) => (
                 <tr key={r.id} className="clickable" onClick={() => navigate(`/reviews/${r.id}`)}>
                   <td className="strong">{r.repository_name}</td>
                   <td><StatusBadge status={r.status} /></td>
-                  <td className="mono muted-2">{shortSha(r.commit_sha)}</td>
+                  <td className="mono muted-2 hide-sm">{shortSha(r.commit_sha)}</td>
                   <td>{r.status === "completed" ? <SeverityCounts counts={r.issues_summary?.by_severity} /> : <span className="muted small">{r.status === "failed" ? (r.error ?? "failed").slice(0, 60) : "in progress…"}</span>}</td>
-                  <td className="num muted">{r.completed_at ? formatDuration(secondsBetween(r.created_at, r.completed_at)) : "—"}</td>
+                  <td className="num muted hide-sm">{r.completed_at ? formatDuration(secondsBetween(r.created_at, r.completed_at)) : "—"}</td>
                   <td className="num muted">{timeAgo(r.created_at)}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
     </div>

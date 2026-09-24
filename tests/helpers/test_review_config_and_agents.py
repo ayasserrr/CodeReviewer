@@ -108,7 +108,8 @@ class _Request:
 
     def override(self, **kwargs):
         new = _Request(self.state["run_model_call_count"])
-        new.messages = kwargs["messages"]
+        new.messages = kwargs.get("messages", self.messages)
+        new.model = kwargs.get("model", getattr(self, "model", None))
         return new
 
 
@@ -129,6 +130,21 @@ class TestMiddleware:
 
         response = _EmptyTurnRetryMiddleware(max_retries=3).wrap_model_call(_Request(0), handler)
         assert len(calls) == 3
+        assert response.result[0].tool_calls
+
+    def test_last_retry_falls_back_to_the_judge_model(self):
+        judge = object()
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            if getattr(request, "model", None) is judge:
+                return _Response(AIMessage(content="", tool_calls=[{"name": "ls", "args": {}, "id": "1"}]))
+            return _Response(AIMessage(content=""))
+
+        middleware = _EmptyTurnRetryMiddleware(max_retries=3, fallback_model=judge)
+        response = middleware.wrap_model_call(_Request(0), handler)
+        assert [getattr(c, "model", None) is judge for c in calls] == [False, False, False, True]
         assert response.result[0].tool_calls
 
     def test_text_answer_is_not_retried(self):

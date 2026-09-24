@@ -187,39 +187,57 @@ class _EmptyTurnRetryMiddleware(AgentMiddleware):
     """Re-issue model turns that return neither text nor a tool call.
 
     Gemini intermittently answers with ``finish_reason=MALFORMED_FUNCTION_CALL``
-    and an empty message. An agent loop treats an AIMessage without tool calls
-    as "done", so without this a specialist can silently end on its first
-    turn with nothing reviewed. The request is simply retried (sampling is
-    non-deterministic, so the retry almost always produces a valid call).
+    (or an otherwise empty message). An agent loop treats an AIMessage without
+    tool calls as "done", so without this a specialist can silently end with
+    its category half-reviewed. Retries go out with a transient nudge on the
+    same model; if that keeps failing — observed on 2.5 Flash for the
+    security-heavy prompts — the final attempt goes to ``fallback_model``
+    (the stronger judge model), which continues the same conversation.
     """
 
-    def __init__(self, max_retries: int = 3) -> None:
+    def __init__(self, max_retries: int = 3, fallback_model: BaseChatModel | None = None) -> None:
         super().__init__()
         self.max_retries = max_retries
+        self.fallback_model = fallback_model
 
     @staticmethod
-    def _is_empty(response: Any) -> bool:
+    def _last_ai(response: Any) -> AIMessage | None:
         result = getattr(response, "result", None)
         if result is None:
             result = getattr(getattr(response, "model_response", None), "result", None) or []
-        message = next((m for m in reversed(result) if isinstance(m, AIMessage)), None)
+        return next((m for m in reversed(result) if isinstance(m, AIMessage)), None)
+
+    @classmethod
+    def _is_empty(cls, response: Any) -> bool:
+        message = cls._last_ai(response)
         if message is None or message.tool_calls:
             return False
         malformed = message.response_metadata.get("finish_reason") == "MALFORMED_FUNCTION_CALL"
         return malformed or not (message.text or "").strip()
 
-    @staticmethod
-    def _nudged(request: ModelRequest) -> ModelRequest:
-        """The same request plus a transient nudge — a verbatim resend tends to fail the same way."""
-        return request.override(messages=[*request.messages, HumanMessage(content=_EMPTY_TURN_NUDGE)])
+    def _retry_request(self, request: ModelRequest, attempt: int) -> ModelRequest:
+        """Same request plus a transient nudge; the last attempt switches to the fallback model."""
+        retry = request.override(messages=[*request.messages, HumanMessage(content=_EMPTY_TURN_NUDGE)])
+        if self.fallback_model is not None and attempt == self.max_retries - 1:
+            retry = retry.override(model=self.fallback_model)
+        return retry
+
+    def _log(self, response: Any, attempt: int) -> None:
+        message = self._last_ai(response)
+        logger.warning(
+            "deep_review_empty_model_turn_retry",
+            attempt=attempt + 1,
+            finish_reason=message.response_metadata.get("finish_reason") if message else None,
+            fallback=self.fallback_model is not None and attempt == self.max_retries - 1,
+        )
 
     def wrap_model_call(self, request: ModelRequest, handler):
         response = handler(request)
         for attempt in range(self.max_retries):
             if not self._is_empty(response):
                 break
-            logger.warning("deep_review_empty_model_turn_retry", attempt=attempt + 1)
-            response = handler(self._nudged(request))
+            self._log(response, attempt)
+            response = handler(self._retry_request(request, attempt))
         return response
 
     async def awrap_model_call(self, request: ModelRequest, handler):
@@ -227,8 +245,8 @@ class _EmptyTurnRetryMiddleware(AgentMiddleware):
         for attempt in range(self.max_retries):
             if not self._is_empty(response):
                 break
-            logger.warning("deep_review_empty_model_turn_retry", attempt=attempt + 1)
-            response = await handler(self._nudged(request))
+            self._log(response, attempt)
+            response = await handler(self._retry_request(request, attempt))
         return response
 
 
@@ -279,7 +297,14 @@ _NEVER_CLEAR_TOOLS = (
 )
 
 
-def _harness_middleware(model_calls: int) -> list:
+def _fallback_model(settings: Settings) -> BaseChatModel | None:
+    """The judge model as an empty-turn fallback — only when it differs from the main model."""
+    if _model_id(settings, "verifier") == _model_id(settings, "specialist"):
+        return None
+    return build_chat_model(settings, "verifier")
+
+
+def _harness_middleware(model_calls: int, fallback_model: BaseChatModel | None = None) -> list:
     return [
         ContextEditingMiddleware(
             edits=[
@@ -295,7 +320,7 @@ def _harness_middleware(model_calls: int) -> list:
         ModelCallLimitMiddleware(run_limit=model_calls, exit_behavior="end"),
         _BudgetNudgeMiddleware(model_calls),
         ModelRetryMiddleware(max_retries=3, initial_delay=2.0, backoff_factor=2.0, max_delay=60.0),
-        _EmptyTurnRetryMiddleware(),
+        _EmptyTurnRetryMiddleware(fallback_model=fallback_model),
     ]
 
 
@@ -352,7 +377,7 @@ def _explorer_subagent(settings: Settings, backend: CompositeBackend, tools: lis
         "tools": tools,
         "middleware": [
             _filesystem_middleware(backend, settings),
-            *_harness_middleware(settings.DEEP_REVIEW_EXPLORER_MODEL_CALLS),
+            *_harness_middleware(settings.DEEP_REVIEW_EXPLORER_MODEL_CALLS, _fallback_model(settings)),
         ],
     }
 
@@ -370,7 +395,7 @@ def build_agent(
 ):
     """One configured deep agent (see module docstring for the stack)."""
     backend = build_backend(repo_path)
-    middleware = [_filesystem_middleware(backend, settings), *_harness_middleware(model_calls)]
+    middleware = [_filesystem_middleware(backend, settings), *_harness_middleware(model_calls, _fallback_model(settings))]
     return create_deep_agent(
         model=build_chat_model(settings, role),
         tools=[_plan_tool(), *tools] if role == "specialist" else tools,

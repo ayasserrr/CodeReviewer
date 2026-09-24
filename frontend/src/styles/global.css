@@ -237,12 +237,77 @@ p { margin: 0; }
 .md th { background: var(--surface-2); color: var(--muted-2); }
 .md blockquote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--warn); background: rgba(250, 178, 25, 0.06); color: var(--muted-2); }
 
+/* ------------------------------------------------------------------------
+   Component layouts (classes, not inline styles, so breakpoints can adapt them)
+   ------------------------------------------------------------------------ */
+.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-wrap .table { min-width: 560px; }
+.stepper { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.cat-bar { display: grid; grid-template-columns: 150px 1fr 26px; gap: 10px; align-items: center; }
+.grid-form { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.finding-head {
+  all: unset; cursor: pointer; box-sizing: border-box; width: 100%;
+  display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 14px 18px;
+}
+.finding-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
+.filter-select { width: 230px; }
+.filter-search .input { width: 220px; }
+.report-body { padding: 20px 28px; }
+.card-header.wrap { flex-wrap: wrap; }
+
+/* ------------------------------------------------------------------------
+   Responsive — tablet (<= 960px): sidebar becomes a top bar
+   ------------------------------------------------------------------------ */
 @media (max-width: 960px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: row; align-items: center; padding: 12px 16px; }
-  .nav { flex-direction: row; }
-  .sidebar-footer { margin: 0 0 0 auto; border: 0; padding: 0; }
-  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .sidebar {
+    position: sticky; top: 0; z-index: 10; height: auto;
+    display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 10px 16px;
+    border-right: 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .brand { padding: 0; }
+  .nav { grid-column: 1 / -1; grid-row: 2; flex-direction: row; overflow-x: auto; gap: 4px; scrollbar-width: none; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a { white-space: nowrap; padding: 6px 10px; }
+  .nav a.active { box-shadow: inset 0 -2px 0 var(--accent); }
+  .sidebar-footer { grid-column: 2; grid-row: 1; margin: 0; border: 0; padding: 0; display: flex; align-items: center; gap: 4px; }
+  .user-chip .truncate { display: none; }
+  .grid-2, .grid-3, .grid-form { grid-template-columns: 1fr; }
   .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .page { padding: 20px 16px 48px; }
+  .stepper { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 18px; }
+}
+
+/* ------------------------------------------------------------------------
+   Responsive — phone (<= 640px)
+   ------------------------------------------------------------------------ */
+@media (max-width: 640px) {
+  body { font-size: 13.5px; }
+  h1 { font-size: 19px; }
+  .page { gap: 16px; padding: 16px 12px 40px; }
+  .page-header { align-items: stretch; }
+  .page-header > .btn, .page-header > .row { width: 100%; }
+  .page-header > .row .btn { flex: 1; }
+  .card-header, .card-body { padding-left: 14px; padding-right: 14px; }
+  .card-pad { padding: 14px; }
+  .stat { padding: 12px 14px; }
+  .stat-value { font-size: 22px; }
+  .table th, .table td { padding: 10px 12px; }
+  .hide-sm { display: none; }
+  .table-wrap .table { min-width: 0; }
+
+  /* Pipeline: a vertical list reads better than 5 squeezed columns. */
+  .stepper { grid-template-columns: 1fr; gap: 12px; }
+  .stepper > li { grid-template-columns: 4px 1fr; column-gap: 10px; }
+  .stepper > li > :first-child { grid-row: span 2; height: auto !important; }
+
+  .cat-bar { grid-template-columns: 96px 1fr 22px; }
+  .finding-head { grid-template-columns: 1fr; gap: 8px; padding: 12px 14px; }
+  .finding-meta { justify-content: flex-start; }
+  .filters .chip { flex: 1 1 auto; justify-content: center; }
+  .filter-select, .filter-search, .filter-search .input { width: 100%; }
+  .filters .spacer { display: none; }
+  .report-body { padding: 14px; }
+  .tabs .tab { padding: 10px 10px; }
+  .auth-card { padding: 22px 18px; }
 }

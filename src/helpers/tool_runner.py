@@ -39,6 +39,7 @@ def run_tool(
     parse_output: Callable[[subprocess.CompletedProcess], dict[str, Any]],
     require_repo_dir: bool = True,
     shell: bool = False,
+    env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run one structural-tool subprocess call under the standard result contract.
 
@@ -60,6 +61,7 @@ def run_tool(
         require_repo_dir: Whether to gate on ``os.path.isdir(repo_path)``.
         shell: Passed through to ``subprocess.run`` (jscpd/lizard need
             this on Windows, where npm shims are ``.cmd`` files).
+        env: Extra environment variables, merged over the current environment.
 
     Returns:
         The standard ``{"status", "findings"|"data", "error"}`` contract.
@@ -71,7 +73,13 @@ def run_tool(
 
     try:
         result = subprocess.run(
-            command, cwd=repo_path, capture_output=True, text=True, timeout=timeout, shell=shell
+            command,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=shell,
+            env={**os.environ, **env} if env else None,
         )
         return {"status": "success", **parse_output(result), "error": None}
     except subprocess.TimeoutExpired as exc:

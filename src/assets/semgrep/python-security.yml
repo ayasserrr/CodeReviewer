@@ -1,0 +1,277 @@
+# Bundled Semgrep ruleset for the Static Analysis pipeline — same
+# bundled-asset pattern as ruff.toml / pyrightconfig.json / gitleaks.
+#
+# Why bundled instead of `--config=auto`: `auto` downloads rules from
+# semgrep.dev on every run, so a scan silently fails (exit code 2) whenever
+# that host is unreachable (air-gapped servers, egress-restricted containers,
+# semgrep.dev outages), and it also sends usage metrics. This file is
+# project-owned (written for CodeReviewer, not copied from the Semgrep
+# Registry, whose rules carry a license that restricts use inside a hosted
+# review service), so scans are deterministic, offline and reproducible.
+#
+# Scope: high-signal Python security patterns. It is a SAST *seed* for the
+# deep-review agents, not a replacement for them — the agents read the code
+# and find what no pattern can (authorization logic, data flow across
+# modules). Keep rules precise: every false positive here is noise an agent
+# has to spend budget triaging.
+#
+# Point SEMGREP_CONFIG at another file/directory, or at "auto" / "p/python"
+# (registry, needs network), to change what runs.
+
+rules:
+  # ---------------------------------------------------------------- injection
+  - id: python-sql-injection-built-query
+    languages: [python]
+    severity: ERROR
+    message: >-
+      SQL query built with string formatting or concatenation reaches execute().
+      Attacker-controlled values can change the query — use parameterized
+      queries (placeholders + a params argument).
+    metadata: {category: security, cwe: "CWE-89: SQL Injection", confidence: HIGH}
+    # Taint mode, not statement patterns: it follows the built string through
+    # variables and into nested blocks (e.g. `q = "..." % args` above an
+    # `async with conn.cursor() as cur: await cur.execute(q)`), which a
+    # `$Q = ... / ... / execute($Q)` sequence pattern does not.
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: '"..." % $ARGS'
+              - pattern: '"...".format(...)'
+              - pattern: f"...{$X}..."
+              - pattern: '"..." + $X'
+              - pattern: '$X + "..."'
+          - pattern-not: '"..." + "..."'
+    pattern-sinks:
+      - patterns:
+          - pattern-inside: $CUR.$EXEC($SINK, ...)
+          - pattern: $SINK
+          - metavariable-regex:
+              metavariable: $EXEC
+              regex: ^(execute|executemany|executescript|exec_driver_sql|fetch|fetchrow|fetchval|raw)$
+
+  - id: python-sqlalchemy-text-built-query
+    languages: [python]
+    severity: ERROR
+    message: >-
+      sqlalchemy.text() built with string formatting or concatenation. Use bound
+      parameters (text("... :name").bindparams(...) or execute(stmt, params)).
+    metadata: {category: security, cwe: "CWE-89: SQL Injection", confidence: HIGH}
+    pattern-either:
+      - pattern: text(f"...")
+      - pattern: text("..." % $ARGS)
+      - pattern: text("...".format(...))
+      - pattern: text("..." + $X)
+      - pattern: sqlalchemy.text(f"...")
+
+  - id: python-subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: >-
+      subprocess called with shell=True and a non-literal command. Untrusted
+      input reaches a shell — pass an argument list with shell=False.
+    metadata: {category: security, cwe: "CWE-78: OS Command Injection", confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$FN($CMD, ..., shell=True, ...)
+      - pattern-not: subprocess.$FN("...", ..., shell=True, ...)
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput)$
+
+  - id: python-os-system-non-literal
+    languages: [python]
+    severity: ERROR
+    message: os.system / os.popen with a non-literal command — command injection risk. Use subprocess with an argument list.
+    metadata: {category: security, cwe: "CWE-78: OS Command Injection", confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern: os.system($CMD)
+          - pattern: os.popen($CMD, ...)
+      - pattern-not: os.system("...")
+      - pattern-not: os.popen("...", ...)
+
+  - id: python-eval-exec-non-literal
+    languages: [python]
+    severity: ERROR
+    message: eval()/exec() on a non-literal value executes arbitrary code if the value is attacker-influenced.
+    metadata: {category: security, cwe: "CWE-95: Eval Injection", confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern: eval($X, ...)
+          - pattern: exec($X, ...)
+      - pattern-not: eval("...", ...)
+      - pattern-not: exec("...", ...)
+
+  - id: python-ssti-render-template-string
+    languages: [python]
+    severity: ERROR
+    message: Template rendered from a non-literal string — server-side template injection if any part is user-controlled.
+    metadata: {category: security, cwe: "CWE-1336: Template Injection", confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern: render_template_string($T, ...)
+          - pattern: flask.render_template_string($T, ...)
+          - pattern: jinja2.Template($T, ...).render(...)
+      - pattern-not: render_template_string("...", ...)
+      - pattern-not: flask.render_template_string("...", ...)
+      - pattern-not: jinja2.Template("...", ...).render(...)
+
+  # --------------------------------------------------------- deserialization
+  - id: python-unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Unsafe deserialization — pickle/marshal/shelve and yaml.load without a safe
+      loader execute code embedded in the data. Use json, or yaml.safe_load.
+    metadata: {category: security, cwe: "CWE-502: Deserialization of Untrusted Data", confidence: HIGH}
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: cPickle.loads(...)
+      - pattern: marshal.loads(...)
+      - pattern: shelve.open(...)
+      - pattern: dill.loads(...)
+      - patterns:
+          - pattern: yaml.load(...)
+          - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=SafeLoader, ...)
+      - pattern: yaml.unsafe_load(...)
+
+  # ------------------------------------------------------------------- XSS
+  - id: python-jinja2-autoescape-disabled
+    languages: [python]
+    severity: ERROR
+    message: Jinja2 autoescaping is disabled — any user-controlled value rendered into HTML becomes stored/reflected XSS.
+    metadata: {category: security, cwe: "CWE-79: Cross-site Scripting", confidence: HIGH}
+    pattern-either:
+      - pattern: jinja2.Environment(..., autoescape=False, ...)
+      - pattern: Environment(..., autoescape=False, ...)
+      - pattern: aiohttp_jinja2.setup(..., autoescape=False, ...)
+      - pattern: $TEMPLATES.env.autoescape = False
+
+  - id: python-markupsafe-markup-non-literal
+    languages: [python]
+    severity: WARNING
+    message: Markup() marks a non-literal string as safe HTML, bypassing autoescaping — XSS if it contains user input.
+    metadata: {category: security, cwe: "CWE-79: Cross-site Scripting", confidence: LOW}
+    patterns:
+      - pattern-either:
+          - pattern: Markup($X)
+          - pattern: markupsafe.Markup($X)
+      - pattern-not: Markup("...")
+      - pattern-not: markupsafe.Markup("...")
+
+  # ----------------------------------------------------------------- crypto
+  - id: python-weak-hash
+    languages: [python]
+    severity: WARNING
+    message: MD5/SHA-1 are broken for security use (passwords, signatures, tokens). Use bcrypt/argon2 for passwords, SHA-256+ / HMAC otherwise.
+    metadata: {category: security, cwe: "CWE-327: Broken Cryptographic Algorithm", confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+          - pattern: md5(...)
+          - pattern: sha1(...)
+          - pattern: hashlib.new("md5", ...)
+          - pattern: hashlib.new("sha1", ...)
+      - pattern-not: hashlib.md5(..., usedforsecurity=False, ...)
+      - pattern-not: hashlib.sha1(..., usedforsecurity=False, ...)
+
+  - id: python-insecure-random-for-secrets
+    languages: [python]
+    severity: WARNING
+    message: The random module is not cryptographically secure — use secrets for tokens, passwords, OTPs and session ids.
+    metadata: {category: security, cwe: "CWE-338: Weak PRNG", confidence: LOW}
+    patterns:
+      - pattern-either:
+          - pattern: $VAR = random.$FN(...)
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i).*(token|secret|password|passwd|otp|nonce|salt|session|api_?key).*
+
+  # -------------------------------------------------------------- transport
+  - id: python-tls-verification-disabled
+    languages: [python]
+    severity: ERROR
+    message: TLS certificate verification disabled — traffic can be intercepted (MITM).
+    metadata: {category: security, cwe: "CWE-295: Improper Certificate Validation", confidence: HIGH}
+    pattern-either:
+      - pattern: requests.$M(..., verify=False, ...)
+      - pattern: httpx.$M(..., verify=False, ...)
+      - pattern: httpx.Client(..., verify=False, ...)
+      - pattern: httpx.AsyncClient(..., verify=False, ...)
+      - pattern: ssl._create_unverified_context(...)
+      - pattern: aiohttp.TCPConnector(..., ssl=False, ...)
+
+  - id: python-jwt-verification-disabled
+    languages: [python]
+    severity: ERROR
+    message: JWT decoded without signature verification — any forged token is accepted.
+    metadata: {category: security, cwe: "CWE-347: Improper Verification of Cryptographic Signature", confidence: HIGH}
+    pattern-either:
+      - pattern: 'jwt.decode(..., options={..., "verify_signature": False, ...}, ...)'
+      - pattern: jwt.decode(..., verify=False, ...)
+
+  # --------------------------------------------------------- configuration
+  - id: python-debug-enabled
+    languages: [python]
+    severity: WARNING
+    message: Debug mode enabled in code — leaks stack traces and internals, and some frameworks expose an interactive console.
+    metadata: {category: security, cwe: "CWE-489: Active Debug Code", confidence: MEDIUM}
+    pattern-either:
+      - pattern: $APP.run(..., debug=True, ...)
+      - pattern: aiohttp.web.Application(..., debug=True, ...)
+      - pattern: Application(..., debug=True, ...)
+      - pattern: FastAPI(..., debug=True, ...)
+      - pattern: uvicorn.run(..., reload=True, ...)
+      - pattern: DEBUG = True
+
+  - id: python-cors-wildcard-with-credentials
+    languages: [python]
+    severity: ERROR
+    message: CORS allows any origin together with credentials — any website can make authenticated requests on a user's behalf.
+    metadata: {category: security, cwe: "CWE-942: Permissive CORS Policy", confidence: HIGH}
+    pattern-either:
+      - pattern: $APP.add_middleware(CORSMiddleware, ..., allow_origins=["*"], ..., allow_credentials=True, ...)
+      - pattern: $APP.add_middleware(CORSMiddleware, ..., allow_credentials=True, ..., allow_origins=["*"], ...)
+      - pattern: CORS($APP, ..., supports_credentials=True, ...)
+
+  - id: python-hardcoded-secret
+    languages: [python]
+    severity: WARNING
+    message: A secret appears to be hard-coded in source. Load it from the environment or a secret manager.
+    metadata: {category: security, cwe: "CWE-798: Hard-coded Credentials", confidence: LOW}
+    patterns:
+      - pattern-either:
+          - pattern: $VAR = "$VALUE"
+          - pattern: $FN(..., $VAR="$VALUE", ...)
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)^[a-z_]*(password|passwd|secret|secret_key|api_key|apikey|access_token|auth_token|private_key)$
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: ^(?!(?i:changeme|change-me|xxx+|\*+|example|dummy|test|placeholder|your[-_].*|<.*>|\$\{.*\})$).{8,}$
+
+  # ------------------------------------------------------------- filesystem
+  - id: python-tempfile-mktemp
+    languages: [python]
+    severity: WARNING
+    message: tempfile.mktemp() is race-prone (another process can create the file first). Use mkstemp() / NamedTemporaryFile().
+    metadata: {category: security, cwe: "CWE-377: Insecure Temporary File", confidence: HIGH}
+    pattern: tempfile.mktemp(...)
+
+  - id: python-xml-external-entities
+    languages: [python]
+    severity: WARNING
+    message: Standard-library XML parsers are vulnerable to entity-expansion attacks on untrusted input. Use defusedxml.
+    metadata: {category: security, cwe: "CWE-611: XML External Entity", confidence: LOW}
+    pattern-either:
+      - pattern: xml.etree.ElementTree.parse(...)
+      - pattern: xml.etree.ElementTree.fromstring(...)
+      - pattern: ET.parse(...)
+      - pattern: ET.fromstring(...)
+      - pattern: xml.dom.minidom.parseString(...)
+      - pattern: xml.sax.parseString(...)

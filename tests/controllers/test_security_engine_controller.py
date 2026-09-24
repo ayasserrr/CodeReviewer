@@ -159,3 +159,36 @@ class TestRunSecurityScan:
         assert by_tool["pip_audit"]["status"] == "error"
         assert "unexpected bug" in by_tool["pip_audit"]["error"]
         assert by_tool["semgrep"]["status"] == "success"
+
+
+class TestRunSemgrepOffline:
+    def test_uses_bundled_config_offline_flags_and_env(self):
+        controller = SecurityEngineController()
+        completed = _completed(returncode=0, stdout=json.dumps({"results": []}))
+        with patch("shutil.which", return_value="/usr/bin/semgrep"), patch("os.path.isdir", return_value=True), patch(
+            "subprocess.run", return_value=completed
+        ) as mock_run:
+            controller._run_semgrep(".", ["a.py"])
+        command = mock_run.call_args.args[0]
+        assert f"--config={controller.config.SEMGREP_CONFIG}" in command
+        assert "--config=auto" not in command
+        assert "--metrics=off" in command and "--disable-version-check" in command
+        assert mock_run.call_args.kwargs["env"]["SEMGREP_ENABLE_VERSION_CHECK"] == "0"
+
+    def test_bundled_ruleset_exists(self):
+        from pathlib import Path
+
+        controller = SecurityEngineController()
+        rules = list(Path(controller.config.SEMGREP_CONFIG).glob("*.yml"))
+        assert rules, "bundled semgrep rules missing"
+
+    def test_error_detail_comes_from_json_errors_when_stderr_is_empty(self):
+        controller = SecurityEngineController()
+        stdout = json.dumps({"errors": [{"message": "Invalid YAML file rules.yml"}], "results": []})
+        completed = _completed(returncode=7, stdout=stdout, stderr="")
+        with patch("shutil.which", return_value="/usr/bin/semgrep"), patch("os.path.isdir", return_value=True), patch(
+            "subprocess.run", return_value=completed
+        ):
+            result = controller._run_semgrep(".", ["a.py"])
+        assert result["status"] == "error"
+        assert "Invalid YAML file rules.yml" in result["error"]

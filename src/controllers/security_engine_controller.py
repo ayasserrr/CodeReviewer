@@ -85,20 +85,34 @@ class SecurityEngineController(BaseController):
         return outcome
 
     def _run_semgrep(self, local_repo_path: str, files_to_analyze: list[str]) -> dict[str, Any]:
+        """SAST with the bundled, offline ruleset (``SEMGREP_CONFIG``).
+
+        ``--metrics=off`` + ``--disable-version-check`` (and the matching env
+        var) keep the scan fully offline: with the default ``--config=auto``
+        semgrep downloads rules from semgrep.dev on every run and exits 2 when
+        that host is unreachable, and even with local rules its version check
+        waits on the network (observed: ~100 s wall-clock for ~2 s of work).
+        """
         if not files_to_analyze:
             return {"tool": "semgrep", "status": "success", "findings": [], "error": None}
 
-        command = ["semgrep", "--config=auto", "--json", "--quiet", "--", *files_to_analyze]
+        command = [
+            "semgrep", "scan", f"--config={self.config.SEMGREP_CONFIG}", "--json", "--quiet",
+            "--metrics=off", "--disable-version-check", "--", *files_to_analyze,
+        ]
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
             if result.returncode not in (0, 1):
-                raise ToolExitCodeError(f"semgrep exited with unexpected code {result.returncode}: {result.stderr.strip()}")
+                raise ToolExitCodeError(
+                    f"semgrep exited with unexpected code {result.returncode}: {_semgrep_error_detail(result)}"
+                )
             raw = json.loads(result.stdout or "{}")
             return {"findings": raw.get("results", [])}
 
         outcome = run_tool(
             tool_binary="semgrep", repo_path=local_repo_path, command=command,
             timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
+            env={"SEMGREP_ENABLE_VERSION_CHECK": "0", "SEMGREP_SEND_METRICS": "off"},
         )
         outcome["tool"] = "semgrep"
         return outcome
@@ -150,3 +164,19 @@ class SecurityEngineController(BaseController):
             return {"tool": "gitleaks", "status": "error", "findings": [], "error": f"parse_error: {exc}"}
         except Exception as exc:
             return {"tool": "gitleaks", "status": "error", "findings": [], "error": str(exc)}
+
+
+def _semgrep_error_detail(result: subprocess.CompletedProcess) -> str:
+    """Best available reason for a failed semgrep run.
+
+    With ``--quiet`` semgrep writes its errors into the JSON ``errors`` array
+    on stdout, not to stderr — so an empty stderr used to produce a blank
+    error ("exited with unexpected code 2: ").
+    """
+    try:
+        errors = json.loads(result.stdout or "{}").get("errors") or []
+        messages = [str(e.get("message") or e.get("type") or e) for e in errors]
+    except (json.JSONDecodeError, AttributeError):
+        messages = []
+    detail = "; ".join(m.strip() for m in messages if m.strip()) or result.stderr.strip()
+    return (detail or "no error output")[:500]

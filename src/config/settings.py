@@ -114,6 +114,12 @@ class Settings(BaseSettings):
         "consistent regardless of whether the target repo ships its own config. Only passed when the "
         "file actually exists.",
     )
+    SEMGREP_CONFIG: str = Field(
+        default_factory=lambda: str(_DEFAULT_PROJECT_ROOT / "src" / "assets" / "semgrep"),
+        description="Semgrep --config: defaults to the bundled, project-owned rules in src/assets/semgrep/ so scans "
+        "run offline and deterministically. 'auto' or a registry pack (e.g. 'p/python') downloads rules from "
+        "semgrep.dev on every run instead (needs network).",
+    )
     RADON_COMPLEXITY_RANKS_TO_IGNORE: str = Field("A,B", description="Comma-separated radon CC ranks that never become findings")
     RADON_MI_RANKS_TO_IGNORE: str = Field("A", description="Comma-separated radon MI ranks that never become findings")
     LIZARD_CCN_THRESHOLD: int = Field(10, gt=0, description="Cyclomatic complexity below which lizard results are skipped")

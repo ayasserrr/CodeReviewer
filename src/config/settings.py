@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -143,20 +143,15 @@ class Settings(BaseSettings):
     # ===========================
     GEMINI_API_KEY: Optional[SecretStr] = Field(None, description="Google Gemini API key")
     GEMINI_MODEL: str = Field("gemini-2.5-flash", min_length=1, description="Gemini model id")
-    ANTHROPIC_API_KEY: Optional[SecretStr] = Field(None, description="Anthropic API key")
-    ANTHROPIC_MODEL: str = Field("claude-opus-5", min_length=1, description="Claude model id")
 
     # ===========================
     # Deep Review Configuration (deepagents multi-agent code review)
     # ===========================
     DEEP_REVIEW_ENABLED: bool = Field(True, description="Run the deep-review node after the dependency graph")
-    DEEP_REVIEW_PROVIDER: Literal["gemini", "anthropic"] = Field(
-        "gemini", description="Which LLM provider the review agents use"
-    )
     DEEP_REVIEW_JUDGE_MODEL: Optional[str] = Field(
         None,
-        description="Optional stronger model (same provider) for the judgment roles — verifier and synthesizer. "
-        "Unset = the provider's main model for every role.",
+        description="Optional stronger Gemini model for the judgment roles — verifier and synthesizer. "
+        "Unset = GEMINI_MODEL for every role.",
     )
     DEEP_REVIEW_CONFIG_PATH: str = Field(
         default_factory=lambda: str(_DEFAULT_PROJECT_ROOT / "src" / "assets" / "review_config.toml"),

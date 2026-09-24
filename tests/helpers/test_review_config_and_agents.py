@@ -82,13 +82,11 @@ class TestSandbox:
 
 class TestModels:
     def test_missing_key_raises(self, monkeypatch):
-        monkeypatch.setattr(settings, "DEEP_REVIEW_PROVIDER", "gemini")
         monkeypatch.setattr(settings, "GEMINI_API_KEY", None)
         with pytest.raises(DeepReviewError, match="GEMINI_API_KEY"):
             build_chat_model(settings, "specialist")
 
     def test_judge_model_only_changes_judgment_roles(self, monkeypatch):
-        monkeypatch.setattr(settings, "DEEP_REVIEW_PROVIDER", "gemini")
         monkeypatch.setattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
         monkeypatch.setattr(settings, "DEEP_REVIEW_JUDGE_MODEL", None)
         assert model_identity(settings) == ("gemini", "gemini-2.5-flash")

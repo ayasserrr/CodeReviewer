@@ -28,8 +28,8 @@ deepagents features used, and why:
   replaced by a pointer, keeping the context window lean).
 - The built-in summarization middleware (history offloaded to the backend
   and summarized near the context limit), prompt-caching middleware
-  (no-op for non-Anthropic models; Gemini caches implicitly),
-  ``PatchToolCallsMiddleware`` and the ``task`` subagent tool.
+  (Gemini caches implicitly), ``PatchToolCallsMiddleware`` and the ``task``
+  subagent tool.
 - On top: a ``write_plan`` planning tool (see ``_plan_tool`` for why not
   LangChain's ``write_todos``), ``ContextEditingMiddleware`` (clears stale
   tool outputs once the context grows, so every turn stays small and fast —
@@ -81,18 +81,20 @@ _READ_ONLY_FS_TOOLS = ["ls", "read_file", "glob", "grep"]
 # ---------------------------------------------------------------------------
 
 
+_PROVIDER = "gemini"
+
+
 def _model_id(settings: Settings, role: Role) -> str:
-    base = settings.ANTHROPIC_MODEL if settings.DEEP_REVIEW_PROVIDER == "anthropic" else settings.GEMINI_MODEL
     if role in ("verifier", "synthesizer") and settings.DEEP_REVIEW_JUDGE_MODEL:
         return settings.DEEP_REVIEW_JUDGE_MODEL
-    return base
+    return settings.GEMINI_MODEL
 
 
 def model_identity(settings: Settings) -> tuple[str, str]:
     """``(provider, model label)`` the review runs on — part of the cache key."""
     model = _model_id(settings, "specialist")
     judge = _model_id(settings, "verifier")
-    return settings.DEEP_REVIEW_PROVIDER, model if judge == model else f"{model} + judge {judge}"
+    return _PROVIDER, model if judge == model else f"{model} + judge {judge}"
 
 
 def build_chat_model(settings: Settings, role: Role) -> BaseChatModel:
@@ -104,34 +106,12 @@ def build_chat_model(settings: Settings, role: Role) -> BaseChatModel:
     when set, upgrades only the verifier and synthesizer.
 
     Raises:
-        DeepReviewError: If the selected provider has no API key configured.
+        DeepReviewError: If ``GEMINI_API_KEY`` is not configured.
     """
     deep = role != "explorer"
     model_id = _model_id(settings, role)
-    if settings.DEEP_REVIEW_PROVIDER == "anthropic":
-        if settings.ANTHROPIC_API_KEY is None:
-            raise DeepReviewError("DEEP_REVIEW_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set")
-        from langchain_anthropic import ChatAnthropic
-
-        kwargs: dict[str, Any] = {}
-        if model_id.startswith(("claude-opus-5", "claude-fable-5")):
-            # Server-side refusal fallback: a security review legitimately
-            # discusses exploits; a classifier decline is re-run on a fallback
-            # model inside the same request instead of silently ending the agent.
-            kwargs = {"betas": ["server-side-fallback-2026-07-01"], "model_kwargs": {"fallbacks": "default"}}
-        return ChatAnthropic(
-            model_name=model_id,
-            api_key=settings.ANTHROPIC_API_KEY.get_secret_value(),
-            max_tokens=settings.DEEP_REVIEW_MAX_OUTPUT_TOKENS,
-            thinking={"type": "adaptive"},
-            effort="high" if deep else "low",
-            max_retries=6,
-            timeout=600,
-            **kwargs,
-        )
-
     if settings.GEMINI_API_KEY is None:
-        raise DeepReviewError("DEEP_REVIEW_PROVIDER=gemini but GEMINI_API_KEY is not set")
+        raise DeepReviewError("GEMINI_API_KEY is not set")
     from langchain_google_genai import ChatGoogleGenerativeAI
 
     return ChatGoogleGenerativeAI(

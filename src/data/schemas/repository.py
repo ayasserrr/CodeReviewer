@@ -9,7 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from data.schemas import ORMBase
+from data.schemas.base import ORMBase
 from enums import SourceType
 
 

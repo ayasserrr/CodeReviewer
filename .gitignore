@@ -1,6 +1,7 @@
 .env*
 .env.local
 !.env.example
+!.env.testing
 storage/logs
 cloned_repos/
 __pycache__/

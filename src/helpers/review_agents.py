@@ -374,12 +374,13 @@ def build_agent(
 
 
 class _UsageCounter(BaseCallbackHandler):
-    """Counts model calls and tokens across an agent run, subagents included."""
+    """Counts model calls, tokens and code-explorer delegations across an agent run, subagents included."""
 
     def __init__(self) -> None:
         self.calls = 0
         self.input_tokens = 0
         self.output_tokens = 0
+        self.subagent_calls = 0
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         self.calls += 1
@@ -389,6 +390,13 @@ class _UsageCounter(BaseCallbackHandler):
                 usage = getattr(message, "usage_metadata", None) or {}
                 self.input_tokens += int(usage.get("input_tokens", 0) or 0)
                 self.output_tokens += int(usage.get("output_tokens", 0) or 0)
+
+    def on_tool_start(self, serialized: dict[str, Any], input_str: str, **kwargs: Any) -> None:
+        # deepagents' subagent-dispatch tool is always named "task" (see
+        # deepagents.middleware.subagents) -- every call is one delegation to
+        # the general-purpose code-explorer subagent this agent was given.
+        if serialized.get("name") == "task":
+            self.subagent_calls += 1
 
 
 async def run_agent(
@@ -432,6 +440,7 @@ async def run_agent(
         model_calls=usage.calls,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
+        subagent_calls=usage.subagent_calls,
     )
     return AgentRunStats(
         agent=name,
@@ -440,5 +449,6 @@ async def run_agent(
         model_calls=usage.calls,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
+        subagent_calls=usage.subagent_calls,
         error=error,
     )

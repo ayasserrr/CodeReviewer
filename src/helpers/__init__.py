@@ -47,10 +47,13 @@ from .review_agents import build_agent, build_chat_model, model_identity, run_ag
 from .review_config_loader import load_review_config, parse_review_config
 from .review_context import build_context_files, build_repo_brief
 from .review_persistence import (
-    compute_review_cache_key,
     complete_review,
+    compute_review_cache_key,
     fail_review,
     get_cached_review,
+    mark_review_running,
+    queue_review,
+    skip_review,
     start_review,
 )
 from .review_prompts import kpi_prompt, specialist_prompt, synthesizer_prompt, verifier_prompt
@@ -115,6 +118,7 @@ __all__ = [
     "limiter",
     "load_review_config",
     "mark_duplicates",
+    "mark_review_running",
     "model_identity",
     "parse_dependencies",
     "parse_file",
@@ -123,6 +127,7 @@ __all__ = [
     "parse_requirements_txt",
     "parse_review_config",
     "publish_atomically",
+    "queue_review",
     "rapid_surface_scan",
     "render_report",
     "resolve_calls",
@@ -133,6 +138,7 @@ __all__ = [
     "save_dependency_graph",
     "save_manifest",
     "save_static_findings",
+    "skip_review",
     "specialist_prompt",
     "start_review",
     "synthesizer_prompt",

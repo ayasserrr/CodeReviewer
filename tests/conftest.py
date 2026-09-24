@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-os.environ.setdefault("APP_ENV", "development")
+os.environ.setdefault("APP_ENV", "testing")
 
 
 @pytest.fixture

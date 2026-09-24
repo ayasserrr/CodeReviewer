@@ -67,6 +67,63 @@ async def test_disabled_skips(tmp_path, monkeypatch):
     assert (await deep_review_node(_state(tmp_path)))["review_status"] == "skipped"
 
 
+async def test_disabled_with_pre_created_row_completes_it_via_skip_review(tmp_path, db, monkeypatch):
+    """The API path always pre-creates a PENDING row; disabling the feature must not leave it stuck."""
+    monkeypatch.setattr(settings, "DEEP_REVIEW_ENABLED", False)
+    state = _state(tmp_path)
+    pre_created_id = uuid4()
+    state["review_report_id"] = pre_created_id
+
+    out = await deep_review_node(state)
+
+    update = db.update.await_args
+    assert update.args == (pre_created_id,)
+    assert update.kwargs["status"] == ReviewStatus.COMPLETED
+    assert out["review_report_id"] == pre_created_id
+    assert out["review_status"] == "skipped"
+
+
+async def test_cache_hit_with_pre_created_row_copies_result_into_it(tmp_path, db, monkeypatch):
+    """The client is polling the row the API already handed back -- a cache hit on a *different*
+    row must not leave the client's own row stuck PENDING."""
+    monkeypatch.setattr(settings, "DEEP_REVIEW_ENABLED", True)
+    state = _state(tmp_path)
+    pre_created_id = uuid4()
+    state["review_report_id"] = pre_created_id
+
+    report = _report(state["result"].context.repository_id)
+    cached = SimpleNamespace(id=uuid4(), report_data=report.model_dump(mode="json"), report_markdown="# cached md")
+    db.get_completed_by_cache_key.return_value = cached
+
+    out = await deep_review_node(state)
+
+    update = db.update.await_args
+    assert update.args == (pre_created_id,)
+    assert update.kwargs["status"] == ReviewStatus.COMPLETED
+    assert update.kwargs["report_markdown"] == "# cached md"
+    db.create.assert_not_awaited()
+    assert out["review_report_id"] == pre_created_id
+    assert out["review_status"] == "completed"
+
+
+async def test_success_with_pre_created_row_transitions_it_running_then_completed(tmp_path, db, monkeypatch):
+    monkeypatch.setattr(settings, "DEEP_REVIEW_ENABLED", True)
+    state = _state(tmp_path)
+    pre_created_id = uuid4()
+    state["review_report_id"] = pre_created_id
+    db.update.return_value = SimpleNamespace(id=pre_created_id)
+    report = _report(state["result"].context.repository_id)
+
+    with patch("nodes.deep_review_node.DeepReviewController.review", new=AsyncMock(return_value=(report, "# md"))):
+        out = await deep_review_node(state)
+
+    db.create.assert_not_awaited()  # reuses the pre-created row, never inserts a new one
+    running_call, completed_call = db.update.await_args_list
+    assert running_call.args == (pre_created_id,) and running_call.kwargs["status"] == ReviewStatus.RUNNING
+    assert completed_call.args == (pre_created_id,) and completed_call.kwargs["status"] == ReviewStatus.COMPLETED
+    assert out["review_report_id"] == pre_created_id and out["review_status"] == "completed"
+
+
 async def test_cache_hit_reuses_report(tmp_path, db, monkeypatch):
     monkeypatch.setattr(settings, "DEEP_REVIEW_ENABLED", True)
     state = _state(tmp_path)

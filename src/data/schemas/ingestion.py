@@ -1,11 +1,10 @@
 """Pydantic DTO schemas for the repository ingestion endpoint."""
 
-from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
-from enums import SourceType
+from enums import ReviewStatus
 
 
 class IngestionRequest(BaseModel):
@@ -25,42 +24,21 @@ class IngestionRequest(BaseModel):
     repo_id: str | None = Field(None, description="Existing repository UUID to re-ingest.")
 
 
-class RepositoryContextResponse(BaseModel):
-    """The immutable repository snapshot produced by ingestion.
+class IngestionAcceptedResponse(BaseModel):
+    """Returned immediately once the pipeline has been queued as a background task.
+
+    The full pipeline (ingest, discovery, static analysis, dependency graph,
+    deep review) runs after this response is sent — poll
+    ``GET /reviews/{review_report_id}`` until its status is ``completed`` or
+    ``failed``.
 
     Attributes:
-        repo_path: Absolute path to the local clone, on the server.
-        repository_id: Stable identifier for this repository.
-        source_type: Where this repository was ingested from.
-        gitlab_url: Normalized clone URL (no credentials).
-        head_sha: Full commit SHA checked out.
-        default_branch: The branch that was resolved and checked out.
+        repository_id: Stable identifier for this repository (the caller's
+            ``repo_id``, or a freshly generated one).
+        review_report_id: The ``review_reports`` row tracking this run.
+        status: Always ``pending`` at the moment this response is returned.
     """
 
-    model_config = ConfigDict(from_attributes=True)
-
-    repo_path: str
     repository_id: str
-    source_type: SourceType
-    gitlab_url: str
-    head_sha: str
-    default_branch: str
-
-
-class IngestionResponse(BaseModel):
-    """The full result of an ingestion run.
-
-    Attributes:
-        context: The resulting immutable repository snapshot.
-        duration_seconds: Wall-clock time the ingestion pipeline took.
-        ingested_at: When ingestion completed, in UTC.
-        review_report_id: The deep-review report for this snapshot, fetchable
-            via ``GET /reviews/{id}`` (``None`` when deep review is disabled).
-        review_status: ``completed`` / ``failed`` / ``skipped``.
-    """
-
-    context: RepositoryContextResponse
-    duration_seconds: float
-    ingested_at: datetime
-    review_report_id: UUID | None = None
-    review_status: str | None = None
+    review_report_id: UUID
+    status: ReviewStatus

@@ -10,7 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from data.schemas import ORMBase
+from data.schemas.base import ORMBase
 from enums import ReviewStatus
 
 
@@ -18,12 +18,14 @@ class ReviewReportBase(BaseModel):
     """Shared fields present on every review report schema.
 
     Attributes:
-        commit_sha: Git commit SHA that was reviewed.
-        branch: Branch that was reviewed, max 255 characters.
+        commit_sha: Git commit SHA that was reviewed. ``None`` while the row
+            is PENDING (queued but the pipeline hasn't cloned anything yet).
+        branch: Branch that was reviewed, max 255 characters. Same
+            ``None``-while-PENDING caveat as ``commit_sha``.
     """
 
-    commit_sha: str = Field(..., min_length=7, max_length=64, description="Git commit SHA that was reviewed.")
-    branch: str = Field(..., min_length=1, max_length=255, description="Branch that was reviewed.")
+    commit_sha: str | None = Field(None, min_length=7, max_length=64, description="Git commit SHA that was reviewed.")
+    branch: str | None = Field(None, min_length=1, max_length=255, description="Branch that was reviewed.")
 
 
 class ReviewReportCreate(ReviewReportBase):

@@ -16,7 +16,7 @@ from data.models import ReviewReport
 from data.repositories import ReviewReportRepository
 from enums import ReviewStatus
 from system import get_logger
-from utils import DeepReviewReport
+from utils import DeepReviewError, DeepReviewReport
 
 logger = get_logger(__name__)
 
@@ -48,7 +48,14 @@ async def start_review(
     provider: str,
     model: str,
 ) -> ReviewReport:
-    """Insert the RUNNING row up front so an in-flight review is visible."""
+    """Insert the RUNNING row up front so an in-flight review is visible.
+
+    Legacy/direct-invocation path: used when the caller (a script, a test,
+    ``pipeline_graph.ainvoke()`` called without going through the ingestion
+    API) didn't pre-create a row via ``queue_review``. The API path instead
+    pre-creates a PENDING row before the pipeline even starts and
+    ``mark_review_running`` transitions it in place.
+    """
     return await repo.create(
         repository_id=repository_id,
         commit_sha=head_sha,
@@ -58,6 +65,69 @@ async def start_review(
         engine_version=engine_version,
         provider=provider,
         model=model,
+    )
+
+
+async def queue_review(repo: ReviewReportRepository, *, repository_id: UUID) -> ReviewReport:
+    """Insert a PENDING row before the pipeline has even started.
+
+    Called synchronously from the ingestion endpoint, before the request
+    returns — ``commit_sha``/``branch`` aren't known yet (nothing has been
+    cloned), so both stay ``None`` until ``mark_review_running`` fills them
+    in once ``ingest_node`` has resolved a ``head_sha``.
+    """
+    return await repo.create(repository_id=repository_id, status=ReviewStatus.PENDING)
+
+
+async def mark_review_running(
+    repo: ReviewReportRepository,
+    review_report_id: UUID,
+    *,
+    head_sha: str,
+    branch: str,
+    cache_key: str,
+    engine_version: str,
+    provider: str,
+    model: str,
+) -> ReviewReport:
+    """Transition a pre-created (PENDING) row to RUNNING, filling in what's now known.
+
+    Raises:
+        DeepReviewError: If ``review_report_id`` doesn't exist — it was
+            created moments earlier by the same request that queued this
+            pipeline run, so a miss here means something deleted it out
+            from under an in-flight run.
+    """
+    updated = await repo.update(
+        review_report_id,
+        status=ReviewStatus.RUNNING,
+        commit_sha=head_sha,
+        branch=branch,
+        cache_key=cache_key,
+        engine_version=engine_version,
+        provider=provider,
+        model=model,
+    )
+    if updated is None:
+        raise DeepReviewError(f"review_report {review_report_id} not found")
+    return updated
+
+
+async def skip_review(repo: ReviewReportRepository, review_report_id: UUID, *, head_sha: str, branch: str) -> None:
+    """Complete a pre-created row when ``DEEP_REVIEW_ENABLED`` is false.
+
+    There's no ``ReviewStatus.SKIPPED`` — COMPLETED with no report data is
+    the honest terminal state here: the pipeline (ingest through the
+    dependency graph) succeeded, the deep-review agents specifically were
+    turned off. Without this, a row pre-created by the ingestion endpoint
+    would stay PENDING forever whenever the feature is disabled.
+    """
+    await repo.update(
+        review_report_id,
+        status=ReviewStatus.COMPLETED,
+        commit_sha=head_sha,
+        branch=branch,
+        completed_at=datetime.now(UTC),
     )
 
 

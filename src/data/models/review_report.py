@@ -25,8 +25,10 @@ class ReviewReport(Base):
     Attributes:
         id: Primary key, auto-generated via ``uuid4``.
         repository_id: Foreign key referencing ``repositories.id``; indexed; cascades on delete.
-        commit_sha: Git commit SHA that was reviewed.
-        branch: Branch that was reviewed.
+        commit_sha: Git commit SHA that was reviewed. ``None`` until the
+            ingest node resolves it — a row created up front (PENDING, before
+            the pipeline has cloned anything) doesn't have one yet.
+        branch: Branch that was reviewed. Same ``None``-until-resolved caveat as ``commit_sha``.
         status: Current lifecycle status of the review.
         issues_summary: Structured summary of issues found during the review
             (severity counts, per-category counts).
@@ -61,14 +63,14 @@ class ReviewReport(Base):
         nullable=False,
     )
 
-    commit_sha: Mapped[str] = mapped_column(
+    commit_sha: Mapped[str | None] = mapped_column(
         String(64),
-        nullable=False,
+        nullable=True,
     )
 
-    branch: Mapped[str] = mapped_column(
+    branch: Mapped[str | None] = mapped_column(
         String(255),
-        nullable=False,
+        nullable=True,
     )
 
     status: Mapped[ReviewStatus] = mapped_column(

@@ -9,8 +9,14 @@ Populated incrementally as each phase runs:
   per-tool status/error contract, kept for observability/debugging).
 - ``dependency_graph`` sets ``dependency_graph`` (the tree-sitter + grimp
   ``DependencyGraph`` — functions, classes, containment, calls, imports).
-- ``deep_review`` sets ``review_report_id``, ``review_status`` and, on
-  success, ``review_report`` (the multi-agent ``DeepReviewReport``).
+- ``deep_review`` sets ``review_status`` and, on success, ``review_report``
+  (the multi-agent ``DeepReviewReport``). ``review_report_id`` is usually
+  already set *before* the graph runs at all — the ingestion endpoint
+  pre-creates a PENDING ``review_reports`` row and passes its id in as part
+  of the initial state, so the client can poll it immediately; ``deep_review``
+  transitions that same row rather than creating a new one. Only when the
+  graph is invoked directly (no pre-created row — scripts, tests) does
+  ``deep_review`` create the row itself and populate this key as output.
 
 Later phases (knowledge base construction, review generation) add their
 own keys here without needing to touch what earlier phases already set.

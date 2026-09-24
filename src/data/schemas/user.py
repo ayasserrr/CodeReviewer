@@ -10,7 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, SecretStr, field_validator
 
-from data.schemas import ORMBase
+from data.schemas.base import ORMBase
 
 
 class UserBase(BaseModel):

@@ -8,7 +8,7 @@ the earlier phases put in state (clone, manifest, static findings, graph).
 
 from langgraph.graph import END, START, StateGraph
 
-from graph import PipelineState
+from graph.state import PipelineState
 from nodes import (
     deep_review_node,
     dependency_graph_node,

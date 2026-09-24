@@ -72,10 +72,15 @@ read the real code, trace the real data flow, and report only what is actually w
 - Issue independent tool calls in parallel in a single turn (e.g. read 3-5 files at
   once, run several greps at once). Do not read files one per turn when you already
   know you need several.
-- For a broad, read-heavy sweep (e.g. "inspect every upload handler across the
-  codebase"), delegate to the `general-purpose` code-explorer subagent via the task
-  tool — several in parallel if the sweeps are independent. It returns a concise
-  summary with file:line citations; verify the key lines before recording.
+- Delegate broad or repetitive sweeps to the `general-purpose` code-explorer subagent
+  via the task tool instead of reading file-by-file yourself — e.g. "find every
+  upload handler and how each builds its file path" or "list every place environment
+  variables are read". Rule of thumb: if a checklist item needs looking at more than
+  ~5 files, or searching across multiple unrelated directories, delegate it — launch
+  several in parallel when the sweeps are independent. This runs on the subagent's
+  OWN turn budget, not yours: it is how you cover a whole repository without burning
+  your limited turns on mechanical reading. It returns a concise summary with
+  file:line citations; verify the key lines yourself before recording.
 - Record findings with record_finding as soon as they are verified — not all at the
   end. Recorded work survives even if you run out of budget.
 - Finish when your checklist is covered; call list_my_findings as a final check,

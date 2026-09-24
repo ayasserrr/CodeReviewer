@@ -149,9 +149,10 @@ class Settings(BaseSettings):
     # ===========================
     DEEP_REVIEW_ENABLED: bool = Field(True, description="Run the deep-review node after the dependency graph")
     DEEP_REVIEW_JUDGE_MODEL: Optional[str] = Field(
-        None,
-        description="Optional stronger Gemini model for the judgment roles — verifier and synthesizer. "
-        "Unset = GEMINI_MODEL for every role.",
+        "gemini-3.1-pro-preview",
+        description="Stronger Gemini model for the judgment roles — verifier and synthesizer. Live runs showed "
+        "Flash alone as verifier lets praise and false 'unused' findings through; the pro judge rejects them "
+        "correctly. Set to an empty string to use GEMINI_MODEL for every role instead.",
     )
     DEEP_REVIEW_CONFIG_PATH: str = Field(
         default_factory=lambda: str(_DEFAULT_PROJECT_ROOT / "src" / "assets" / "review_config.toml"),

@@ -93,7 +93,19 @@ async def deep_review_node(state: "PipelineState") -> dict:
             if existing_review_report_id is not None and existing_review_report_id != cached.id:
                 # The client is polling *our* pre-created row, not the row the
                 # cache hit landed on — copy the result across so it isn't
-                # left stuck PENDING while a different row holds the data.
+                # left stuck PENDING while a different row holds the data. Fill in
+                # the commit/branch/model metadata first — the pre-created row
+                # has none, and a completed review without its commit is useless.
+                await mark_review_running(
+                    repo,
+                    existing_review_report_id,
+                    head_sha=context.head_sha,
+                    branch=context.default_branch,
+                    cache_key=cache_key,
+                    engine_version=settings.DEEP_REVIEW_ENGINE_VERSION,
+                    provider=provider,
+                    model=model,
+                )
                 await complete_review(repo, existing_review_report_id, report, cached.report_markdown or "")
             return {"review_report_id": review_report_id, "review_status": "completed", "review_report": report}
 

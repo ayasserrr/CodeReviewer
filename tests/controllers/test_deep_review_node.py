@@ -94,9 +94,13 @@ async def test_cache_hit_with_pre_created_row_copies_result_into_it(tmp_path, db
     report = _report(state["result"].context.repository_id)
     cached = SimpleNamespace(id=uuid4(), report_data=report.model_dump(mode="json"), report_markdown="# cached md")
     db.get_completed_by_cache_key.return_value = cached
+    db.update.return_value = SimpleNamespace(id=pre_created_id)
 
     out = await deep_review_node(state)
 
+    # Metadata first (the pre-created row has no commit/branch/model yet), then the result.
+    metadata = db.update.await_args_list[0].kwargs
+    assert metadata["commit_sha"] == "a" * 40 and metadata["branch"] == "main" and metadata["model"]
     update = db.update.await_args
     assert update.args == (pre_created_id,)
     assert update.kwargs["status"] == ReviewStatus.COMPLETED

@@ -11,7 +11,7 @@ returning 202 immediately. Clients poll ``GET /reviews/{review_report_id}``
 
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
 from data.repositories import RepositoryRepository, ReviewReportRepository
 from data.schemas import IngestionAcceptedResponse, IngestionRequest
@@ -51,7 +51,12 @@ async def ingest_repository(
     repo_name = project_path.rsplit("/", 1)[-1]
 
     repository_repo = RepositoryRepository(db_session)
-    if await repository_repo.get(repo_uuid) is None:
+    existing = await repository_repo.get(repo_uuid)
+    if existing is not None and existing.user_id != current_user.id:
+        # Same 404 (not 403) as api.v1.reviews, so repository ids can't be probed.
+        # Without this, anyone could re-ingest (and overwrite) another user's repository.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found.")
+    if existing is None:
         # A bare placeholder row -- head_sha/local_path/default_branch are
         # nullable and get filled in once ingest_node actually clones the
         # repo. Re-ingesting an existing repo_id leaves its row untouched
@@ -61,6 +66,13 @@ async def ingest_repository(
         )
 
     review_report = await queue_review(ReviewReportRepository(db_session), repository_id=repo_uuid)
+    # Commit NOW, before scheduling the background task. The DbSession dependency
+    # only commits at teardown, which FastAPI runs after background tasks finish —
+    # so without this the pipeline's own sessions can't see these rows, and
+    # ingest_node's upsert of the same repositories row blocks on this request's
+    # uncommitted row lock while the request waits on the pipeline: a deadlock,
+    # with the client polling a report id that returns 404 forever.
+    await db_session.commit()
 
     # access_token lives only in this in-memory dict, handed directly to a
     # background coroutine -- never persisted, never logged (see

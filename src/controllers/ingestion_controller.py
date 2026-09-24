@@ -11,8 +11,10 @@ Pure business logic — no FastAPI/HTTP awareness. The LangGraph node in
 exceptions raised here to HTTP responses via exception handlers in ``main.py``.
 """
 
+import asyncio
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -101,18 +103,13 @@ class IngestionController:
         with temporary_workspace(cloned_repos_root) as tmp_dir:
             clone_dest = tmp_dir / "repo"
 
-            clone_repository(
-                base_url, project_path, default_branch, access_token, clone_dest, settings.GIT_CLONE_TIMEOUT_SECONDS
+            # Blocking subprocess work (a clone can take minutes) runs off the
+            # event loop: the pipeline now executes inside the API process as a
+            # background task, so blocking here would stall every request —
+            # including clients polling GET /reviews/{id}.
+            head_sha = await asyncio.to_thread(
+                self._clone_and_verify, base_url, project_path, default_branch, access_token, clone_dest
             )
-            verify_clone_integrity(clone_dest)
-
-            head_sha = get_head_sha(clone_dest, settings.GIT_CLONE_TIMEOUT_SECONDS)
-            checked_out_branch = get_current_branch(clone_dest, settings.GIT_CLONE_TIMEOUT_SECONDS)
-            if checked_out_branch != default_branch:
-                raise DiskError(
-                    f"Checked out branch {checked_out_branch!r} does not match "
-                    f"resolved default branch {default_branch!r}"
-                )
 
             await self._upsert_repository(
                 repo_uuid=repo_uuid,
@@ -124,7 +121,7 @@ class IngestionController:
                 default_branch=default_branch,
             )
 
-            publish_atomically(clone_dest, target_path)
+            await asyncio.to_thread(publish_atomically, clone_dest, target_path)
 
         context = RepositoryContext(
             repo_path=target_path,
@@ -149,6 +146,25 @@ class IngestionController:
             duration_seconds=duration,
             ingested_at=datetime.now(timezone.utc),
         )
+
+    @staticmethod
+    def _clone_and_verify(
+        base_url: str, project_path: str, default_branch: str, access_token: str, clone_dest: Path
+    ) -> str:
+        """Clone, verify integrity and the checked-out branch; return ``head_sha``. Blocking."""
+        clone_repository(
+            base_url, project_path, default_branch, access_token, clone_dest, settings.GIT_CLONE_TIMEOUT_SECONDS
+        )
+        verify_clone_integrity(clone_dest)
+
+        head_sha = get_head_sha(clone_dest, settings.GIT_CLONE_TIMEOUT_SECONDS)
+        checked_out_branch = get_current_branch(clone_dest, settings.GIT_CLONE_TIMEOUT_SECONDS)
+        if checked_out_branch != default_branch:
+            raise DiskError(
+                f"Checked out branch {checked_out_branch!r} does not match "
+                f"resolved default branch {default_branch!r}"
+            )
+        return head_sha
 
     async def _upsert_repository(
         self,

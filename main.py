@@ -23,7 +23,8 @@ from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
 from api import router  # noqa: E402
 from config import settings  # noqa: E402
 from data import db_manager  # noqa: E402
-from helpers import limiter  # noqa: E402
+from data.repositories import ReviewReportRepository  # noqa: E402
+from helpers import fail_orphaned_reviews, limiter  # noqa: E402
 from system import get_logger  # noqa: E402
 from utils import (  # noqa: E402
     AuthenticationError,
@@ -49,6 +50,9 @@ async def lifespan(app: FastAPI):
     db_manager.connect()
     await db_manager.check_connection()
     logger.info("database_connection_successful")
+
+    async with db_manager.session() as db_session:
+        await fail_orphaned_reviews(ReviewReportRepository(db_session), settings.PIPELINE_STALE_AFTER_SECONDS)
 
     try:
         yield

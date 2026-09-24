@@ -167,6 +167,12 @@ class Settings(BaseSettings):
     DEEP_REVIEW_AGENT_TIMEOUT_SECONDS: int = Field(
         900, gt=0, description="Wall-clock cap per agent; findings recorded before the cap are kept"
     )
+    PIPELINE_STALE_AFTER_SECONDS: int = Field(
+        7200,
+        gt=0,
+        description="At startup, PENDING/RUNNING review rows older than this are marked FAILED — their background "
+        "task died with a previous process. Keep it well above the longest real pipeline run.",
+    )
     DEEP_REVIEW_SPECIALIST_MODEL_CALLS: int = Field(60, gt=0, description="Model-call budget per specialist agent")
     DEEP_REVIEW_EXPLORER_MODEL_CALLS: int = Field(20, gt=0, description="Model-call budget per code-explorer subagent")
     DEEP_REVIEW_VERIFIER_MODEL_CALLS: int = Field(30, gt=0, description="Model-call budget per verifier agent")

@@ -71,3 +71,21 @@ class TestSkipReview:
         assert kwargs["commit_sha"] == "a" * 40
         assert kwargs["branch"] == "main"
         assert kwargs["completed_at"] is not None
+
+
+class TestFailOrphanedReviews:
+    async def test_fails_only_rows_older_than_the_threshold(self):
+        from datetime import UTC, datetime, timedelta
+
+        from helpers.review_persistence import fail_orphaned_reviews
+
+        repo = MagicMock()
+        repo.fail_stale = AsyncMock(return_value=2)
+        before = datetime.now(UTC)
+
+        assert await fail_orphaned_reviews(repo, stale_after_seconds=3600) == 2
+
+        older_than, error, now = repo.fail_stale.await_args.args
+        assert before - timedelta(seconds=3601) < older_than < before - timedelta(seconds=3599)
+        assert "restarted" in error
+        assert now >= before

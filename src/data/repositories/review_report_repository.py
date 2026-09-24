@@ -1,8 +1,9 @@
 """Repository for ``review_reports`` table CRUD operations."""
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from data.models import ReviewReport
@@ -49,6 +50,27 @@ class ReviewReportRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def fail_stale(self, older_than: datetime, error: str, now: datetime) -> int:
+        """Mark PENDING/RUNNING rows created before ``older_than`` as FAILED.
+
+        Args:
+            older_than: Rows created before this moment are considered orphaned.
+            error: Reason stored on each row.
+            now: Timestamp stored as ``completed_at``.
+
+        Returns:
+            How many rows were marked failed.
+        """
+        result = await self._db_session.execute(
+            update(ReviewReport)
+            .where(
+                ReviewReport.status.in_([ReviewStatus.PENDING, ReviewStatus.RUNNING]),
+                ReviewReport.created_at < older_than,
+            )
+            .values(status=ReviewStatus.FAILED, error=error, completed_at=now)
+        )
+        return result.rowcount or 0
 
     async def get_all_by_repository_id(
         self, repository_id: UUID, page: int = 1, page_size: int = 20

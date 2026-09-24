@@ -9,7 +9,7 @@ user's repository, and the API only serves reports to their owner.
 
 import hashlib
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from data.models import ReviewReport
@@ -161,3 +161,23 @@ async def fail_review(repo: ReviewReportRepository, review_report_id: UUID, erro
         error=error[:4000],
         completed_at=datetime.now(UTC),
     )
+
+
+async def fail_orphaned_reviews(repo: ReviewReportRepository, stale_after_seconds: int) -> int:
+    """Fail review rows whose background pipeline died with a previous process.
+
+    Pipelines run as in-process background tasks, so a restart or crash
+    kills them silently and their rows would stay PENDING/RUNNING forever —
+    a client polling ``GET /reviews/{id}`` would spin indefinitely. Only rows
+    older than ``stale_after_seconds`` are touched, so with several workers a
+    starting worker never fails another worker's in-flight run.
+    """
+    now = datetime.now(UTC)
+    count = await repo.fail_stale(
+        now - timedelta(seconds=stale_after_seconds),
+        "Interrupted: the server restarted before this pipeline run finished. Submit the repository again.",
+        now,
+    )
+    if count:
+        logger.warning("orphaned_reviews_failed", count=count, stale_after_seconds=stale_after_seconds)
+    return count

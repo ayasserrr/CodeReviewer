@@ -74,6 +74,14 @@ def _script(system: str, turn: int) -> AIMessage:
                         description="`app/main.py:4` returns the secret.", impact="Anyone can read it.",
                         evidence=[{"file": "app/main.py", "line_start": 4, "line_end": 5}],
                     ),
+                ],
+            )
+        if turn == 1:
+            # A separate turn: parallel tool calls run concurrently, so two
+            # record_finding calls in one turn would get ids in racy order.
+            return AIMessage(
+                content="",
+                tool_calls=[
                     _call(
                         "record_finding", title="Speculative issue", severity="Medium", confidence="high",
                         description="Not real.", impact="None.", evidence=[{"file": "app/main.py", "line_start": 1}],

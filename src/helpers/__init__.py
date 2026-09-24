@@ -49,6 +49,7 @@ from .review_context import build_context_files, build_repo_brief
 from .review_persistence import (
     complete_review,
     compute_review_cache_key,
+    fail_orphaned_reviews,
     fail_review,
     get_cached_review,
     mark_review_running,
@@ -104,6 +105,7 @@ __all__ = [
     "detect_entrypoints_in_file",
     "discover_package_names",
     "extract_file_elements",
+    "fail_orphaned_reviews",
     "fail_review",
     "get_cached_dependency_graph",
     "get_cached_manifest",

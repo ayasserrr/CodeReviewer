@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from data.schemas.base import ORMBase
+from data.schemas.review_report import ReviewReportRead
 from enums import SourceType
 
 
@@ -66,3 +67,32 @@ class RepositoryRead(RepositoryBase, ORMBase):
     default_branch: str | None = Field(None, description="Default branch resolved at last ingestion.")
     source_type: SourceType | None = Field(None, description="Where this repository was ingested from.")
     created_at: datetime = Field(..., description="When the repository was registered.")
+
+
+class RepositorySummary(ORMBase):
+    """A repository as the frontend lists it — without server-internal fields.
+
+    Deliberately omits ``local_path`` (the absolute path of the clone on the
+    server): exposing it to clients is server file-path disclosure.
+
+    Attributes:
+        id: Unique repository identifier.
+        name: Repository display name.
+        clone_url: Git URL the repository is cloned from.
+        head_sha: Commit SHA of the last ingestion, if any.
+        default_branch: Default branch of the last ingestion, if any.
+        source_type: Where the repository was ingested from.
+        created_at: When the repository was registered.
+        review_count: How many reviews exist for it.
+        latest_review: Its newest review, if any.
+    """
+
+    id: UUID
+    name: str
+    clone_url: str
+    head_sha: str | None = None
+    default_branch: str | None = None
+    source_type: SourceType | None = None
+    created_at: datetime
+    review_count: int = 0
+    latest_review: ReviewReportRead | None = None

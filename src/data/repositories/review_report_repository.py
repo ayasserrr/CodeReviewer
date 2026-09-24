@@ -3,10 +3,11 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from data.models import ReviewReport
+from data.models import Repository, ReviewReport
 from enums import ReviewStatus
 
 
@@ -68,9 +69,51 @@ class ReviewReportRepository:
                 ReviewReport.status.in_([ReviewStatus.PENDING, ReviewStatus.RUNNING]),
                 ReviewReport.created_at < older_than,
             )
-            .values(status=ReviewStatus.FAILED, error=error, completed_at=now)
+            .values(status=ReviewStatus.FAILED, stage="failed", error=error, completed_at=now)
         )
         return result.rowcount or 0
+
+    async def list_for_user(
+        self, user_id: UUID, page: int = 1, page_size: int = 20
+    ) -> list[tuple[ReviewReport, str]]:
+        """Newest-first reviews across every repository ``user_id`` owns, with the repository name.
+
+        The heavy ``report_data``/``report_markdown`` columns are deferred —
+        list views never need them.
+        """
+        result = await self._db_session.execute(
+            select(ReviewReport, Repository.name)
+            .join(Repository, Repository.id == ReviewReport.repository_id)
+            .where(Repository.user_id == user_id)
+            .options(defer(ReviewReport.report_data), defer(ReviewReport.report_markdown))
+            .order_by(ReviewReport.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        return [(row[0], row[1]) for row in result.all()]
+
+    async def latest_by_repository(self, repository_ids: list[UUID]) -> dict[UUID, ReviewReport]:
+        """The newest review of each repository (one query, ``DISTINCT ON``)."""
+        if not repository_ids:
+            return {}
+        result = await self._db_session.execute(
+            select(ReviewReport)
+            .where(ReviewReport.repository_id.in_(repository_ids))
+            .options(defer(ReviewReport.report_data), defer(ReviewReport.report_markdown))
+            .distinct(ReviewReport.repository_id)
+            .order_by(ReviewReport.repository_id, ReviewReport.created_at.desc())
+        )
+        return {r.repository_id: r for r in result.scalars().all()}
+
+    async def count_by_repository(self, repository_ids: list[UUID]) -> dict[UUID, int]:
+        if not repository_ids:
+            return {}
+        result = await self._db_session.execute(
+            select(ReviewReport.repository_id, func.count())
+            .where(ReviewReport.repository_id.in_(repository_ids))
+            .group_by(ReviewReport.repository_id)
+        )
+        return {repository_id: count for repository_id, count in result.all()}
 
     async def get_all_by_repository_id(
         self, repository_id: UUID, page: int = 1, page_size: int = 20
@@ -89,6 +132,7 @@ class ReviewReportRepository:
         result = await self._db_session.execute(
             select(ReviewReport)
             .where(ReviewReport.repository_id == repository_id)
+            .options(defer(ReviewReport.report_data), defer(ReviewReport.report_markdown))
             .order_by(ReviewReport.created_at.desc())
             .offset(offset)
             .limit(page_size)

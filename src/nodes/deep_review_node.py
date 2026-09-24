@@ -34,6 +34,7 @@ from controllers import DeepReviewController
 from data import db_manager
 from data.repositories import ReviewReportRepository
 from helpers import (
+    PipelineProgress,
     complete_review,
     compute_review_cache_key,
     fail_review,
@@ -145,6 +146,7 @@ async def deep_review_node(state: "PipelineState") -> dict:
             tool_results=state.get("tool_results", {}),
             graph=state["dependency_graph"],
             review_config=review_config,
+            progress=PipelineProgress(review_report_id),
         )
     except Exception as exc:
         logger.exception("deep_review_failed", repository_id=context.repository_id)

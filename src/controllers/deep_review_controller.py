@@ -37,6 +37,7 @@ from typing import Any
 
 from controllers import BaseController
 from helpers import (
+    PipelineProgress,
     ReviewWorkspace,
     build_agent,
     build_chat_model,
@@ -95,13 +96,18 @@ class DeepReviewController(BaseController):
         tool_results: dict[str, dict[str, Any]],
         graph: DependencyGraph,
         review_config: ReviewConfig | None = None,
+        progress: PipelineProgress | None = None,
     ) -> tuple[DeepReviewReport, str]:
         """Run the review and return ``(report, markdown)``.
+
+        ``progress``, when given, receives an event as each agent starts and
+        finishes, so a client polling the review row sees live agent status.
 
         Raises:
             DeepReviewError: On configuration problems only.
         """
         start = time.monotonic()
+        self._progress = progress
         config = review_config or self.load_config()
         provider, model = model_identity(self.config)
         build_chat_model(self.config, "specialist")  # fail fast on a missing API key
@@ -265,6 +271,37 @@ class DeepReviewController(BaseController):
         )
 
     async def _run(
+        self,
+        name: str,
+        *,
+        role: str,
+        repo_path: Path,
+        system_prompt: str,
+        tools: list,
+        explorer_tools: list,
+        model_calls: int,
+        kickoff: str,
+        files: dict[str, dict],
+    ) -> AgentRunStats:
+        progress = getattr(self, "_progress", None)
+        if progress is not None:
+            await progress.agent_started(name)
+        stats = await self._build_and_run(
+            name,
+            role=role,
+            repo_path=repo_path,
+            system_prompt=system_prompt,
+            tools=tools,
+            explorer_tools=explorer_tools,
+            model_calls=model_calls,
+            kickoff=kickoff,
+            files=files,
+        )
+        if progress is not None:
+            await progress.agent_finished(stats)
+        return stats
+
+    async def _build_and_run(
         self,
         name: str,
         *,

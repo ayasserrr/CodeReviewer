@@ -32,7 +32,7 @@ class TestQueueReview:
         repository_id = uuid4()
         await queue_review(repo_mock, repository_id=repository_id)
 
-        repo_mock.create.assert_awaited_once_with(repository_id=repository_id, status=ReviewStatus.PENDING)
+        repo_mock.create.assert_awaited_once_with(repository_id=repository_id, status=ReviewStatus.PENDING, stage="queued")
 
 
 class TestMarkReviewRunning:

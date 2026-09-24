@@ -1,8 +1,14 @@
 from .auth import AuthResponse, LoginRequest, RefreshTokenRequest, Token
 from .base import ORMBase
 from .ingestion import IngestionAcceptedResponse, IngestionRequest
-from .repository import RepositoryCreate, RepositoryRead, RepositoryUpdate
-from .review_report import ReviewReportCreate, ReviewReportDetail, ReviewReportRead, ReviewReportUpdate
+from .repository import RepositoryCreate, RepositoryRead, RepositorySummary, RepositoryUpdate
+from .review_report import (
+    ReviewListItem,
+    ReviewReportCreate,
+    ReviewReportDetail,
+    ReviewReportRead,
+    ReviewReportUpdate,
+)
 from .user import UserCreate, UserRead, UserUpdate
 
 __all__ = [
@@ -14,7 +20,9 @@ __all__ = [
     "RefreshTokenRequest",
     "RepositoryCreate",
     "RepositoryRead",
+    "RepositorySummary",
     "RepositoryUpdate",
+    "ReviewListItem",
     "ReviewReportCreate",
     "ReviewReportDetail",
     "ReviewReportRead",

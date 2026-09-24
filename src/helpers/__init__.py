@@ -42,6 +42,7 @@ from .git_operations import (
 from .gitlab_client import resolve_project
 from .import_graph_helper import build_import_graph, discover_package_names
 from .manifest_cache import compute_cache_key, get_cached_manifest, save_manifest
+from .pipeline_progress import PIPELINE_STAGES, PipelineProgress
 from .rate_limiter import limiter
 from .review_agents import build_agent, build_chat_model, model_identity, run_agent
 from .review_config_loader import load_review_config, parse_review_config
@@ -72,6 +73,7 @@ from .tool_runner import ToolExitCodeError, run_tool
 from .validators import validate_access_token, validate_gitlab_url, validate_repo_id
 
 __all__ = [
+    "PIPELINE_STAGES",
     "FRAMEWORK_REGISTRY",
     "IGNORED_DIR_NAMES",
     "NORMALIZERS",
@@ -83,6 +85,7 @@ __all__ = [
     "DbSession",
     "FrameworkEvidenceCollector",
     "ParseOutcome",
+    "PipelineProgress",
     "ReviewWorkspace",
     "SurfaceScanResult",
     "ToolExitCodeError",

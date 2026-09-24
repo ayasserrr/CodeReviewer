@@ -76,7 +76,7 @@ async def queue_review(repo: ReviewReportRepository, *, repository_id: UUID) -> 
     cloned), so both stay ``None`` until ``mark_review_running`` fills them
     in once ``ingest_node`` has resolved a ``head_sha``.
     """
-    return await repo.create(repository_id=repository_id, status=ReviewStatus.PENDING)
+    return await repo.create(repository_id=repository_id, status=ReviewStatus.PENDING, stage="queued")
 
 
 async def mark_review_running(
@@ -125,6 +125,7 @@ async def skip_review(repo: ReviewReportRepository, review_report_id: UUID, *, h
     await repo.update(
         review_report_id,
         status=ReviewStatus.COMPLETED,
+        stage="done",
         commit_sha=head_sha,
         branch=branch,
         completed_at=datetime.now(UTC),
@@ -147,6 +148,7 @@ async def complete_review(
     await repo.update(
         review_report_id,
         status=ReviewStatus.COMPLETED,
+        stage="done",
         report_markdown=markdown,
         report_data=report.model_dump(mode="json"),
         issues_summary=issues_summary(report),
@@ -158,6 +160,7 @@ async def fail_review(repo: ReviewReportRepository, review_report_id: UUID, erro
     await repo.update(
         review_report_id,
         status=ReviewStatus.FAILED,
+        stage="failed",
         error=error[:4000],
         completed_at=datetime.now(UTC),
     )

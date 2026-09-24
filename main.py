@@ -14,8 +14,9 @@ SRC_DIR = Path(__file__).resolve().parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from fastapi import FastAPI, Request  # noqa: E402
-from fastapi.responses import JSONResponse  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 from slowapi import _rate_limit_exceeded_handler  # noqa: E402
 from slowapi.errors import RateLimitExceeded  # noqa: E402
 from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
@@ -75,6 +76,24 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(router, prefix=settings.API_VERSION)
+
+# The React frontend (frontend/, built with `npm run build`) is served by this
+# same app when its build exists: /assets/* as static files, and every other
+# non-API path falls back to index.html so client-side routes (e.g. a
+# refreshed /reviews/<id>) keep working. During development the Vite dev
+# server proxies /api to this app instead, and this block stays inactive.
+_FRONTEND_DIST = (settings.PROJECT_ROOT / "frontend" / "dist").resolve()
+if (_FRONTEND_DIST / "index.html").is_file():
+    app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="frontend-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def frontend(full_path: str) -> FileResponse:
+        if full_path.startswith(settings.API_VERSION.strip("/")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = (_FRONTEND_DIST / full_path).resolve()
+        if full_path and candidate.is_file() and candidate.is_relative_to(_FRONTEND_DIST):
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND_DIST / "index.html")
 
 
 @app.exception_handler(ConnectionRefusedError)

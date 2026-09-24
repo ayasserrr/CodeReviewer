@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from data.models import Repository
@@ -45,7 +45,11 @@ class RepositoryRepository:
         """
         offset = (page - 1) * page_size
         result = await self._db_session.execute(
-            select(Repository).where(Repository.user_id == user_id).offset(offset).limit(page_size)
+            select(Repository)
+            .where(Repository.user_id == user_id)
+            .order_by(Repository.created_at.desc())
+            .offset(offset)
+            .limit(page_size)
         )
         return list(result.scalars().all())
 
@@ -95,9 +99,10 @@ class RepositoryRepository:
         Returns:
             ``True`` if the repository was deleted, ``False`` if not found.
         """
-        repository = await self.get(repository_id)
-        if repository is None:
-            return False
-        await self._db_session.delete(repository)
+        # A SQL-level DELETE, not session.delete(): the ORM cascade would lazily
+        # load every child collection first, which fails under AsyncSession.
+        # Every child table's FK is ON DELETE CASCADE, so the database removes
+        # review reports, manifests, static findings and dependency graphs.
+        result = await self._db_session.execute(delete(Repository).where(Repository.id == repository_id))
         await self._db_session.flush()
-        return True
+        return (result.rowcount or 0) > 0

@@ -39,6 +39,9 @@ class ReviewReport(Base):
         model: Model id the review agents ran on.
         report_markdown: The rendered report.
         report_data: The full ``DeepReviewReport`` as JSON (re-renderable).
+        stage: The pipeline stage currently running (``ingest`` ... ``deep_review``),
+            or ``done`` / ``failed`` once finished.
+        progress: Live per-stage and per-agent progress for UIs polling the row.
         error: Why the review failed, when ``status`` is FAILED.
         completed_at: When the review finished (successfully or not).
         created_at: When the review report was created.
@@ -111,6 +114,16 @@ class ReviewReport(Base):
     )
 
     report_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    stage: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+
+    progress: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,
         nullable=True,
     )

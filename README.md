@@ -67,6 +67,11 @@ uv sync --group dev --group analysis-tools
   uv tool install "semgrep>=1.177.0"
   ```
 
+  It runs fully offline against the project's own bundled ruleset
+  (`src/assets/semgrep/python-security.yml`: SQL injection via built queries, command injection,
+  eval/exec, unsafe deserialization, disabled autoescaping/TLS/JWT verification, weak hashes,
+  debug mode, hard-coded secrets, …). Set `SEMGREP_CONFIG=auto` to use the online registry instead.
+
 - **jscpd** (copy-paste duplication) — not a Python package; install via npm:
 
   ```bash
@@ -123,6 +128,28 @@ uv run main.py
 
 Docs at `http://localhost:8000/api/v1/docs`.
 
+## Frontend (`frontend/`)
+
+A React + TypeScript single-page app (Vite) — dashboard, repositories, a live pipeline view and an
+interactive report (findings explorer, security KPI checklist, static-analysis triage, full
+markdown report). Requires Node 20+.
+
+```bash
+cd frontend
+npm install
+npm run dev      # http://localhost:5173 — proxies /api to the FastAPI app on :8000
+```
+
+For production, build it once and FastAPI serves it itself (same origin, no CORS, no second
+server) — every non-API path returns the SPA:
+
+```bash
+cd frontend && npm run build   # writes frontend/dist/
+uv run main.py                 # UI at http://localhost:8000/, API at /api/v1
+```
+
+`npm run typecheck` runs the TypeScript compiler without emitting.
+
 ## API flow
 
 1. **`POST /api/v1/ingestion/repositories`** — submit a GitLab URL + access token. Validates the
@@ -136,10 +163,20 @@ Docs at `http://localhost:8000/api/v1/docs`.
    The full pipeline (all five stages above — several minutes) then runs as a background task,
    detached from the request. The access token is never persisted or logged; it lives only in
    the in-memory state handed to that background task.
-2. **`GET /api/v1/reviews/{review_report_id}`** — poll until `status` is `completed` or `failed`.
-   A pipeline failure at *any* stage (not just the deep-review agents) marks the row `failed`
-   with the error — nothing is lost silently.
-3. **`GET /api/v1/reviews/{review_report_id}/markdown`** — the rendered report, once completed.
+2. **`GET /api/v1/reviews/{review_report_id}/status`** — poll this while the run is in flight. A
+   small payload: `status`, the current `stage` (`queued` → `ingest` → `discovery` →
+   `static_analysis` → `dependency_graph` → `deep_review` → `done` / `failed`) and live
+   `progress` (per-stage start/finish times and every deep-review agent's status). A pipeline
+   failure at *any* stage marks the row `failed` with the error — nothing is lost silently.
+3. **`GET /api/v1/reviews/{review_report_id}`** — once `completed`: the full structured report
+   (`report_data`: findings, KPI assessments, static triage, statistics) plus `report_markdown`.
+4. **`GET /api/v1/reviews/{review_report_id}/markdown`** — the rendered report as `text/markdown`.
+
+Other endpoints: `GET /api/v1/repositories` (each with its latest review and review count),
+`GET|DELETE /api/v1/repositories/{id}` (delete is refused with 409 while a review is running),
+`GET /api/v1/reviews` (newest first, across all your repositories) and
+`GET /api/v1/reviews/repository/{id}`. Everything is scoped to the signed-in user; other users'
+ids return 404.
 
 ## Tuning the review (`src/assets/review_config.toml`)
 

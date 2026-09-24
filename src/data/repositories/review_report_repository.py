@@ -4,8 +4,8 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from data.models import Repository, ReviewReport
 from enums import ReviewStatus

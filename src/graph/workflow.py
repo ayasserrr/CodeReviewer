@@ -25,7 +25,6 @@ from nodes import (
     static_analysis_node,
 )
 
-
 NodeFn = Callable[[PipelineState], Awaitable[dict]]
 
 

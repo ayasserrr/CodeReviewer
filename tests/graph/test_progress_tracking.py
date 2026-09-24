@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -14,7 +15,7 @@ from utils import AgentRunStats
 
 
 class _RecordingProgress:
-    instances: list["_RecordingProgress"] = []
+    instances: ClassVar[list["_RecordingProgress"]] = []
 
     def __init__(self, review_report_id):
         self.events: list[tuple] = []

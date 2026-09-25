@@ -42,12 +42,17 @@ deepagents features used, and why:
 """
 
 import asyncio
-from collections.abc import Callable
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
-from deepagents import FilesystemMiddleware, FilesystemPermission, SubAgent, create_deep_agent
+from deepagents import (
+    FilesystemMiddleware,
+    FilesystemPermission,
+    SubAgent,
+    create_deep_agent,
+)
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 from langchain.agents.middleware import (
     AgentMiddleware,

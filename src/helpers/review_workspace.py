@@ -80,6 +80,19 @@ _ZERO_CALLERS_NOTE = (
 
 
 _MAX_MERGED_EVIDENCE = 25
+# High-signal bundled semgrep rules the security lane must rule on one by one.
+_SECURITY_LEAD_RULES: dict[str, str] = {
+    "python-cors-wildcard-with-credentials": "CORS allows any origin with credentials",
+    "python-sql-injection-built-query": "SQL built from strings reaching execute()",
+    "python-sqlalchemy-text-built-query": "SQLAlchemy text() built from strings",
+    "python-subprocess-shell-true": "subprocess with shell=True",
+    "python-os-system-non-literal": "os.system with a non-literal command",
+    "python-eval-exec-non-literal": "eval/exec of non-literal code",
+    "python-unsafe-deserialization": "unsafe deserialization",
+    "python-tls-verification-disabled": "TLS verification disabled",
+    "python-jwt-verification-disabled": "JWT verification disabled",
+    "python-exception-text-returned-to-client": "raw exception text returned to clients",
+}
 _TITLE_STOPWORDS = {"with", "from", "into", "that", "this", "missing", "lack", "lacks", "using", "used", "without"}
 
 # Static-analysis rules (bundled semgrep ids and bandit test ids) that are leads for a security KPI.
@@ -824,6 +837,8 @@ class ReviewWorkspace:
             add("Mounted sub-apps that FastAPI dependencies do not protect",
                 [(m.file, f"{m.path} -> {m.target[:60]} ({m.file}:{m.line})") for m in self.maps.mounts])
             add("Upload filenames reaching filesystem paths (semgrep)", static_rows("python-upload-filename-path-traversal"))
+            for rule, label in _SECURITY_LEAD_RULES.items():
+                add(f"{label} (semgrep {rule})", static_rows(rule))
         elif category_id == "auth":
             add("Auth entry points (rate limiting, enumeration, OTP/reset flows)",
                 [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.is_auth_entry])

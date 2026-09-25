@@ -59,7 +59,7 @@ from langchain.agents.middleware import (
 )
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
@@ -305,8 +305,54 @@ def _fallback_model(settings: Settings) -> BaseChatModel | None:
     return build_chat_model(settings, "verifier")
 
 
+_TOOL_RESULT_MAX_CHARS = 48_000
+"""~12k tokens: any single tool result above this is truncated (read_file is exempt from eviction)."""
+
+
+class _ToolResultCapMiddleware(AgentMiddleware):
+    """Hard cap on what one tool call can put into the context.
+
+    ``read_file`` is exempt from deepagents' large-result eviction, and the
+    context editor keeps the newest tool outputs verbatim — so one read of a
+    binary without an extension, a minified bundle or a data dump with
+    enormous lines used to ride along in every later model call (observed:
+    ~600k input tokens per call for one agent). Binary-looking output is
+    replaced by a note; oversized text is truncated with paging instructions.
+    """
+
+    @staticmethod
+    def _looks_binary(text: str) -> bool:
+        sample = text[:4000]
+        if not sample:
+            return False
+        bad = sum(1 for ch in sample if ch == "\ufffd" or (ord(ch) < 32 and ch not in "\n\r\t"))
+        return bad / len(sample) > 0.05
+
+    def _cap(self, result):
+        if not isinstance(result, ToolMessage) or not isinstance(result.content, str):
+            return result
+        text = result.content
+        if self._looks_binary(text):
+            note = "[binary or non-text content omitted — not reviewable as source; do not read this file again]"
+            return result.model_copy(update={"content": note})
+        if len(text) <= _TOOL_RESULT_MAX_CHARS:
+            return result
+        note = (
+            f"\n\n[output truncated: {len(text):,} characters, showing the first {_TOOL_RESULT_MAX_CHARS:,}. "
+            "Narrow the query (grep with a path/glob, read_file with offset/limit) to see the rest.]"
+        )
+        return result.model_copy(update={"content": text[:_TOOL_RESULT_MAX_CHARS] + note})
+
+    def wrap_tool_call(self, request, handler):
+        return self._cap(handler(request))
+
+    async def awrap_tool_call(self, request, handler):
+        return self._cap(await handler(request))
+
+
 def _harness_middleware(model_calls: int, fallback_model: BaseChatModel | None = None) -> list:
     return [
+        _ToolResultCapMiddleware(),
         ContextEditingMiddleware(
             edits=[
                 ClearToolUsesEdit(

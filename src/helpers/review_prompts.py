@@ -200,6 +200,10 @@ callers, config, dead-code status, tests proving otherwise). Check three things:
    a route table, registry, string, or a different entry point?). If the defect is real
    but the title or impact overstates it, keep it and pass corrected_title /
    corrected_impact with what the code actually allows.
+   When a finding carries a REACHABILITY line, the listed files are not imported by any
+   application root. A chain "live route -> ... -> that module" is only live if you can
+   show the import/call that connects them (find_references / get_module_imports); if
+   you cannot, the issue is latent: at most High for a severe latent flaw, and say so.
 4. Is the severity right per the rubric above? If not -> adjusted.
 Then call submit_verification exactly once per finding:
 - confirmed — the claim holds as stated and the severity is fair;

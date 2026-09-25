@@ -74,6 +74,11 @@ from utils.review import CONFIDENCE_ORDER
 logger = get_logger(__name__)
 
 
+def _format_lead_group(label: str, rows: list[str], limit: int = 15) -> str:
+    more = f"\n  - ... {len(rows) - limit} more" if len(rows) > limit else ""
+    return f"- {label}:\n" + "\n".join(f"  - {row}" for row in rows[:limit]) + more
+
+
 class DeepReviewController(BaseController):
     """Runs one end-to-end deep review. Pure orchestration — no database access."""
 
@@ -205,10 +210,24 @@ class DeepReviewController(BaseController):
             f"Begin the {category.title} review of this repository. The repository brief is in your instructions; "
             "/_review/context/ holds the full lists. Plan with write_plan, then work through it."
         )
+        leads = workspace.lane_leads(category.id)
+        if leads:
+            kickoff += (
+                "\n\nMandatory leads for your lane, found statically. Each group must end either as a recorded "
+                "finding (grouping rows that share a root cause) or as a deliberate dismissal you can justify:\n"
+                + "\n".join(_format_lead_group(label, rows) for label, _, rows in leads)
+            )
         def nothing_recorded() -> str | None:
             recorded = any(f.category_id == category.id for f in workspace.findings.values())
             if recorded or any(fid.startswith(f"{category.code}-") for fid in workspace.withdrawn):
-                return None
+                missing = workspace.unaddressed_leads(category.id)
+                if not missing:
+                    return None
+                return (
+                    "Before you finish: none of your findings cites these mandatory lead groups. Check each one and "
+                    "record what is real (or reply why a group is not a defect):\n"
+                    + "\n".join(_format_lead_group(label, rows) for label, rows in missing)
+                )
             return (
                 f"You are stopping with NO findings recorded for {category.title}. Unless you have verified that "
                 "this category genuinely does not apply to this repository, go back to your checklist and the "

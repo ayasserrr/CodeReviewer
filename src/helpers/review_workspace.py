@@ -793,6 +793,76 @@ class ReviewWorkspace:
                 leads["KPI-10"].append(f"{read.file}:{read.line} ({read.key} defaults to a local/dev/private host)")
         return {kpi: list(dict.fromkeys(items)) for kpi, items in leads.items()}
 
+    def lane_leads(self, category_id: str) -> list[tuple[str, frozenset[str], list[str]]]:
+        """Deterministic must-check leads for one category: ``(label, files, rows)`` groups.
+
+        Built from the maps and the static rules. A lead group is "addressed"
+        when a finding of that category cites at least one of its files — the
+        completion check nudges the specialist once about unaddressed groups.
+        """
+        groups: list[tuple[str, frozenset[str], list[str]]] = []
+
+        def add(label: str, rows: list[tuple[str, str]]) -> None:
+            if rows:
+                groups.append((label, frozenset(f for f, _ in rows), [r for _, r in rows]))
+
+        def static_rows(*rules: str) -> list[tuple[str, str]]:
+            return [
+                (f.file, f"{f.file}:{f.line} ({f.category.rsplit('.', 1)[-1]})")
+                for f in self.static_by_id.values()
+                if f.category.rsplit(".", 1)[-1] in rules
+            ]
+
+        routes = self.maps.routes
+        if category_id == "security":
+            add("Routes taking a user identity from the request with no token verification (CLIENT-ASSERTED IDENTITY)",
+                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line}; {', '.join(r.identity_inputs)})")
+                 for r in routes if "CLIENT-ASSERTED IDENTITY" in r.flags])
+            add("Mounted sub-apps that FastAPI dependencies do not protect",
+                [(m.file, f"{m.path} -> {m.target[:60]} ({m.file}:{m.line})") for m in self.maps.mounts])
+            add("Upload filenames reaching filesystem paths (semgrep)", static_rows("python-upload-filename-path-traversal"))
+        elif category_id == "auth":
+            add("Auth entry points (rate limiting, enumeration, OTP/reset flows)",
+                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.is_auth_entry])
+            add("Insecure secret defaults (semgrep)", static_rows("python-insecure-secret-default"))
+        elif category_id == "inputs":
+            add("Upload handlers (FILE UPLOAD routes)",
+                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.accepts_upload])
+        elif category_id == "frontend":
+            add("Frontend security hits (semgrep web rules)", [
+                (f.file, f"{f.file}:{f.line} ({f.category.rsplit('.', 1)[-1]})")
+                for f in self.static_by_id.values() if f.category.rsplit(".", 1)[-1].startswith("web-")
+            ])
+        elif category_id == "integration":
+            add("Environment keys with divergent inline defaults",
+                [(r.file, f"{key}: {r.default} @ {r.file}:{r.line}")
+                 for key, reads in self.maps.env_divergent_defaults().items() for r in reads])
+            add("Frontend calls with no backend route", [(c.file, f"{c.path} ({c.file}:{c.line})")
+                                                         for c in self.maps.unmatched_client_calls()])
+        elif category_id == "performance":
+            add("Blocking calls inside async functions (semgrep)", static_rows("python-blocking-call-in-async-def"))
+        elif category_id == "maintainability":
+            by_dir: dict[str, list[str]] = defaultdict(list)
+            for path in self.maps.unreachable:
+                by_dir[str(PurePosixPath(path).parent)].append(path)
+            if by_dir:
+                groups.append((
+                    "Modules no application root imports (dead-code candidates, by directory)",
+                    frozenset(self.maps.unreachable),
+                    [f"{d}/ ({len(paths)} modules)" for d, paths in sorted(by_dir.items(), key=lambda kv: -len(kv[1]))],
+                ))
+        elif category_id == "secrets":
+            add(".env files with flagged keys (weak/short/localhost/browser-exposed/duplicates)",
+                [(f.file, f"{f.file}: " + "; ".join(f"{k} {flag}" for k, flag in f.flags[:6])
+                  + (f"; duplicates: {', '.join(k for k, _ in f.duplicates)}" if f.duplicates else ""))
+                 for f in self.maps.env_files if f.flags or f.duplicates])
+            add("Insecure secret defaults (semgrep)", static_rows("python-insecure-secret-default"))
+        return groups
+
+    def unaddressed_leads(self, category_id: str) -> list[tuple[str, list[str]]]:
+        cited = {ref.file for f in self.findings.values() if f.category_id == category_id for ref in f.evidence}
+        return [(label, rows) for label, files, rows in self.lane_leads(category_id) if not files & cited]
+
     def assess_kpi(self, args: _KpiArgs) -> str:
         kpi = next((k for k in self.config.security_kpis if k.id == args.kpi_id), None)
         if kpi is None:

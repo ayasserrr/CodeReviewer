@@ -281,3 +281,23 @@ class TestRunAgentResume:
             agent, name="specialist:x", kickoff="go", files={}, timeout_seconds=30, completion_check=lambda: None
         )
         assert stats.status == "completed" and len(agent.inputs) == 1
+
+
+class TestToolResultCap:
+    def _call(self, content: str):
+        from langchain_core.messages import ToolMessage
+
+        from helpers.review_agents import _ToolResultCapMiddleware
+
+        return _ToolResultCapMiddleware().wrap_tool_call(None, lambda _: ToolMessage(content=content, tool_call_id="1"))
+
+    def test_small_text_passes_through(self):
+        assert self._call("def f():\n    return 1\n").content == "def f():\n    return 1\n"
+
+    def test_oversized_text_is_truncated_with_paging_hint(self):
+        out = self._call("x" * 200_000).content
+        assert len(out) < 50_000 and "output truncated: 200,000 characters" in out
+
+    def test_binary_garbage_is_replaced(self):
+        out = self._call("\x89PNG\r\n\x1a\n" + "\x00�\x01" * 5000).content
+        assert out.startswith("[binary or non-text content omitted")

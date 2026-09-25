@@ -325,6 +325,14 @@ class TestMapsIntegration:
         assert "latent" not in live
         assert "REACHABILITY" not in mapped.render_finding(mapped.findings["SEC-2"])
 
+    def test_lane_leads_and_unaddressed_groups(self, mapped):
+        leads = mapped.lane_leads("security")
+        assert leads[0][0].startswith("Routes taking a user identity") and leads[0][1] == frozenset({"app/main.py"})
+        assert [label for label, _ in mapped.unaddressed_leads("security")] == [leads[0][0]]
+        mapped.record_finding(mapped.config.category("security"), _finding(title="Header identity"))
+        assert mapped.unaddressed_leads("security") == []
+        assert mapped.lane_leads("llm") == []
+
     def test_module_imports_accepts_repository_paths(self, mapped):
         assert "app/service.py imported by: app/main.py" in mapped.module_imports("app/service.py", "imported_by")
         assert "app/main.py imports: app/service.py" in mapped.module_imports("app.main", "imports")

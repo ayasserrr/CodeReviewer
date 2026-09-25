@@ -862,7 +862,7 @@ class ReviewWorkspace:
                  for x in self.maps.identity_unused])
             add("Objects addressed by an id in the path with no verified user (IDOR / enumeration)",
                 [(r.file, f"{r.method} {r.path} ({r.file}:{r.line}; {r.auth_label})")
-                 for r in routes if re.search(r"\{[^}]*(id|thread|key|name)[^}]*\}", r.path, re.I)
+                 for r in routes if re.search(r"\{[^}]*(id|thread|key|name)[^}]*\}", r.path, re.IGNORECASE)
                  and not r.user_token_verified and not r.is_auth_entry])
         elif category_id == "auth":
             add("Auth entry points (rate limiting, enumeration, OTP/reset flows)",

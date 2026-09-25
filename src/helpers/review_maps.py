@@ -45,6 +45,7 @@ from utils import InventorySection, RepositoryManifest
 logger = get_logger(__name__)
 
 _HTTP_VERBS = ("get", "post", "put", "patch", "delete", "options", "head")
+_PAGINATION_PARAM = re.compile(r"(?i)^(limit|offset|page|page_size|per_page|skip|cursor|size|top|take|pagination|paging)$")
 _IDENTITY_NAME = re.compile(
     r"(?i)(^|[_-])(user|email|e_?mail|owner|role|tenant|account|org|uid|username|created_by|requester|actor)([_-]|$)"
 )
@@ -100,6 +101,16 @@ class RouteInfo:
     user_token_verified: bool
     shared_key: bool
     accepts_upload: bool = False
+    paginated: bool = False
+
+    @property
+    def is_unpaginated_listing(self) -> bool:
+        """A GET collection endpoint (no trailing path parameter) with no limit/offset/page/cursor input."""
+        last = self.path.rstrip("/").rsplit("/", 1)[-1]
+        if self.method != "GET" or self.paginated or not last or last.startswith("{"):
+            return False
+        listing = r"(?i)(^|_)(list|search|all|index|directory|history)(_|$)|s$"
+        return bool(re.search(listing, self.handler) or re.search(listing, last))
 
     @property
     def auth_label(self) -> str:
@@ -822,6 +833,10 @@ def _build_routes(files: list[_PyFile]) -> tuple[list[RouteInfo], list[MountInfo
             for d in [*handler.args.defaults, *handler.args.kw_defaults] if d is not None
         )
 
+    def paginated(handler: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        names = [a.arg for a in (*handler.args.posonlyargs, *handler.args.args, *handler.args.kwonlyargs)]
+        return any(_PAGINATION_PARAM.search(name) for name in names)
+
     routes: list[RouteInfo] = []
     for raw in raw_routes:
         key = (raw.file, raw.router_var.split(".")[-1])
@@ -843,6 +858,7 @@ def _build_routes(files: list[_PyFile]) -> tuple[list[RouteInfo], list[MountInfo
                     user_token_verified=verified,
                     shared_key=shared,
                     accepts_upload=accepts_upload(raw.handler),
+                    paginated=paginated(raw.handler),
                 )
             )
     routes.sort(key=lambda r: (r.path, r.method))
@@ -1426,6 +1442,9 @@ def build_inventory(maps: ReviewMaps, limit: int = 80) -> tuple[InventorySection
             [f"`{x.function}` ignores {x.identity} ({x.file}:{x.line})" for x in maps.identity_unused],
             "Each is either an intentional global listing or a data-exposure bug; the findings above say which.",
         ),
+        section("Collection endpoints with no pagination input (limit/offset/page/cursor)",
+                [f"`{r.method} {r.path}` -> {r.handler} ({r.file}:{r.line})" for r in maps.routes if r.is_unpaginated_listing],
+                "Each returns the whole collection unless the handler caps it internally."),
         section("Mounted sub-apps (no FastAPI dependency applies)",
                 [f"`{m.path}` -> {m.target} ({m.file}:{m.line})" for m in maps.mounts]),
         section("Frontend pages rendered without an auth guard",

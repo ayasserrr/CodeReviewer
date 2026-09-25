@@ -62,7 +62,7 @@ def _verification_line(finding: ReviewFinding) -> str:
     if finding.verification is None:
         return "*Verification:* not independently verified."
     v = finding.verification
-    if v.verdict == "adjusted":
+    if v.verdict == "adjusted" and v.original_severity != finding.severity:
         return f"*Verification:* severity adjusted {v.original_severity} → {finding.severity} — {v.note}"
     return f"*Verification:* confirmed — {v.note}"
 

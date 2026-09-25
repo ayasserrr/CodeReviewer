@@ -559,3 +559,41 @@ rules:
       - pattern: chromadb.PersistentClient(...)
       - pattern: FAISS.load_local(...)
       - pattern: $F.save_local(...)
+
+  - id: python-whole-collection-recompute
+    languages: [python]
+    severity: INFO
+    message: >-
+      A function that recomputes over the whole collection (rerank / rescore / reindex / re-embed / all items).
+      Check whether it runs on every upload or request: work proportional to the whole pool per event makes
+      total cost grow quadratically with the pool, and model calls inside it multiply latency and spend.
+    metadata: {category: performance, confidence: LOW}
+    patterns:
+      - pattern: |
+          def $F(...):
+              ...
+      - metavariable-regex:
+          metavariable: $F
+          regex: (?i)^_?(\w*_)?(re_?(rank|score|index|embed|build|compute|calculate)\w*|all_\w*|all)$
+      - focus-metavariable: $F
+
+  - id: python-lowercased-extracted-text
+    languages: [python]
+    severity: INFO
+    message: >-
+      Document text is lowercased where it is extracted or cleaned. Everything downstream (embeddings, LLM
+      prompts, stored text, name / acronym / code matching) sees the degraded text; case carries meaning
+      (acronyms, proper nouns, identifiers) and cased embedding models lose signal.
+    metadata: {category: correctness, confidence: LOW}
+    patterns:
+      - pattern-inside: |
+          def $F(...):
+              ...
+      - metavariable-regex:
+          metavariable: $F
+          regex: (?i).*(extract|parse|load|read|text|content|clean|normali[sz]e|preprocess).*
+      - pattern-either:
+          - pattern: return $X.lower()
+          - pattern: return $X.lower().strip()
+          - pattern: return $X.strip().lower()
+          - pattern: return $X.casefold()

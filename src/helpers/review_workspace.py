@@ -890,6 +890,11 @@ class ReviewWorkspace:
                 [(f"{x.file}:{x.line}", f"{x.name} ({x.file}:{x.line}): {x.kind}") for x in self.maps.process_state])
             add("Local on-disk vector stores (semgrep)", static_rows("python-local-vector-store"))
             add("Model / embedding calls inside loops (semgrep)", static_rows("python-model-call-in-loop"))
+            add("Whole-collection recomputation (rerank / rescore / reindex / all items; check if it runs per event)",
+                static_rows("python-whole-collection-recompute"))
+            add("Collection endpoints with no pagination input",
+                [(r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
+                 for r in routes if r.is_unpaginated_listing])
         elif category_id == "correctness":
             entry_points = [(r.file, r.handler, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.accepts_upload]
             entry_points += [
@@ -908,10 +913,13 @@ class ReviewWorkspace:
             add("Values rewritten during extraction (semgrep)", static_rows("python-silent-value-substitution"))
             add("Random identifiers (semgrep)", static_rows("python-random-identifier"))
             add("Work claims / locks / in-progress flags (semgrep)", static_rows("python-claim-flag-or-lock"))
+            add("Document text lowercased at extraction (semgrep)", static_rows("python-lowercased-extracted-text"))
         elif category_id == "llm":
             add("LangGraph graphs compiled without a checkpointer (semgrep)",
                 static_rows("python-langgraph-compile-without-checkpointer"))
             add("Model calls inside loops (semgrep)", static_rows("python-model-call-in-loop"))
+            add("Document text lowercased before embedding / prompting (semgrep)",
+                static_rows("python-lowercased-extracted-text"))
         elif category_id == "maintainability":
             by_dir: dict[str, list[str]] = defaultdict(list)
             for path in self.maps.unreachable:

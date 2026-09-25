@@ -304,3 +304,16 @@ def test_architecture_detectors(tmp_path):
     titles = [s.title for s in build_inventory(maps)]
     assert "Queries that receive the caller's identity but never use it" in titles
     assert "Frontend pages rendered without an auth guard" in titles
+
+
+def test_unpaginated_listing_detection():
+    from helpers.review_maps import RouteInfo
+
+    def route(method, path, handler, paginated=False):
+        return RouteInfo(method, path, handler, "a.py", 1, (), (), False, False, paginated=paginated)
+
+    assert route("GET", "/api/candidates", "list_candidates").is_unpaginated_listing
+    assert not route("GET", "/api/candidates", "list_candidates", paginated=True).is_unpaginated_listing
+    assert not route("GET", "/api/candidates/{candidate_id}", "get_candidate").is_unpaginated_listing
+    assert not route("POST", "/api/candidates", "create_candidates").is_unpaginated_listing
+    assert not route("GET", "/health", "health").is_unpaginated_listing

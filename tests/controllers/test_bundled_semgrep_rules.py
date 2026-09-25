@@ -59,6 +59,15 @@ async def upload_endpoint(db, thread_id):
         return None
 
 
+def _rerank_all_candidates(pool):
+    return pool
+
+
+def extract_text(path):
+    raw = open(path).read()
+    return raw.lower()
+
+
 def call():
     try:
         return requests.get("https://example.com")
@@ -123,8 +132,10 @@ def test_rulesets_load_without_config_errors(results):
         ("python-silent-value-substitution", 30),
         ("python-random-identifier", 34),
         ("python-claim-flag-or-lock", 38),
-        ("python-http-request-without-timeout", 44),
-        ("python-exception-text-returned-to-client", 46),
+        ("python-whole-collection-recompute", 42),
+        ("python-lowercased-extracted-text", 48),
+        ("python-http-request-without-timeout", 53),
+        ("python-exception-text-returned-to-client", 55),
         ("web-secret-in-client-env", 3),
         ("web-iframe-sandbox-escape", 6),
         ("web-spreadsheet-export", 11),

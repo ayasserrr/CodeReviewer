@@ -126,8 +126,39 @@ def setup_logging() -> None:
     )
 
 
+# Third-party loggers that are pure noise at DEBUG (per-request HTTP wire events, optional
+# integrations probing for packages this app never installs — deepagents logs a full
+# traceback for each missing langchain_aws / langchain_fireworks on every agent build).
+# Their warnings and errors still come through.
+_NOISY_LOGGERS = (
+    "httpcore",
+    "httpx",
+    "hpack",
+    "urllib3",
+    "asyncio",
+    "passlib",
+    "multipart",
+    "python_multipart",
+    "watchfiles",
+    "google_genai",
+    "google.auth",
+    "grpc",
+    "deepagents",
+    "langchain",
+    "langsmith",
+    "langgraph",
+)
+
+
+def quiet_third_party_loggers(level: int = logging.WARNING) -> None:
+    """Raise the threshold of chatty third-party loggers; the app's own loggers keep LOG_LEVEL."""
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(level)
+
+
 # Initialize logging
 setup_logging()
+quiet_third_party_loggers()
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:

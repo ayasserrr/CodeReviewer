@@ -22,9 +22,11 @@ as-is rather than forced into a uniform "everyone gets the same file list"
 shape that wouldn't actually make every tool better.
 """
 
+import contextlib
 import json
 import os
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -118,15 +120,20 @@ class SecurityEngineController(BaseController):
         return outcome
 
     def _run_bandit(self, local_repo_path: str, files_to_analyze: list[str]) -> dict[str, Any]:
-        if not files_to_analyze:
+        # Bandit only parses Python; anything else is a guaranteed syntax error entry.
+        python_files = [f for f in files_to_analyze if f.endswith(".py")]
+        if not python_files:
             return {"tool": "bandit", "status": "success", "findings": [], "error": None}
 
-        command = ["bandit", "-f", "json", "--", *files_to_analyze]
+        command = ["bandit", "-q", "-f", "json", "--", *python_files]
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
             if result.returncode not in (0, 1):
                 raise ToolExitCodeError(f"bandit exited with unexpected code {result.returncode}: {result.stderr.strip()}")
-            raw = json.loads(result.stdout or "{}")
+            # On large inputs bandit draws a rich progress bar ("Working... 100%")
+            # on stdout ahead of the JSON document, even with -q.
+            stdout = result.stdout or "{}"
+            raw = json.loads(stdout[stdout.find("{"):] if "{" in stdout else "{}")
             return {"findings": raw.get("results", [])}
 
         outcome = run_tool(
@@ -145,18 +152,26 @@ class SecurityEngineController(BaseController):
         if not os.path.isdir(local_repo_path):
             return {"tool": "gitleaks", "status": "invalid_path", "findings": [], "error": None}
 
+        # The report goes to a temp file OUTSIDE the scanned repo: "--report-path -"
+        # means stdout only on some gitleaks releases — others (e.g. 8.21) create a
+        # file literally named "-" inside the clone and print nothing, silently
+        # dropping every finding.
+        report_fd, report_path = tempfile.mkstemp(prefix="gitleaks-", suffix=".json")
+        os.close(report_fd)
         command = [
             self.gitleaks_bin, "detect", "--source", local_repo_path,
-            "--report-format", "json", "--report-path", "-", "--no-git",
+            "--report-format", "json", "--report-path", report_path, "--no-git",
         ]
 
         try:
             result = subprocess.run(
-                command, cwd=local_repo_path, capture_output=True, text=True, timeout=self.config.SECURITY_TOOL_TIMEOUT
+                command, cwd=local_repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=self.config.SECURITY_TOOL_TIMEOUT,
             )
             if result.returncode not in (0, 1):
                 raise ToolExitCodeError(f"gitleaks exited with unexpected code {result.returncode}: {result.stderr.strip()}")
-            findings = json.loads(result.stdout or "[]")
+            with open(report_path, encoding="utf-8", errors="replace") as report:
+                findings = json.loads(report.read() or "[]")
             return {"tool": "gitleaks", "status": "success", "findings": findings, "error": None}
         except subprocess.TimeoutExpired as exc:
             return {"tool": "gitleaks", "status": "error", "findings": [], "error": f"timeout: {exc}"}
@@ -164,6 +179,9 @@ class SecurityEngineController(BaseController):
             return {"tool": "gitleaks", "status": "error", "findings": [], "error": f"parse_error: {exc}"}
         except Exception as exc:
             return {"tool": "gitleaks", "status": "error", "findings": [], "error": str(exc)}
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(report_path)
 
 
 def _semgrep_error_detail(result: subprocess.CompletedProcess) -> str:

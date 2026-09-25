@@ -41,6 +41,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
 from helpers.fs_scanner import is_sensitive_env_file
+from helpers.review_maps import ReviewMaps
 from utils import (
     DependencyGraph,
     EvidenceRef,
@@ -117,14 +118,21 @@ class _CallRelationArgs(BaseModel):
 
 
 class _ImportArgs(BaseModel):
-    module: str = Field(..., description="Dotted module path (prefix match), e.g. 'app.services'.")
+    module: str = Field(
+        ...,
+        description="Dotted module (prefix match, e.g. 'app.services') or repository file/directory path "
+        "(e.g. 'backend/app/services/upload.py').",
+    )
     direction: Literal["imports", "imported_by", "both"] = "both"
     limit: int = Field(60, ge=1, le=300)
 
 
 class _EndpointArgs(BaseModel):
-    path_contains: str | None = Field(None, description="Substring filter on the route path.")
+    path_contains: str | None = Field(None, description="Substring filter on the route path or handler file.")
     method: str | None = Field(None, description="HTTP method filter, e.g. 'POST'.")
+    flagged_only: bool = Field(
+        False, description="Only routes flagged CLIENT-ASSERTED IDENTITY / NO AUTH DEPENDENCY / AUTH ENTRY POINT."
+    )
     offset: int = Field(0, ge=0)
     limit: int = Field(80, ge=1, le=300)
 
@@ -208,6 +216,14 @@ class _VerifyArgs(BaseModel):
     )
     note: str = Field(..., description="The decisive fact you checked, citing file:line.")
     adjusted_severity: Literal["Critical", "High", "Medium", "Low"] | None = None
+    corrected_title: str | None = Field(
+        None, description="Only when the title overstates or misnames the defect: the accurate one-line title."
+    )
+    corrected_impact: str | None = Field(
+        None,
+        description="Only when the defect is real but the stated impact is not what the code actually allows "
+        "(e.g. claims file disclosure the parser cannot do): the accurate impact. Replaces the original.",
+    )
 
 
 class _ListFindingsArgs(BaseModel):
@@ -260,6 +276,7 @@ class ReviewWorkspace:
         tool_results: Raw per-tool status contract from the static-analysis node.
         graph: The dependency graph node's output.
         config: The parsed review config.
+        maps: Deterministic route/env/client-call/import maps (``helpers.review_maps``).
     """
 
     def __init__(
@@ -271,8 +288,10 @@ class ReviewWorkspace:
         tool_results: dict[str, dict[str, Any]],
         graph: DependencyGraph,
         config: ReviewConfig,
+        maps: ReviewMaps | None = None,
     ) -> None:
         self.repo_path = repo_path.resolve()
+        self.maps = maps or ReviewMaps()
         self.manifest = manifest
         self.graph = graph
         self.config = config
@@ -495,20 +514,58 @@ class ReviewWorkspace:
         return "\n".join(out)
 
     def module_imports(self, module: str, direction: str = "both", limit: int = 60) -> str:
-        """Module-level import edges (from grimp) for modules matching a prefix."""
-        modules = sorted({m for m in (*self._imports, *self._imported_by) if m == module or m.startswith(module + ".")})
-        if not modules:
-            return f"No module '{module}' in the import graph (grimp may have failed or the module is not a package)."
+        """Import edges for a dotted module prefix (grimp) or a file/directory path (static resolver)."""
         out = []
+        modules = sorted({m for m in (*self._imports, *self._imported_by) if m == module or m.startswith(module + ".")})
         for mod in modules[:20]:
             if direction in ("imports", "both"):
                 out.append(f"{mod} imports: {', '.join(sorted(self._imports.get(mod, set()))[:limit]) or '-'}")
             if direction in ("imported_by", "both"):
                 out.append(f"{mod} imported by: {', '.join(sorted(self._imported_by.get(mod, set()))[:limit]) or '-'}")
-        return "\n".join(out)
+        if not out and self.maps.import_edges:
+            needle = module.strip("/").removesuffix(".py").replace(".", "/") if "/" not in module else module.strip("/")
+            files = sorted(f for f in self.maps.import_edges if needle in f)
+            reverse = self.maps.imported_by()
+            for path in files[:20]:
+                if direction in ("imports", "both"):
+                    out.append(f"{path} imports: {', '.join(sorted(self.maps.import_edges.get(path, ()))[:limit]) or '-'}")
+                if direction in ("imported_by", "both"):
+                    out.append(f"{path} imported by: {', '.join(sorted(reverse.get(path, ()))[:limit]) or '- (nothing)'}")
+            if len(files) > 20:
+                out.append(f"... {len(files) - 20} more files match '{module}' — narrow the query")
+        return "\n".join(out) or (
+            f"No module or file matching '{module}' in the import graph. Try a repository path (e.g. 'app/services')."
+        )
 
-    def list_endpoints(self, path_contains: str | None = None, method: str | None = None, offset: int = 0, limit: int = 80) -> str:
-        """HTTP endpoints Discovery detected, with handler locations."""
+    def list_endpoints(
+        self,
+        path_contains: str | None = None,
+        method: str | None = None,
+        flagged_only: bool = False,
+        offset: int = 0,
+        limit: int = 80,
+    ) -> str:
+        """HTTP routes with their auth dependencies and identity inputs (route map), else Discovery's list."""
+        if self.maps.routes:
+            rows = [
+                r
+                for r in self.maps.routes
+                if (not path_contains or path_contains in r.path or path_contains in r.file)
+                and (not method or r.method == method.upper())
+                and (not flagged_only or r.flags)
+            ]
+            page = rows[offset : offset + limit]
+            lines = [f"{len(rows)} route(s) (auth = strongest check in the dependency closure)"]
+            for r in page:
+                lines.append(
+                    f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line}) | auth: {r.auth_label} | "
+                    f"identity: {', '.join(r.identity_inputs) or '-'} | flags: {', '.join(r.flags) or '-'} | "
+                    f"deps: {', '.join(r.dependencies) or '-'}"
+                )
+            if self.maps.mounts and offset == 0 and not flagged_only:
+                lines.append("Mounted sub-apps (no FastAPI dependencies apply): " + "; ".join(
+                    f"{m.path} -> {m.target} ({m.file}:{m.line})" for m in self.maps.mounts))
+            return "\n".join(lines)
         rows = [
             e
             for e in self.manifest.endpoints
@@ -742,8 +799,15 @@ class ReviewWorkspace:
                 self.rejected[finding.id] = finding.model_copy(update={"verification": verification})
                 del self.findings[finding.id]
             else:
-                severity = args.adjusted_severity if args.verdict == "adjusted" else finding.severity
-                self.findings[finding.id] = finding.model_copy(update={"verification": verification, "severity": severity})
+                update: dict[str, Any] = {
+                    "verification": verification,
+                    "severity": args.adjusted_severity if args.verdict == "adjusted" else finding.severity,
+                }
+                if args.corrected_title and args.corrected_title.strip():
+                    update["title"] = args.corrected_title.strip()[:300]
+                if args.corrected_impact and args.corrected_impact.strip():
+                    update["impact"] = args.corrected_impact.strip()[:3000]
+                self.findings[finding.id] = finding.model_copy(update=update)
         return f"{args.finding_id}: {args.verdict}."
 
     # ------------------------------------------------------------------
@@ -768,6 +832,34 @@ class ReviewWorkspace:
             verified = f.verification.verdict if f.verification else "unverified"
             lines.append(f"{f.id} | {f.severity} | {verified} | {f.title} | {f.evidence[0].label if f.evidence else '-'}")
         return "\n".join(lines)
+
+    def duplicate_candidates(self) -> str:
+        """Pairs of findings from different categories that cite the same file:line or share a KPI."""
+        with self._lock:
+            live = [f for f in self.findings.values() if f.id not in self.duplicates]
+        by_location: dict[str, set[str]] = defaultdict(set)
+        by_kpi: dict[str, set[str]] = defaultdict(set)
+        for f in live:
+            for ref in f.evidence:
+                by_location[f"{ref.file}:{ref.line_start}"].add(f.id)
+            for kpi in f.kpi_ids:
+                by_kpi[kpi].add(f.id)
+        category = {f.id: f.category_id for f in live}
+        pairs: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for reason, groups in (("same citation", by_location), ("same KPI", by_kpi)):
+            for key, ids in groups.items():
+                ordered = sorted(ids)
+                for i, a in enumerate(ordered):
+                    for b in ordered[i + 1 :]:
+                        if category[a] != category[b] or reason == "same KPI":
+                            pairs[(a, b)].append(f"{reason} {key}")
+        if not pairs:
+            return "No cross-category overlaps found."
+        titles = {f.id: f.title for f in live}
+        lines = ["Candidate duplicates (overlap is a hint, not proof — read both and merge only the SAME defect):"]
+        for (a, b), reasons in sorted(pairs.items(), key=lambda kv: -len(kv[1])):
+            lines.append(f"- {a} \"{titles[a][:90]}\" <> {b} \"{titles[b][:90]}\" ({'; '.join(reasons[:3])})")
+        return "\n".join(lines[:120])
 
     def get_finding(self, finding_id: str) -> str:
         with self._lock:
@@ -831,10 +923,13 @@ class ReviewWorkspace:
                   "Callers and callees of a Python function (resolved call graph with call-site lines). Use to trace reachability.",
                   _CallRelationArgs),
             _tool(self.module_imports, "get_module_imports",
-                  "Module import graph (grimp): what a module imports and who imports it. Use for layering/dead-module questions.",
+                  "Import graph: what a module/file imports and who imports it (accepts dotted modules or repository "
+                  "paths). Use for layering and reachability questions.",
                   _ImportArgs),
             _tool(self.list_endpoints, "list_endpoints",
-                  "HTTP endpoints detected in the code (method, path, handler, file:line).", _EndpointArgs),
+                  "HTTP routes with full paths, the auth dependencies that actually apply (app/router/route, transitive), "
+                  "identity inputs taken from the request, and flags. Filter with flagged_only=true for the risky ones.",
+                  _EndpointArgs),
             _tool(self.hotspots, "get_hotspots",
                   "Ranked hot spots: most-called functions (fan_in), most-calling (fan_out), largest (size), most complex (complexity).",
                   _HotspotArgs),
@@ -887,6 +982,9 @@ class ReviewWorkspace:
             self.query_tools()[0],
             _tool(self.list_findings, "list_findings", "Compact list of all current findings (filterable).", _ListFindingsArgs),
             _tool(self.get_finding, "get_finding", "Full text of one finding.", _GetFindingArgs),
+            _tool(self.duplicate_candidates, "find_duplicate_candidates",
+                  "Pairs of findings from different categories that cite the same file:line or the same KPI — "
+                  "the usual shape of one defect reported twice. Start deduplication here."),
             _tool(lambda **kw: self.mark_duplicate(_DuplicateArgs(**kw)), "mark_duplicate",
                   "Fold a finding that reports the same underlying defect as another (e.g. from two categories) into it.",
                   _DuplicateArgs),

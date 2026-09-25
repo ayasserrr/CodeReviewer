@@ -82,7 +82,13 @@ def normalize_radon(
 
     complexity = raw_data.get("complexity", {}) or {}
     for file_path, entries in complexity.items():
-        for entry in entries or []:
+        # radon's ``cc -j`` reports a file it couldn't analyze (syntax error,
+        # etc.) as a plain error string instead of a list of entries.
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
             rank = entry.get("rank")
             if rank in complexity_ranks_to_ignore:
                 continue
@@ -102,6 +108,10 @@ def normalize_radon(
 
     maintainability = raw_data.get("maintainability", {}) or {}
     for file_path, entry in maintainability.items():
+        # Same shape quirk as complexity above: a file radon's ``mi -j``
+        # couldn't analyze is reported as an error string, not a dict.
+        if not isinstance(entry, dict):
+            continue
         rank = entry.get("rank")
         if rank in mi_ranks_to_ignore:
             continue

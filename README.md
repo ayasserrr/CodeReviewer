@@ -44,6 +44,30 @@ phase. A synthesizer agent de-duplicates across categories and writes the execut
 (scope, verdict, priority order, root causes). No single agent's failure or timeout fails the
 whole review — whatever it had already recorded is kept, and its section gets a coverage warning.
 
+Before any agent starts, a deterministic pass (`helpers/review_maps.py`, no LLM, well under a
+second) builds exhaustive tables the agents walk row by row instead of rediscovering with greps.
+They are mounted at `/_review/context/` and summarized in every agent's brief:
+
+- **`route_map.md`** — every FastAPI route with its full path (router/include prefixes resolved),
+  the dependencies that actually apply (app, include, router, route, handler — transitively),
+  whether any of them verifies a user token, the request inputs used as an identity
+  (`x-user-email` headers, `user_email` body fields, ...), flags (`CLIENT-ASSERTED IDENTITY`,
+  `AUTH ENTRY POINT`, `NO AUTH DEPENDENCY`) and `app.mount` sub-apps, which FastAPI
+  dependencies never reach.
+- **`env_map.md`** — every environment read (Python and JS/TS) with its inline default, keys whose
+  defaults diverge between modules, and a value-free inspection of every `.env*` file: key names,
+  duplicate keys, weak/short/localhost/browser-exposed flags. Values never leave the process
+  (`DEEP_REVIEW_INSPECT_ENV_FILES=false` skips committed real `.env` files entirely); agents still
+  cannot open `.env` files.
+- **`client_calls.md`** — frontend API calls matched against the backend routes: calls with no
+  route (broken contract / dead client code) and routes no frontend code calls.
+- **`reachability.md`** — a static, file-level Python import graph whose import roots are inferred
+  from the imports themselves (so a backend in a sub-folder resolves where grimp's package
+  discovery can't), and the modules no application entry point reaches.
+
+The verifier can also correct a finding's title/impact when the defect is real but overstated,
+and the synthesizer gets candidate duplicates (same `file:line` or KPI across categories).
+
 Runs on Gemini (`gemini-2.5-flash` by default for the read-heavy roles; a stronger judge model,
 `gemini-3.1-pro-preview` by default, for the verifier and synthesizer — live testing showed the
 base model alone as verifier lets praise and false "unused" findings through, while the stronger
@@ -67,10 +91,15 @@ uv sync --group dev --group analysis-tools
   uv tool install "semgrep>=1.177.0"
   ```
 
-  It runs fully offline against the project's own bundled ruleset
-  (`src/assets/semgrep/python-security.yml`: SQL injection via built queries, command injection,
-  eval/exec, unsafe deserialization, disabled autoescaping/TLS/JWT verification, weak hashes,
-  debug mode, hard-coded secrets, …). Set `SEMGREP_CONFIG=auto` to use the online registry instead.
+  It runs fully offline against the project's own bundled rulesets in `src/assets/semgrep/`:
+  `python-security.yml` (SQL/command injection, eval/exec, unsafe deserialization, upload filenames
+  reaching filesystem paths, raw exception text returned to clients, insecure secret defaults,
+  unauthenticated `StaticFiles` mounts, blocking calls in `async def`, HTTP calls without timeouts,
+  disabled TLS/JWT verification, …) and `web-security.yml` for JS/TS frontends (XSS sinks, iframe
+  sandbox escapes, secrets in `VITE_`/`NEXT_PUBLIC_` env, credentials in URLs/web storage,
+  spreadsheet exports). `tests/controllers/test_bundled_semgrep_rules.py` runs the real binary
+  over fixtures so a broken rule file can't silently disable the scan. Set `SEMGREP_CONFIG=auto`
+  to use the online registry instead.
 
 - **jscpd** (copy-paste duplication) — not a Python package; install via npm:
 

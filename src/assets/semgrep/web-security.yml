@@ -1,0 +1,119 @@
+# Bundled Semgrep ruleset for JavaScript/TypeScript frontends (React/Vite/Next).
+# Same rationale as python-security.yml: offline, deterministic, project-owned.
+# These are high-signal *leads* for the deep-review agents (browser-side XSS,
+# secrets shipped in the bundle, spreadsheet exports for formula injection),
+# not verdicts — every hit is judged by an agent against the real code.
+
+rules:
+  - id: web-dangerously-set-inner-html
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: Raw HTML injected into the DOM — XSS if any part of it comes from users, stored data or an LLM.
+    metadata: {category: security, cwe: "CWE-79: Cross-site Scripting", confidence: MEDIUM}
+    pattern: <$EL dangerouslySetInnerHTML={...} />
+
+  - id: web-innerhtml-or-document-write
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: Non-literal HTML written into a document (innerHTML/outerHTML/document.write) — XSS sink.
+    metadata: {category: security, cwe: "CWE-79: Cross-site Scripting", confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern: $E.innerHTML = $X
+          - pattern: $E.outerHTML = $X
+          - pattern: $DOC.write($X)
+          - pattern: $E.insertAdjacentHTML($POS, $X)
+      - pattern-not: $E.innerHTML = "..."
+      - pattern-not: $DOC.write("...")
+
+  - id: web-iframe-sandbox-escape
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      iframe sandbox grants both allow-scripts and allow-same-origin — framed script can
+      remove its own sandbox and reach the parent's storage (tokens) and DOM. The sandbox is void.
+    metadata: {category: security, cwe: "CWE-1021: Improper Restriction of Rendered UI Layers", confidence: HIGH}
+    patterns:
+      - pattern: <iframe sandbox="$S" />
+      - metavariable-regex:
+          metavariable: $S
+          regex: (allow-scripts.*allow-same-origin|allow-same-origin.*allow-scripts)
+
+  - id: web-raw-html-markdown
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: Markdown rendered with raw HTML enabled — model/user markdown can carry script-bearing HTML.
+    metadata: {category: security, cwe: "CWE-79: Cross-site Scripting", confidence: MEDIUM}
+    pattern-either:
+      - pattern: import $X from "rehype-raw"
+      - pattern: marked.parse(...)
+      - pattern: marked(...)
+
+  - id: web-secret-in-client-env
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      A secret-looking value is read from a client-exposed env var (VITE_/NEXT_PUBLIC_/REACT_APP_).
+      These are inlined into the public JS bundle — anyone can read them.
+    metadata: {category: security, cwe: "CWE-200: Exposure of Sensitive Information", confidence: HIGH}
+    patterns:
+      - pattern-either:
+          - pattern: import.meta.env.$K
+          - pattern: process.env.$K
+      - metavariable-regex:
+          metavariable: $K
+          regex: ^(VITE_|NEXT_PUBLIC_|REACT_APP_).*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL).*$
+
+  - id: web-credential-in-web-storage
+    languages: [typescript, javascript]
+    severity: INFO
+    message: Credential stored in localStorage/sessionStorage — readable by any script on the origin (one XSS = token theft).
+    metadata: {category: security, cwe: "CWE-922: Insecure Storage of Sensitive Information", confidence: LOW}
+    patterns:
+      - pattern-either:
+          - pattern: localStorage.setItem($K, $V)
+          - pattern: sessionStorage.setItem($K, $V)
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i).*(token|jwt|api[_-]?key|secret|password|auth).*
+
+  - id: web-credential-in-url
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: A credential is placed in a URL query string — it leaks into server/proxy logs, history and Referer headers.
+    metadata: {category: security, cwe: "CWE-598: Use of GET Request Method With Sensitive Query Strings", confidence: MEDIUM}
+    pattern-regex: (?i)[?&](api[_-]?key|access[_-]?token|token|apikey)=\$\{
+
+  - id: web-spreadsheet-export
+    languages: [typescript, javascript]
+    severity: INFO
+    message: >-
+      Data is written to a spreadsheet/CSV. Cell values starting with = + - @ (or tab/CR) run as
+      formulas when opened — check that stored, user or LLM-derived values are neutralized.
+    metadata: {category: security, cwe: "CWE-1236: CSV/Formula Injection", confidence: LOW}
+    pattern-either:
+      - pattern: XLSX.utils.json_to_sheet(...)
+      - pattern: XLSX.utils.aoa_to_sheet(...)
+      - pattern: XLSX.utils.sheet_add_json(...)
+      - pattern: XLSX.utils.sheet_add_aoa(...)
+      - pattern: utils.json_to_sheet(...)
+      - pattern: utils.aoa_to_sheet(...)
+      - pattern: $WS.addRow(...)
+      - pattern: $WS.addRows(...)
+      - pattern: $WB.addWorksheet(...)
+      - pattern: $WB.xlsx.writeBuffer(...)
+      - pattern: $WB.csv.writeBuffer(...)
+      - pattern: Papa.unparse(...)
+      - pattern: XLSX.writeFile(...)
+      - pattern: XLSX.write(...)
+
+  - id: web-eval
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Dynamic code execution from a string.
+    metadata: {category: security, cwe: "CWE-95: Eval Injection", confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function(...)
+      - pattern-not: eval("...")

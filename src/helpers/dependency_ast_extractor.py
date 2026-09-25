@@ -33,7 +33,7 @@ def build_python_parser() -> Parser:
 
 def parse_file(parser: Parser, file_path: Path, repo_path: Path) -> tuple[str, bytes, Node]:
     """Parses one file, returning its repo-relative path, raw source, and root AST node."""
-    source = file_path.read_bytes()
+    source = file_path.read_bytes().removeprefix(b"\xef\xbb\xbf")  # a UTF-8 BOM is not code
     tree = parser.parse(source)
     rel_path = file_path.resolve().relative_to(repo_path).as_posix()
     return rel_path, source, tree.root_node

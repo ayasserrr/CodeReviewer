@@ -108,6 +108,8 @@ def clone_repository(
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
@@ -156,6 +158,8 @@ def get_head_sha(repo_dir: Path, timeout_seconds: int) -> str:
             ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
@@ -183,6 +187,8 @@ def get_current_branch(repo_dir: Path, timeout_seconds: int) -> str:
             ["git", "-C", str(repo_dir), "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:

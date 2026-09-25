@@ -70,7 +70,7 @@ def parse_file_ast(path: Path, max_size_mb: float, timeout_ms: int) -> ParseOutc
         return ParseOutcome(size_bytes=size_bytes, skipped_due_to_size=True)
 
     try:
-        source = path.read_text(encoding="utf-8", errors="replace")
+        source = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
         return ParseOutcome(size_bytes=size_bytes, parse_error=True, parse_error_message=str(exc))
 

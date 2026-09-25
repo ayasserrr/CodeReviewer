@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 from controllers.security_engine_controller import SecurityEngineController
@@ -92,6 +93,18 @@ class TestRunBandit:
         assert result["status"] == "success"
         assert result["findings"] == raw["results"]
 
+    def test_progress_bar_before_json_is_skipped_and_only_python_is_scanned(self):
+        controller = SecurityEngineController()
+        raw = {"results": [{"filename": "a.py", "line_number": 3}]}
+        completed = _completed(returncode=1, stdout="Working... ━━━━ 100% 0:00:02\n" + json.dumps(raw))
+        with patch("shutil.which", return_value="/usr/bin/bandit"), patch("os.path.isdir", return_value=True), patch(
+            "subprocess.run", return_value=completed
+        ) as run:
+            result = controller._run_bandit(".", ["a.py", "web/main.tsx", "package.json"])
+        assert result["status"] == "success"
+        assert result["findings"] == raw["results"]
+        assert run.call_args.args[0][-2:] == ["--", "a.py"]
+
 
 class TestRunGitleaks:
     def test_tool_missing_when_gitleaks_bin_unresolved(self):
@@ -114,11 +127,33 @@ class TestRunGitleaks:
         with patch("controllers.security_engine_controller.resolve_gitleaks_bin", return_value="/bundled/gitleaks"):
             controller = SecurityEngineController()
         raw = [{"File": "a.py", "StartLine": 1, "RuleID": "aws-key", "Description": "leak"}]
-        completed = _completed(returncode=1, stdout=json.dumps(raw))
-        with patch("os.path.isdir", return_value=True), patch("subprocess.run", return_value=completed):
+
+        def fake_run(command, **_):
+            Path(command[command.index("--report-path") + 1]).write_text(json.dumps(raw))
+            return _completed(returncode=1)
+
+        with patch("os.path.isdir", return_value=True), patch("subprocess.run", side_effect=fake_run):
             result = controller._run_gitleaks(".", [])
         assert result["status"] == "success"
         assert result["findings"] == raw
+
+    def test_report_goes_to_a_temp_file_outside_the_repo_and_is_removed(self, tmp_path):
+        with patch("controllers.security_engine_controller.resolve_gitleaks_bin", return_value="/bundled/gitleaks"):
+            controller = SecurityEngineController()
+        seen = {}
+
+        def fake_run(command, **_):
+            seen["report"] = Path(command[command.index("--report-path") + 1])
+            seen["report"].write_text("[]")
+            return _completed(returncode=0)
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = controller._run_gitleaks(str(tmp_path), [])
+        assert result["status"] == "success"
+        assert seen["report"].name != "-"
+        assert tmp_path not in seen["report"].parents
+        assert not seen["report"].exists()
+        assert list(tmp_path.iterdir()) == []
 
 
 class TestRunSecurityScan:

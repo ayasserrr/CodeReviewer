@@ -76,6 +76,33 @@ class TestNormalizeRadon:
         assert result[0]["file"] == "b.py"
         assert result[0]["severity"] == "warning"
 
+    def test_complexity_error_string_entry_is_skipped_not_crashed(self):
+        """radon reports a file it couldn't parse (syntax error, etc.) as a
+        plain error string instead of a list of entries -- must degrade
+        gracefully, not raise."""
+        raw = {
+            "complexity": {
+                "broken.py": "SyntaxError: invalid syntax (broken.py, line 3)",
+                "a.py": [{"rank": "C", "lineno": 1, "name": "f", "type": "function", "complexity": 12}],
+            },
+            "maintainability": {},
+        }
+        result = normalize_radon(raw, complexity_ranks_to_ignore=frozenset({"A", "B"}))
+        assert len(result) == 1
+        assert result[0]["file"] == "a.py"
+
+    def test_maintainability_error_string_entry_is_skipped_not_crashed(self):
+        raw = {
+            "complexity": {},
+            "maintainability": {
+                "broken.py": "SyntaxError: invalid syntax (broken.py, line 3)",
+                "b.py": {"rank": "B", "mi": 60},
+            },
+        }
+        result = normalize_radon(raw, mi_ranks_to_ignore=frozenset({"A"}))
+        assert len(result) == 1
+        assert result[0]["file"] == "b.py"
+
 
 class TestNormalizeVulture:
     def test_maps_confidence_into_message(self):

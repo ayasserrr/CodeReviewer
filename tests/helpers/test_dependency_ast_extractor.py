@@ -34,6 +34,17 @@ class TestParseFile:
         assert source == file_path.read_bytes()
         assert root_node.type == "module"
 
+    def test_utf8_bom_is_stripped_so_functions_start_at_line_1(self, tmp_path: Path):
+        file_path = tmp_path / "bom.py"
+        file_path.write_bytes(b"\xef\xbb\xbfdef f():\n    pass\n")
+
+        parser = build_python_parser()
+        rel_path, source, root_node = parse_file(parser, file_path, tmp_path)
+        functions, *_ = extract_file_elements(root_node, source, rel_path)
+
+        assert not source.startswith(b"\xef\xbb\xbf")
+        assert [(fn.name, fn.start_line) for fn in functions] == [("f", 1)]
+
 
 class TestFunctionExtraction:
     def test_top_level_function_fields(self):

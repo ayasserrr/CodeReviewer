@@ -15,6 +15,14 @@ class TestParseFileAst:
         assert outcome.size_bytes == f.stat().st_size
         assert outcome.lines == 2
 
+    def test_utf8_bom_is_not_a_parse_error(self, tmp_path: Path):
+        f = tmp_path / "bom.py"
+        f.write_bytes("\ufeffdef add(a, b):\n    return a + b\n".encode("utf-8"))
+        outcome = parse_file_ast(f, max_size_mb=2.0, timeout_ms=50)
+        assert outcome.parse_error is False
+        assert outcome.tree is not None
+        assert outcome.lines == 2
+
     def test_syntax_error_sets_parse_error(self, tmp_path: Path):
         f = tmp_path / "broken.py"
         f.write_text("def broken(:\n    pass\n")

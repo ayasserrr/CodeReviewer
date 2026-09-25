@@ -97,13 +97,15 @@ class StaticAnalysisController(BaseController):
 
         try:
             cc_result = subprocess.run(
-                ["radon", "cc", *files, "-j"], cwd=repo_path, capture_output=True, text=True, timeout=timeout,
+                ["radon", "cc", *files, "-j"],
+                cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
             )
             if cc_result.returncode != 0:
                 raise ToolExitCodeError(f"radon cc exited with code {cc_result.returncode}: {cc_result.stderr.strip()}")
 
             mi_result = subprocess.run(
-                ["radon", "mi", *files, "-j"], cwd=repo_path, capture_output=True, text=True, timeout=timeout,
+                ["radon", "mi", *files, "-j"],
+                cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
             )
             if mi_result.returncode != 0:
                 raise ToolExitCodeError(f"radon mi exited with code {mi_result.returncode}: {mi_result.stderr.strip()}")
@@ -154,7 +156,7 @@ class StaticAnalysisController(BaseController):
             with tempfile.TemporaryDirectory() as output_dir:
                 subprocess.run(
                     ["jscpd", *files, "--reporters", "json", "--output", output_dir, "--silent"],
-                    cwd=repo_path, capture_output=True, text=True,
+                    cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
                     timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"),
                 )
                 report_path = os.path.join(output_dir, "jscpd-report.json")
@@ -183,7 +185,7 @@ class StaticAnalysisController(BaseController):
 
         try:
             result = subprocess.run(
-                command, cwd=repo_path, capture_output=True, text=True,
+                command, cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"),
             )
             findings = []

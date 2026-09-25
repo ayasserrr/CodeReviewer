@@ -32,7 +32,7 @@ def _split_requirement(raw: str) -> tuple[str | None, str | None]:
 def parse_pyproject_toml(path: Path) -> list[DependencyEntry]:
     """Parse PEP 621 ``[project.dependencies]`` and/or Poetry's ``[tool.poetry.dependencies]``."""
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         logger.warning("discovery_dependency_parse_failed", path=str(path), error=str(exc))
         return []
@@ -57,7 +57,7 @@ def parse_pyproject_toml(path: Path) -> list[DependencyEntry]:
 def parse_requirements_txt(path: Path) -> list[DependencyEntry]:
     """Parse a pip ``requirements.txt``, one dependency per non-comment/non-option line."""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
     except OSError as exc:
         logger.warning("discovery_dependency_parse_failed", path=str(path), error=str(exc))
         return []

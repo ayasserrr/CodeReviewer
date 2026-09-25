@@ -77,6 +77,8 @@ def run_tool(
             cwd=repo_path,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             shell=shell,
             env={**os.environ, **env} if env else None,

@@ -73,6 +73,9 @@ focus = """
   retries of non-idempotent requests, missing timeouts on outbound calls.
 - Anything that would make this service fail when deployed on a different
   host than the developer's machine.
+- Start from /_review/context/env_map.md (keys with divergent defaults, defaults
+  pointing at localhost/dev hosts, keys missing from templates, duplicate keys) and
+  client_calls.md (frontend calls with no backend route = broken contract).
 """
 
 [[categories]]
@@ -98,6 +101,17 @@ focus = """
   headers, cookies without Secure/HttpOnly/SameSite, CSRF on cookie auth.
 - Triage bandit / semgrep findings: confirm real exploitable issues, dismiss
   false positives (test code, constant inputs, already-sanitized values).
+- Walk /_review/context/route_map.md: every mounted sub-app, every route whose
+  only protection is a shared key, and every CLIENT-ASSERTED IDENTITY row (group
+  rows that share one root cause into ONE finding listing the routes). For every
+  route that returns or changes user data, open the service it calls and check
+  the query is actually scoped to the verified caller — a service that validates
+  an email and then selects everything (a global dump) is Critical; a sequential
+  or guessable object id with no ownership check is an IDOR.
+- Uploads: client filenames joined into paths (traversal), untrusted documents
+  (CVs, PDFs, emails) fed to LLMs that score or decide (prompt injection), model
+  output driving SQL/tools with write access — including latent code that is one
+  import away from a live route (say it is latent).
 """
 
 [[categories]]
@@ -119,6 +133,34 @@ focus = """
 - Startup validation of auth-critical settings: does the app fail closed or
   boot with insecure defaults?
 - Frontend route guards that mount protected pages before auth completes.
+- route_map.md marks every AUTH ENTRY POINT (login/register/OTP/reset/refresh):
+  that list is your rate-limiting and enumeration checklist.
+"""
+
+[[categories]]
+id = "frontend"
+title = "Frontend & Client Security"
+code = "WEB"
+enabled = true
+focus = """
+Only applicable if the repository contains a browser client (React/Vue/Angular/
+Svelte/plain JS). If it does not, record nothing and say "not applicable".
+- Secrets and credentials in the bundle: VITE_/NEXT_PUBLIC_/REACT_APP_ keys that
+  act as credentials, API keys sent from the browser or in URLs, tokens in
+  localStorage/sessionStorage.
+- XSS sinks: dangerouslySetInnerHTML, innerHTML/document.write, iframes with
+  srcdoc or sandbox="allow-scripts allow-same-origin", markdown with raw HTML,
+  rendering of model/LLM or stored user content.
+- Exports built in the browser (xlsx/csv) from stored or model-generated values:
+  formula-injection neutralization.
+- Auth flow: protected routes that render before auth is checked, auth state read
+  once from storage (not reactive across tabs), logout that leaves tokens behind.
+- Transport helper: global redirects inside the fetch wrapper, blind retries of
+  non-idempotent requests, missing timeouts/abort, error handling that hides failures.
+- Contract with the backend (client_calls.md): calls to routes that do not exist,
+  dead client functions, base-URL/proxy configuration that only works in dev.
+- Resilience: no error boundary, assets with fragile paths, config differences
+  between .env.example and real usage.
 """
 
 [[categories]]
@@ -172,7 +214,9 @@ focus = """
 - Duplicate keys in env templates, env files or deployment manifests that
   make the effective value order-dependent.
 - Secrets exposed to browsers (VITE_/NEXT_PUBLIC_/REACT_APP_ prefixed keys).
-- NEVER open real .env files — their existence is given to you in the brief.
+- NEVER open real .env files. /_review/context/env_map.md already lists every
+  .env* file's key names, duplicate keys and value flags (weak/short/localhost,
+  browser-exposed secrets) without revealing values — cite the file and key.
 """
 
 [[categories]]
@@ -192,6 +236,9 @@ focus = """
 - Missing timeouts / backoff / circuit breakers on external calls; unbounded
   concurrency or no concurrency where work is embarrassingly parallel.
 - Startup that loads heavy resources synchronously or fails all-or-nothing.
+- Work that grows with the data instead of with the request: re-processing a whole
+  pool per upload, re-embedding or re-parsing the same content per item, reloading
+  the same rows several times in one job.
 - Use the dependency graph's fan-in (most-called functions) to find hot paths.
 """
 
@@ -203,7 +250,9 @@ enabled = true
 focus = """
 Only applicable if the repository calls LLM / embedding / ML model APIs. If
 it does not, record nothing and say "not applicable" in your final message.
-- Conversation memory: is state/checkpointing used, or is every turn stateless?
+- Conversation memory: trace what one chat request actually sends to the model —
+  is history persisted (checkpointer/DB) or resent by the client, or is every turn
+  stateless? Report the real behavior; do not assume history "grows" without proof.
 - Token growth: whole histories or unbounded tool outputs resent every turn,
   no input/context guards, no per-user/session budget.
 - Usage/cost metadata discarded instead of logged/persisted.
@@ -250,7 +299,16 @@ focus = """
   loops, async sessions shared across tasks.
 - Timezone/naive datetime bugs, float/decimal money handling, encoding bugs.
 - Reliance on private APIs of third-party libraries.
-- Triage pyright findings: which are real runtime bugs vs typing noise.
+- Trace the core business pipeline(s) end to end from their routes (e.g. upload ->
+  parse -> store -> embed -> score -> report): look for two code paths that process
+  the same data differently, work done twice, values silently rewritten, IDs that
+  can collide or whose shape is used as meaning, and flags/locks set in one place but
+  released only on the happy path. These are the highest-value bugs in this lane.
+- Scripts and entry points that cannot work as written (e.g. an async main() called
+  without asyncio.run, a coroutine used without await).
+- Triage pyright findings: which are real runtime bugs vs typing noise. A type
+  complaint ("str | None passed where str expected") is at most Low unless you show
+  the concrete runtime path that fails.
 """
 
 [[categories]]
@@ -263,8 +321,13 @@ focus = """
   subsystems, legacy directories, unused dependencies (triage vulture).
   Prove every dead-code claim with find_references: functions registered as
   values (routes, graph nodes, callbacks, DI) or called at module level ARE used.
-- Dead or orphaned endpoints: routes no client calls, duplicated endpoints,
-  endpoints that should not exist (bulk delete guarded only by a shared key).
+- Dead or orphaned endpoints: routes no client calls (client_calls.md lists them),
+  duplicated endpoints, endpoints that should not exist (bulk delete guarded only by
+  a shared key), frontend functions calling routes that do not exist.
+- Whole dead code generations: reachability.md lists the modules no application
+  entry point imports, grouped by directory — report them as a few grouped findings
+  (e.g. "an entire earlier LangGraph generation under src/nodes, src/states"), each
+  confirmed with find_references, not one finding per file.
 - Duplicated implementations (triage jscpd): near-identical functions/modules,
   multiple code generations coexisting.
 - Complexity hot spots (triage radon / lizard): only report the ones that

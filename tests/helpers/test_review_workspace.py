@@ -213,6 +213,32 @@ class TestVerificationAndSynthesis:
         assert workspace.findings["SEC-1"].verification.original_severity == "High"
         assert workspace.findings_to_verify("security") == []
 
+    def test_verifier_can_correct_an_overstated_title_and_impact(self, workspace):
+        security = workspace.config.category("security")
+        workspace.record_finding(security, _finding(title="XXE reads local files", impact="Arbitrary file read."))
+        workspace.submit_verification(
+            "security",
+            _VerifyArgs(
+                finding_id="SEC-1", verdict="adjusted", note="stdlib parser", adjusted_severity="Medium",
+                corrected_title="Entity expansion on uploaded DOCX", corrected_impact="Memory exhaustion only.",
+            ),
+        )
+        finding = workspace.findings["SEC-1"]
+        assert (finding.severity, finding.title, finding.impact) == (
+            "Medium", "Entity expansion on uploaded DOCX", "Memory exhaustion only.",
+        )
+
+    def test_duplicate_candidates_pair_findings_citing_the_same_line_across_categories(self, workspace):
+        workspace.record_finding(workspace.config.category("security"), _finding(title="Default JWT secret"))
+        workspace.record_finding(workspace.config.category("secrets"), _finding(title="Hard-coded SECRET_KEY default"))
+        workspace.record_finding(
+            workspace.config.category("performance"),
+            _finding(title="Unrelated", evidence=[EvidenceInput(file="app/service.py", line_start=1)]),
+        )
+        out = workspace.duplicate_candidates()
+        assert "SEC-1" in out and "ENV-1" in out and "same citation app/main.py:4" in out
+        assert "PERF-1" not in out
+
     def test_duplicates_and_summary_ids_resolve_to_primary(self, workspace):
         security = workspace.config.category("security")
         workspace.record_finding(security, _finding())
@@ -254,3 +280,26 @@ class TestToolBinding:
             }
         )
         assert result.startswith("Recorded SEC-1")
+
+
+class TestMapsIntegration:
+    @pytest.fixture
+    def mapped(self, workspace, repo):
+        from helpers.review_maps import build_review_maps
+
+        (repo / "app" / "main.py").write_text(
+            "from fastapi import FastAPI, Header\nfrom app.service import helper\napp = FastAPI()\n"
+            "@app.get('/items')\nasync def items(x_user_email: str = Header(..., alias='x-user-email')):\n"
+            "    return helper()\n"
+        )
+        workspace.maps = build_review_maps(repo, workspace.manifest)
+        return workspace
+
+    def test_list_endpoints_shows_auth_and_identity(self, mapped):
+        out = mapped.list_endpoints(flagged_only=True)
+        assert "GET /items -> items (app/main.py:5)" in out
+        assert "header:x-user-email" in out and "CLIENT-ASSERTED IDENTITY" in out and "NO AUTH DEPENDENCY" in out
+
+    def test_module_imports_accepts_repository_paths(self, mapped):
+        assert "app/service.py imported by: app/main.py" in mapped.module_imports("app/service.py", "imported_by")
+        assert "app/main.py imports: app/service.py" in mapped.module_imports("app.main", "imports")

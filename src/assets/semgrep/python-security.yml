@@ -266,8 +266,12 @@ rules:
   - id: python-xml-external-entities
     languages: [python]
     severity: WARNING
-    message: Standard-library XML parsers are vulnerable to entity-expansion attacks on untrusted input. Use defusedxml.
-    metadata: {category: security, cwe: "CWE-611: XML External Entity", confidence: LOW}
+    message: >-
+      Standard-library XML parser on possibly untrusted input. Python's stdlib parsers do NOT
+      resolve external entities (no file read / SSRF), and expat >= 2.4.1 limits entity
+      expansion — the residual risk is resource exhaustion on hostile input, so it matters
+      only when the XML comes from users (uploads) rather than a trusted upstream API.
+    metadata: {category: security, cwe: "CWE-776: XML Entity Expansion", confidence: LOW}
     pattern-either:
       - pattern: xml.etree.ElementTree.parse(...)
       - pattern: xml.etree.ElementTree.fromstring(...)
@@ -275,3 +279,124 @@ rules:
       - pattern: ET.fromstring(...)
       - pattern: xml.dom.minidom.parseString(...)
       - pattern: xml.sax.parseString(...)
+
+  - id: python-upload-filename-path-traversal
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A client-supplied upload filename reaches a filesystem path. "../" segments or an
+      absolute name can write/read outside the intended directory. Take only the basename
+      (or generate the name server-side).
+    metadata: {category: security, cwe: "CWE-22: Path Traversal", confidence: MEDIUM}
+    mode: taint
+    pattern-sources:
+      - pattern: $F.filename
+    pattern-sanitizers:
+      - pattern: os.path.basename(...)
+      - pattern: secure_filename(...)
+      - pattern: Path(...).name
+      - pattern: pathlib.Path(...).name
+      - pattern: uuid.uuid4()
+    pattern-sinks:
+      - pattern: open(...)
+      - pattern: os.path.join(...)
+      - pattern: Path(...)
+      - pattern: pathlib.Path(...)
+      - pattern: $P / $X
+      - pattern: shutil.$FN(...)
+      - pattern: os.rename(...)
+      - pattern: os.replace(...)
+      - pattern: aiofiles.open(...)
+
+  - id: python-exception-text-returned-to-client
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Raw exception text is placed in a response/response model. OS and library errors
+      carry absolute server paths, SQL and internal hostnames (information disclosure).
+    metadata: {category: security, cwe: "CWE-209: Information Exposure Through an Error Message", confidence: MEDIUM}
+    patterns:
+      - pattern-inside: |
+          try:
+              ...
+          except $EXC as $E:
+              ...
+      - pattern-either:
+          - pattern: HTTPException(..., detail=str($E), ...)
+          - pattern: HTTPException(..., detail=f"...{$E}...", ...)
+          - pattern: 'JSONResponse(..., content={..., $K: str($E), ...}, ...)'
+          - pattern: 'return {..., $K: str($E), ...}'
+          - pattern: $MODEL(..., error=str($E), ...)
+          - pattern: $MODEL(..., detail=str($E), ...)
+          - pattern: $MODEL(..., message=str($E), ...)
+
+  - id: python-http-request-without-timeout
+    languages: [python]
+    severity: WARNING
+    message: Outbound HTTP call without a timeout — a slow or hung upstream blocks this worker indefinitely.
+    metadata: {category: reliability, cwe: "CWE-400: Uncontrolled Resource Consumption", confidence: HIGH}
+    patterns:
+      - pattern-either:
+          - pattern: requests.$M(...)
+          - pattern: httpx.$M(...)
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(get|post|put|patch|delete|head|request)$
+      - pattern-not: requests.$M(..., timeout=$T, ...)
+      - pattern-not: httpx.$M(..., timeout=$T, ...)
+
+  - id: python-blocking-call-in-async-def
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Blocking call directly inside an async function — it stalls the event loop and every
+      other request on this worker. Use the async equivalent or asyncio.to_thread().
+    metadata: {category: performance, cwe: "CWE-400: Uncontrolled Resource Consumption", confidence: HIGH}
+    patterns:
+      - pattern-inside: |
+          async def $FUNC(...):
+              ...
+      - pattern-not-inside: |
+          def $INNER(...):
+              ...
+      - pattern-either:
+          - pattern: time.sleep(...)
+          - pattern: requests.$M(...)
+          - pattern: subprocess.run(...)
+          - pattern: subprocess.check_output(...)
+          - pattern: subprocess.call(...)
+
+  - id: python-static-files-mount
+    languages: [python]
+    severity: WARNING
+    message: >-
+      StaticFiles is mounted as a sub-application. App-level and router-level FastAPI
+      dependencies (API keys, auth) do NOT apply to mounted sub-apps — every file under this
+      directory is public unless something else guards the path.
+    metadata: {category: security, cwe: "CWE-639: Authorization Bypass Through User-Controlled Key", confidence: MEDIUM}
+    pattern: $APP.mount($PATH, StaticFiles(...), ...)
+
+  - id: python-insecure-secret-default
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A secret falls back to a hard-coded default when the environment variable is missing,
+      so a misconfigured deployment boots with a publicly known secret (fails open).
+    metadata: {category: security, cwe: "CWE-1188: Insecure Default Initialization", confidence: HIGH}
+    patterns:
+      - pattern-either:
+          - pattern: os.getenv("$KEY", "$DEFAULT")
+          - pattern: os.environ.get("$KEY", "$DEFAULT")
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (?i).*(secret|password|passwd|api_key|apikey|token|private_key|signing_key).*
+      - metavariable-regex:
+          metavariable: $DEFAULT
+          regex: .+
+
+  - id: python-streamlit-unsafe-html
+    languages: [python]
+    severity: WARNING
+    message: Streamlit renders this content as raw HTML — model or user text reaching it is an XSS vector.
+    metadata: {category: security, cwe: "CWE-79: Cross-site Scripting", confidence: MEDIUM}
+    pattern: $ST.$FN(..., unsafe_allow_html=True, ...)

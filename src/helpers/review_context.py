@@ -21,6 +21,7 @@ from pathlib import PurePosixPath
 
 from deepagents.backends.utils import create_file_data
 
+from helpers.review_maps import maps_brief, render_context_files
 from helpers.review_workspace import ReviewWorkspace
 
 AGENT_ROOT = "/_review/"
@@ -74,7 +75,13 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
     source_roots = ", ".join(stats.source_roots) or "."
 
     entrypoints = [f"- {e.path} ({e.kind}{f': {e.detail}' if e.detail else ''})" for e in manifest.entrypoints]
-    endpoints = [f"- {e.method} {e.path} -> {e.file}:{e.line}" for e in manifest.endpoints]
+    if workspace.maps.routes:
+        endpoints = [
+            f"- {r.method} {r.path} -> {r.file}:{r.line} [{r.auth_label}{'; ' + ', '.join(r.flags) if r.flags else ''}]"
+            for r in workspace.maps.routes
+        ]
+    else:
+        endpoints = [f"- {e.method} {e.path} -> {e.file}:{e.line}" for e in manifest.endpoints]
     dependencies = [f"{d.name}{d.version or ' (unpinned)'} [{d.source_file}]" for d in manifest.dependencies]
 
     tree = _tree_lines(workspace, _BRIEF_TREE_DIRS)
@@ -87,7 +94,10 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
         f"- Frameworks: {frameworks}",
         f"- Source roots: {source_roots}",
         f"- Files scanned: {stats.total_files_scanned} ({stats.total_lines} lines); parse errors: {stats.total_parse_errors}",
-        f"- Real .env file present in the repo: {'YES — never open it; its existence alone is evidence' if manifest.env_file_exists else 'no'}",
+        (
+            f"- Real .env file present in the repo: {'YES — never open it; its existence alone is evidence' if manifest.env_file_exists else 'no'}"
+            " (env_map.md lists every .env* file's key names, duplicate keys and flags — never values)"
+        ),
         f"- Dependency graph: {graph_stats.functions_found} functions, {graph_stats.classes_found} classes, "
         f"{graph_stats.calls_resolved} resolved calls, {graph_stats.import_edges_found} import edges",
         "",
@@ -97,7 +107,9 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
         f"## Entrypoints ({len(entrypoints)})",
         *(entrypoints[:_BRIEF_ENTRYPOINTS] or ["- none detected"]),
         "",
-        f"## HTTP endpoints ({len(endpoints)}; full list: /_review/context/endpoints.md or the list_endpoints tool)",
+        *maps_brief(workspace.maps),
+        "",
+        f"## HTTP endpoints ({len(endpoints)}; full table with dependencies: /_review/context/route_map.md or list_endpoints)",
         *(endpoints[:_BRIEF_ENDPOINTS] or ["- none detected (Discovery only detects Python frameworks — grep for others)"]),
         "",
         f"## Declared dependencies ({len(dependencies)}; full list: /_review/context/dependencies.md)",
@@ -133,4 +145,5 @@ def build_context_files(workspace: ReviewWorkspace, brief: str) -> dict[str, dic
             + [f"{d.name} | {d.version or 'UNPINNED'} | {d.source_file}" for d in manifest.dependencies]
         ),
     }
+    files.update(render_context_files(workspace.maps))
     return {f"{CONTEXT_MOUNT}{name}": create_file_data(content) for name, content in files.items()}

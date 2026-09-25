@@ -43,6 +43,7 @@ from helpers import (
     build_chat_model,
     build_context_files,
     build_repo_brief,
+    build_review_maps,
     kpi_prompt,
     load_review_config,
     model_identity,
@@ -112,6 +113,9 @@ class DeepReviewController(BaseController):
         provider, model = model_identity(self.config)
         build_chat_model(self.config, "specialist")  # fail fast on a missing API key
 
+        maps = await asyncio.to_thread(
+            build_review_maps, repo_path, manifest, inspect_env_files=self.config.DEEP_REVIEW_INSPECT_ENV_FILES
+        )
         workspace = ReviewWorkspace(
             repo_path=repo_path,
             manifest=manifest,
@@ -119,6 +123,7 @@ class DeepReviewController(BaseController):
             tool_results=tool_results,
             graph=graph,
             config=config,
+            maps=maps,
         )
         brief = build_repo_brief(workspace, repository_name)
         files = build_context_files(workspace, brief)

@@ -41,6 +41,10 @@ Repository = ""
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+# Only this project's tests. Never let a bare `pytest` walk into cloned_repos/ —
+# collecting a reviewed repository's tests would import (execute) untrusted code.
+testpaths = ["tests"]
+norecursedirs = ["cloned_repos", "frontend", "node_modules", ".git", ".venv", "*.egg-info"]
 
 [dependency-groups]
 analysis-tools = [

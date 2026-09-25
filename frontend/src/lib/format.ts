@@ -81,6 +81,7 @@ const CATEGORY_NAMES: Record<string, string> = {
   integration: "Integration",
   security: "Security",
   auth: "Auth & sessions",
+  frontend: "Frontend",
   observability: "Observability",
   testing: "Testing & CI",
   secrets: "Secrets",

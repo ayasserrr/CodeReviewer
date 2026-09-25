@@ -25,11 +25,9 @@ export function RepositoriesPage() {
       ) : (
         <div className="grid-3">
           {repos.map((r) => (
-            <div key={r.id} className="card card-pad stack clickable" style={{ gap: 12, cursor: "pointer" }} onClick={() => navigate(`/repositories/${r.id}`)}>
+            <div key={r.id} className="card card-pad stack clickable" style={{ gap: 14, cursor: "pointer" }} onClick={() => navigate(`/repositories/${r.id}`)}>
               <div className="row" style={{ gap: 10, flexWrap: "nowrap" }}>
-                <span style={{ width: 34, height: 34, borderRadius: 8, background: "var(--surface-2)", border: "1px solid var(--border)", display: "grid", placeItems: "center", color: "var(--accent)" }}>
-                  <Icon name="repo" size={16} />
-                </span>
+                <span className="icon-tile"><Icon name="repo" size={16} /></span>
                 <span className="stack" style={{ gap: 0, minWidth: 0 }}>
                   <span className="strong truncate">{r.name}</span>
                   <span className="muted small truncate">{r.clone_url.replace(/^https?:\/\//, "").replace(/\.git$/, "")}</span>

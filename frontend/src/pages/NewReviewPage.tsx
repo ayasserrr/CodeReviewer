@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, ApiError } from "../api/client";
 import type { RepositorySummary } from "../api/types";
+import { PixelBot } from "../components/PixelBot";
 import { Icon, Spinner } from "../components/ui";
 import { PIPELINE_STAGES } from "../lib/format";
 
@@ -47,13 +48,15 @@ export function NewReviewPage() {
     <div className="page" style={{ maxWidth: 980 }}>
       <div className="page-header">
         <div>
+          <span className="eyebrow"><Icon name="bolt" size={13} />Deep review</span>
           <h1>New review</h1>
           <p className="subtitle">Review a GitLab repository's default branch end to end</p>
         </div>
       </div>
       <div className="grid-form">
-        <form className="card card-pad stack" style={{ gap: 16 }} onSubmit={submit}>
-          {error && <div className="alert alert-error">{error}</div>}
+        <form className="card card-pad stack has-bot" style={{ gap: 18 }} onSubmit={submit}>
+          <PixelBot speed={busy ? "busy" : "normal"} />
+          {error && <div className="alert alert-error"><Icon name="alert" size={15} />{error}</div>}
           {repos.length > 0 && (
             <div className="field">
               <label htmlFor="repo">Repository</label>
@@ -73,17 +76,17 @@ export function NewReviewPage() {
             <input id="token" className="input" type="password" required autoComplete="off" placeholder="glpat-…" value={token} onChange={(e) => setToken(e.target.value)} />
             <span className="help">A GitLab token with <code>read_repository</code> and <code>read_api</code>. Used only for this clone — never stored or logged.</span>
           </div>
-          <button className="btn btn-primary" type="submit" disabled={busy}>
+          <button className="btn btn-primary btn-lg" type="submit" disabled={busy}>
             {busy ? <Spinner /> : <Icon name="bolt" size={15} />}Start review
           </button>
         </form>
 
         <div className="card card-pad stack" style={{ gap: 12 }}>
           <h2>What happens next</h2>
-          <ol style={{ margin: 0, padding: 0, listStyle: "none", display: "grid", gap: 12 }}>
+          <ol className="steps-list">
             {PIPELINE_STAGES.map((s, i) => (
-              <li key={s.id} className="row" style={{ gap: 10, flexWrap: "nowrap", alignItems: "flex-start" }}>
-                <span style={{ width: 22, height: 22, borderRadius: "50%", border: "1px solid var(--border)", display: "grid", placeItems: "center", fontSize: 11.5, color: "var(--muted-2)", flexShrink: 0 }}>{i + 1}</span>
+              <li key={s.id}>
+                <span className="step-num">{i + 1}</span>
                 <span className="stack" style={{ gap: 1 }}>
                   <span className="strong small">{s.label}</span>
                   <span className="muted small">{s.hint}</span>

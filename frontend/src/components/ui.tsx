@@ -26,6 +26,12 @@ const PATHS: Record<string, string> = {
   layers: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
   sun: "M12 3v2M12 19v2M5 5l1.5 1.5M17.5 17.5L19 19M3 12h2M19 12h2M5 19l1.5-1.5M17.5 6.5L19 5M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
   moon: "M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z",
+  chevronDown: "M6 9l6 6 6-6",
+  alert: "M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
+  activity: "M22 12h-4l-3 9L9 3l-3 9H2",
+  bug: "M8 2l1.9 1.9M16 2l-1.9 1.9M9 7.1V6a3 3 0 1 1 6 0v1.1M12 20v-9M6.5 9A4 4 0 0 1 10 7h4a4 4 0 0 1 3.5 2M6 13H2M22 13h-4M3 21c0-2.1 1.6-3.8 3.5-4M21 21c0-2.1-1.6-3.8-3.5-4M3 5c0 2.1 1.8 3.8 4 4M21 5c0 2.1-1.8 3.8-4 4M18 11v3a6 6 0 0 1-12 0v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4z",
+  sparkle: "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 17l.8 2.2L22 20l-2.2.8L19 23l-.8-2.2L16 20l2.2-.8z",
+  arrowRight: "M5 12h14M13 6l6 6-6 6",
 };
 
 export function Icon({ name, size = 16, style }: { name: keyof typeof PATHS | string; size?: number; style?: CSSProperties }) {
@@ -106,17 +112,22 @@ export function PageLoading() {
 export function EmptyState({ icon = "review", title, children }: { icon?: string; title: string; children?: ReactNode }) {
   return (
     <div className="empty">
-      <Icon name={icon} size={28} style={{ color: "var(--muted)" }} />
+      <span className="empty-icon"><Icon name={icon} size={26} /></span>
       <h3>{title}</h3>
       {children}
     </div>
   );
 }
 
-export function StatTile({ label, value, sub, accent }: { label: string; value: ReactNode; sub?: ReactNode; accent?: boolean }) {
+export function StatTile({ label, value, sub, accent, icon }: {
+  label: string; value: ReactNode; sub?: ReactNode; accent?: boolean; icon?: string;
+}) {
   return (
     <div className={`card stat${accent ? " stat-accent" : ""}`}>
-      <span className="stat-label">{label}</span>
+      <span className="stat-top">
+        <span className="stat-label">{label}</span>
+        {icon && <span className={`icon-tile${accent ? "" : " neutral"}`}><Icon name={icon} size={17} /></span>}
+      </span>
       <span className="stat-value">{value}</span>
       {sub != null && <span className="stat-sub">{sub}</span>}
     </div>

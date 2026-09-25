@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import type { ReviewListItem, ReviewStatus } from "../api/types";
+import { PixelBot } from "../components/PixelBot";
 import { EmptyState, Icon, PageLoading, SeverityCounts, StatusBadge } from "../components/ui";
 import { formatDuration, secondsBetween, shortSha, STATUS_META, timeAgo } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
@@ -22,6 +23,7 @@ export function ReviewsPage() {
     <div className="page">
       <div className="page-header">
         <div><h1>Reviews</h1><p className="subtitle">Every review across your repositories</p></div>
+        <PixelBot busy={active} />
         <Link to="/new" className="btn btn-primary"><Icon name="plus" size={15} />New review</Link>
       </div>
       <div className="row" style={{ gap: 8 }}>

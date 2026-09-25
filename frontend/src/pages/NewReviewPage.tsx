@@ -52,10 +52,10 @@ export function NewReviewPage() {
           <h1>New review</h1>
           <p className="subtitle">Review a GitLab repository's default branch end to end</p>
         </div>
+        <PixelBot busy={busy} />
       </div>
       <div className="grid-form">
-        <form className="card card-pad stack has-bot" style={{ gap: 18 }} onSubmit={submit}>
-          <PixelBot speed={busy ? "busy" : "normal"} />
+        <form className="card card-pad stack" style={{ gap: 18 }} onSubmit={submit}>
           {error && <div className="alert alert-error"><Icon name="alert" size={15} />{error}</div>}
           {repos.length > 0 && (
             <div className="field">

@@ -48,6 +48,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
           <p className="lead">Point it at a GitLab repository. It maps the code, runs the analyzers and a team of
             AI specialists, and hands back a prioritised, evidence-cited report.</p>
         </div>
+        <PixelBot />
         <ul className="auth-features">
           {FEATURES.map((f) => (
             <li key={f.title}>
@@ -58,8 +59,7 @@ export function AuthPage({ mode }: { mode: "login" | "register" }) {
         </ul>
       </aside>
       <div className="auth-main">
-        <form className="card auth-card has-bot" onSubmit={submit}>
-          <PixelBot />
+        <form className="card auth-card" onSubmit={submit}>
           <div className="brand auth-mobile-brand"><span className="brand-mark"><Logo /></span>CodeReviewer</div>
           <div style={{ display: "grid", gap: 6 }}>
             <h1>{mode === "login" ? "Welcome back" : "Create your account"}</h1>

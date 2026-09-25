@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import type { RepositorySummary } from "../api/types";
+import { PixelBot } from "../components/PixelBot";
 import { EmptyState, Icon, PageLoading, SeverityCounts, StatusBadge } from "../components/ui";
 import { shortSha, timeAgo } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
@@ -18,6 +19,7 @@ export function RepositoriesPage() {
     <div className="page">
       <div className="page-header">
         <div><h1>Repositories</h1><p className="subtitle">{repos.length} repositor{repos.length === 1 ? "y" : "ies"}</p></div>
+        <PixelBot busy={active} />
         <Link to="/new" className="btn btn-primary"><Icon name="plus" size={15} />New review</Link>
       </div>
       {repos.length === 0 ? (

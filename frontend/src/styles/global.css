@@ -560,53 +560,88 @@ p { margin: 0; }
 }
 
 /* ------------------------------------------------------------------------
-   Revi — the pixel code inspector patrolling a card's top edge (PixelBot.tsx)
+   Revi — the pixel code inspector patrolling the page-header lane (PixelBot.tsx)
+   Timeline (one patrol): walk right → stop, raise the scope, inspect a bug →
+   bug becomes a check → walk to the end, turn → walk back → inspect → turn.
    ------------------------------------------------------------------------ */
-.has-bot { position: relative; margin-top: 14px; }
-.pixelbot-track {
-  position: absolute; left: 18px; right: 18px; bottom: calc(100% - 1px); height: 36px;
-  pointer-events: none; --patrol: 18s;
+.patrol {
+  --patrol: 22s; --bot: 54px;
+  position: relative; height: 50px; flex: 1 1 300px; max-width: 460px; margin-left: auto; pointer-events: none;
 }
-.pixelbot-track.busy { --patrol: 9s; }
-.pixelbot { position: absolute; bottom: 0; left: 0; animation: pb-patrol var(--patrol) linear infinite; }
-.pixelbot svg { display: block; animation: pb-face var(--patrol) steps(1) infinite, pb-bob 0.36s steps(2) infinite; overflow: visible; }
+.patrol.busy { --patrol: 11s; }
+.patrol-ground {
+  position: absolute; left: 0; right: 0; bottom: 4px; height: 3px;
+  background: repeating-linear-gradient(90deg, var(--border) 0 9px, transparent 9px 15px);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+}
+.patrol-label {
+  position: absolute; right: 0; top: 0; font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+.pixelbot { position: absolute; bottom: 7px; left: 0; animation: pb-patrol var(--patrol) linear infinite; }
+.pixelbot svg { display: block; overflow: visible; animation: pb-face var(--patrol) linear infinite, pb-bob 0.44s steps(1) infinite; }
 .pb-body { fill: var(--accent); }
 .pb-visor { fill: #1c0b0c; }
-.pb-eyes { fill: #ffd7d9; transform-box: fill-box; transform-origin: center; animation: pb-blink 4.2s infinite; }
+.pb-eyes { fill: #ffd7d9; transform-box: fill-box; transform-origin: center; animation: pb-blink 3.8s infinite; }
 .pb-tip { fill: var(--warn); animation: pb-tip 1.2s steps(1) infinite; }
-.pb-handle { fill: var(--muted-2); }
-.pb-glass { fill: var(--info); opacity: 0.55; animation: pb-glint var(--patrol) linear infinite; }
-.pb-tool { transform-box: fill-box; transform-origin: 0% 100%; animation: pb-scan var(--patrol) ease-in-out infinite; }
-.pb-legs-a { animation: pb-step 0.36s steps(1) infinite; }
-.pb-legs-b { animation: pb-step 0.36s steps(1) infinite reverse; }
+.pb-metal { fill: var(--muted-2); }
+.pb-glass { fill: var(--info); opacity: 0.45; }
+.pb-eye-big { fill: #ffe9ea; }
+.pb-shine { fill: #fff; animation: pb-shine 0.6s steps(1) infinite; }
+.pb-walk { animation: pb-walk-pose var(--patrol) linear infinite; }
+.pb-scan { animation: pb-scan-pose var(--patrol) linear infinite; opacity: 0; }
+.pb-stride { animation: pb-step 0.44s steps(1) infinite; }
+.pb-pass { animation: pb-step 0.44s steps(1) infinite reverse; }
+.pb-finding { position: absolute; bottom: 7px; opacity: 0; }
+.pb-finding-1 { left: calc((100% - var(--bot)) * 0.36 + var(--bot) + 2px); animation: pb-find-1 var(--patrol) linear infinite; }
+.pb-finding-2 { left: calc((100% - var(--bot)) * 0.56 - 22px); animation: pb-find-2 var(--patrol) linear infinite; }
+.pb-bug { fill: var(--muted-2); }
+.pb-check { fill: var(--ok); opacity: 0; }
+.pb-finding-1 .pb-bug { animation: pb-bug-1 var(--patrol) linear infinite; }
+.pb-finding-1 .pb-check { animation: pb-check-1 var(--patrol) linear infinite; }
+.pb-finding-2 .pb-bug { animation: pb-bug-2 var(--patrol) linear infinite; }
+.pb-finding-2 .pb-check { animation: pb-check-2 var(--patrol) linear infinite; }
 
-/* walk right, stop to scan, reach the edge, turn, walk back, scan, turn. */
 @keyframes pb-patrol {
   0% { left: 0; }
-  18%, 30% { left: 34%; }
-  46%, 50% { left: calc(100% - 48px); }
-  66%, 78% { left: 58%; }
-  96%, 100% { left: 0; }
+  22%, 34% { left: calc((100% - var(--bot)) * 0.36); }
+  48%, 50% { left: calc(100% - var(--bot)); }
+  66%, 78% { left: calc((100% - var(--bot)) * 0.56); }
+  98%, 100% { left: 0; }
 }
 @keyframes pb-face {
-  0% { transform: scaleX(1); }
-  48% { transform: scaleX(-1); }
-  98% { transform: scaleX(1); }
+  0%, 48.9% { transform: scaleX(1); }
+  49%, 98.9% { transform: scaleX(-1); }
+  99%, 100% { transform: scaleX(1); }
 }
-@keyframes pb-scan {
-  0%, 18%, 30%, 66%, 78%, 100% { transform: none; }
-  21%, 27%, 69%, 75% { transform: translate(0, -1px) rotate(-14deg); }
+@keyframes pb-walk-pose {
+  0%, 21.9%, 34%, 65.9%, 78%, 100% { opacity: 1; }
+  22%, 33.9%, 66%, 77.9% { opacity: 0; }
 }
-@keyframes pb-glint {
-  0%, 20%, 28%, 68%, 76%, 100% { opacity: 0.55; }
-  24%, 72% { opacity: 1; fill: #fff; }
+@keyframes pb-scan-pose {
+  0%, 21.9%, 34%, 65.9%, 78%, 100% { opacity: 0; }
+  22%, 33.9%, 66%, 77.9% { opacity: 1; }
 }
+@keyframes pb-find-1 { 0%, 14% { opacity: 0; } 17%, 38% { opacity: 1; } 42%, 100% { opacity: 0; } }
+@keyframes pb-bug-1 { 0%, 29.9% { opacity: 1; } 30%, 100% { opacity: 0; } }
+@keyframes pb-check-1 { 0%, 29.9% { opacity: 0; } 30%, 100% { opacity: 1; } }
+@keyframes pb-find-2 { 0%, 58% { opacity: 0; } 61%, 82% { opacity: 1; } 86%, 100% { opacity: 0; } }
+@keyframes pb-bug-2 { 0%, 73.9% { opacity: 1; } 74%, 100% { opacity: 0; } }
+@keyframes pb-check-2 { 0%, 73.9% { opacity: 0; } 74%, 100% { opacity: 1; } }
 @keyframes pb-step { 0% { opacity: 1; } 50% { opacity: 0; } }
-@keyframes pb-bob { 0% { translate: 0 0; } 50% { translate: 0 -1px; } }
+@keyframes pb-bob { 0% { translate: 0 0; } 50% { translate: 0 -2px; } }
 @keyframes pb-blink { 0%, 93%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.15); } }
 @keyframes pb-tip { 0% { fill: var(--warn); } 50% { fill: var(--accent-hover); } }
+@keyframes pb-shine { 0% { opacity: 1; } 50% { opacity: 0.2; } }
+
+.auth-aside .patrol { margin-left: 0; max-width: 480px; width: 100%; flex: none; }
+.auth-aside .patrol-ground { background: repeating-linear-gradient(90deg, #3a3a3e 0 9px, transparent 9px 15px); }
+.auth-aside .pb-metal, .auth-aside .pb-bug { fill: #b0b0b5; }
+
 @media (prefers-reduced-motion: reduce) {
-  .pixelbot, .pixelbot svg, .pixelbot * { animation: none !important; }
-  .pb-legs-b { opacity: 0; }
+  .patrol *, .patrol *::before { animation: none !important; }
+  .pb-pass { opacity: 0; }
 }
-@media (max-width: 640px) { .pixelbot-track { left: 12px; right: 12px; } }
+@media (max-width: 640px) {
+  .patrol { flex-basis: 100%; max-width: none; margin-left: 0; }
+}

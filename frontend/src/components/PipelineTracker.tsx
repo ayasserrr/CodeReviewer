@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 
 import type { AgentProgress, ReviewRead } from "../api/types";
 import { categoryName, formatDuration, parseAgent, PIPELINE_STAGES, secondsBetween } from "../lib/format";
-import { PixelBot } from "./PixelBot";
 import { Icon, Spinner } from "./ui";
 
 type StepState = "done" | "running" | "failed" | "waiting";
@@ -41,8 +40,7 @@ export function PipelineTracker({ review }: { review: ReviewRead }) {
   const elapsed = secondsBetween(review.created_at, review.completed_at);
 
   return (
-    <div className={`card${active ? " has-bot" : ""}`}>
-      {active && <PixelBot speed="busy" />}
+    <div className="card">
       <div className="card-header">
         <h2>Pipeline</h2>
         <span className="hint row" style={{ gap: 6 }}>

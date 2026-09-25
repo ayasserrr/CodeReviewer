@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { ReviewDetail, ReviewRead } from "../api/types";
 import { PipelineTracker } from "../components/PipelineTracker";
+import { PixelBot } from "../components/PixelBot";
 import { ReportView } from "../components/ReportView";
 import { Badge, EmptyState, Icon, PageLoading, StatusBadge } from "../components/ui";
 import { shortSha, timeAgo } from "../lib/format";
@@ -68,6 +69,7 @@ export function ReviewPage() {
             {status.model && <Badge>{status.model}</Badge>}
           </p>
         </div>
+        <PixelBot busy={active} />
         {status.status === "completed" && (
           <Link to={`/new?repo=${status.repository_id}`} className="btn"><Icon name="refresh" size={14} />Review again</Link>
         )}

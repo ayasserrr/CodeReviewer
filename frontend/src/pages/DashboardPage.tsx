@@ -45,11 +45,11 @@ export function DashboardPage() {
           <h1>Dashboard</h1>
           <p className="subtitle">Code health across your repositories</p>
         </div>
+        <PixelBot busy={running > 0} />
       </div>
 
       {repos.length === 0 ? (
-        <div className="card has-bot">
-          <PixelBot />
+        <div className="card">
           <EmptyState icon="review" title="Run your first review">
             <p>Point CodeReviewer at a GitLab repository. It clones it, runs 10 static-analysis tools and a team of
               AI reviewers, and produces a full engineering report.</p>
@@ -70,8 +70,7 @@ export function DashboardPage() {
             <div className="card-body"><SeverityBar counts={totals} height={12} /></div>
           </div>
 
-          <div className="card has-bot">
-            <PixelBot speed={running ? "busy" : "normal"} />
+          <div className="card">
             <div className="card-header">
               <h2>Recent reviews</h2>
               <Link to="/reviews" className="btn btn-ghost btn-sm">View all</Link>

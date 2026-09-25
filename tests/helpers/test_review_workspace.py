@@ -315,6 +315,16 @@ class TestMapsIntegration:
         assert checked == "Assessed KPI-07 as closed."
         assert "Assessed KPI-09" in mapped.assess_kpi(_KpiArgs(kpi_id="KPI-09", status="not_applicable", summary="n/a"))
 
+    def test_unreachable_evidence_is_flagged_to_recorder_and_verifier(self, mapped, repo):
+        (repo / "app" / "legacy.py").write_text("def old():\n    return 1\n")
+        mapped.maps.unreachable = ["app/legacy.py"]
+        legacy = _finding(evidence=[EvidenceInput(file="app/legacy.py", line_start=1)])
+        assert "latent" in mapped.record_finding(mapped.config.category("security"), legacy)
+        assert "REACHABILITY: app/legacy.py" in mapped.render_finding(mapped.findings["SEC-1"])
+        live = mapped.record_finding(mapped.config.category("security"), _finding())
+        assert "latent" not in live
+        assert "REACHABILITY" not in mapped.render_finding(mapped.findings["SEC-2"])
+
     def test_module_imports_accepts_repository_paths(self, mapped):
         assert "app/service.py imported by: app/main.py" in mapped.module_imports("app/service.py", "imported_by")
         assert "app/main.py imports: app/service.py" in mapped.module_imports("app.main", "imports")

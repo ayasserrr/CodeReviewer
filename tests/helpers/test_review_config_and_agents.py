@@ -255,3 +255,29 @@ class TestRunAgentResume:
         monkeypatch.setattr(settings, "GEMINI_API_KEY", SecretStr("test-key"))
         model = build_chat_model(settings, "specialist")
         assert 0 < model.thinking_budget < settings.DEEP_REVIEW_MAX_OUTPUT_TOKENS
+
+    async def test_completion_check_resumes_once_with_its_message(self):
+        from helpers.review_agents import run_agent
+
+        agent = _FakeAgent([AIMessage(content="All done."), AIMessage(content="Recorded 3 findings.")])
+        checks = []
+
+        def nothing_recorded():
+            checks.append(1)
+            return "You recorded nothing — continue."
+
+        stats = await run_agent(
+            agent, name="specialist:x", kickoff="go", files={}, timeout_seconds=30, completion_check=nothing_recorded
+        )
+        assert stats.status == "completed"
+        assert len(agent.inputs) == 2 and len(checks) == 1
+        assert agent.inputs[1]["messages"][-1].content == "You recorded nothing — continue."
+
+    async def test_satisfied_completion_check_does_not_resume(self):
+        from helpers.review_agents import run_agent
+
+        agent = _FakeAgent([AIMessage(content="Done.")])
+        stats = await run_agent(
+            agent, name="specialist:x", kickoff="go", files={}, timeout_seconds=30, completion_check=lambda: None
+        )
+        assert stats.status == "completed" and len(agent.inputs) == 1

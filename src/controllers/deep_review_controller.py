@@ -205,8 +205,30 @@ class DeepReviewController(BaseController):
             f"Begin the {category.title} review of this repository. The repository brief is in your instructions; "
             "/_review/context/ holds the full lists. Plan with write_plan, then work through it."
         )
+        def nothing_recorded() -> str | None:
+            recorded = any(f.category_id == category.id for f in workspace.findings.values())
+            if recorded or any(fid.startswith(f"{category.code}-") for fid in workspace.withdrawn):
+                return None
+            return (
+                f"You are stopping with NO findings recorded for {category.title}. Unless you have verified that "
+                "this category genuinely does not apply to this repository, go back to your checklist and the "
+                "relevant /_review/context/ tables, verify the issues you found, and record them with "
+                "record_finding now. If it truly does not apply, reply with one sentence saying why."
+            )
+
+        def kpis_unassessed() -> str | None:
+            missing = [k.id for k in config.security_kpis if k.id not in workspace.kpis]
+            if not missing:
+                return None
+            return f"These KPIs are not assessed yet: {', '.join(missing)}. Assess each with assess_security_kpi now."
+
         parts = [
-            (f"specialist:{category.id}", specialist_prompt(config, category, brief), workspace.specialist_tools(category)),
+            (
+                f"specialist:{category.id}",
+                specialist_prompt(config, category, brief),
+                workspace.specialist_tools(category),
+                nothing_recorded,
+            ),
         ]
         if category.owns_security_kpis and config.security_kpis:
             parts.append(
@@ -214,10 +236,11 @@ class DeepReviewController(BaseController):
                     f"specialist:{category.id}-kpis",
                     kpi_prompt(config, category, brief, workspace.kpi_leads()),
                     workspace.specialist_tools(category, kpi_assessor=True),
+                    kpis_unassessed,
                 )
             )
 
-        async def run_part(name: str, prompt: str, tools: list) -> None:
+        async def run_part(name: str, prompt: str, tools: list, completion_check) -> None:
             async with semaphore:
                 runs.append(
                     await self._run(
@@ -230,6 +253,7 @@ class DeepReviewController(BaseController):
                         model_calls=self.config.DEEP_REVIEW_SPECIALIST_MODEL_CALLS,
                         kickoff=kickoff,
                         files=files,
+                        completion_check=completion_check,
                     )
                 )
 
@@ -287,6 +311,7 @@ class DeepReviewController(BaseController):
         model_calls: int,
         kickoff: str,
         files: dict[str, dict],
+        completion_check=None,
     ) -> AgentRunStats:
         progress = getattr(self, "_progress", None)
         if progress is not None:
@@ -301,6 +326,7 @@ class DeepReviewController(BaseController):
             model_calls=model_calls,
             kickoff=kickoff,
             files=files,
+            completion_check=completion_check,
         )
         if progress is not None:
             await progress.agent_finished(stats)
@@ -318,6 +344,7 @@ class DeepReviewController(BaseController):
         model_calls: int,
         kickoff: str,
         files: dict[str, dict],
+        completion_check=None,
     ) -> AgentRunStats:
         try:
             agent = build_agent(
@@ -341,6 +368,7 @@ class DeepReviewController(BaseController):
             kickoff=kickoff,
             files=files,
             timeout_seconds=self.config.DEEP_REVIEW_AGENT_TIMEOUT_SECONDS,
+            completion_check=completion_check,
         )
 
     # ------------------------------------------------------------------

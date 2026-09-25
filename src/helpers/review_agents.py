@@ -42,6 +42,7 @@ deepagents features used, and why:
 """
 
 import asyncio
+from collections.abc import Callable
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -456,6 +457,7 @@ async def run_agent(
     kickoff: str,
     files: dict[str, dict],
     timeout_seconds: int,
+    completion_check: Callable[[], str | None] | None = None,
 ) -> AgentRunStats:
     """Run one agent to completion under a wall-clock cap; never raises.
 
@@ -465,6 +467,11 @@ async def run_agent(
     is resumed with its full history up to ``_MAX_RESUMES`` times; if it still
     ends empty the run is reported ``incomplete`` — never silently "completed"
     with its section of the report missing.
+
+    ``completion_check`` runs when the agent stops normally; if it returns a
+    message (e.g. "you recorded nothing"), the agent is resumed ONCE with that
+    message and its full history — models sometimes wrap up a lane before
+    doing the work.
     """
     usage = _UsageCounter()
     start = time.monotonic()
@@ -475,17 +482,26 @@ async def run_agent(
 
     async def run_with_resume() -> bool:
         state: dict[str, Any] = {"messages": [HumanMessage(content=kickoff)], "files": files}
-        for resume in range(_MAX_RESUMES + 1):
+        checked = False
+        resume = 0
+        while resume <= _MAX_RESUMES:
             result = await agent.ainvoke(state, config=config)
             messages = result.get("messages", [])
             if not _ended_empty(messages):
-                return True
+                nudge = completion_check() if completion_check and not checked else None
+                if not nudge:
+                    return True
+                checked = True
+                logger.warning("deep_review_agent_incomplete_work_resumed", agent=name, nudge=nudge[:200])
+                state = {"messages": [*messages, HumanMessage(content=nudge)], "files": result.get("files", files)}
+                continue
             if resume < _MAX_RESUMES:
                 logger.warning("deep_review_agent_resumed", agent=name, resume=resume + 1)
                 state = {
                     "messages": [*messages, HumanMessage(content=_EMPTY_TURN_NUDGE)],
                     "files": result.get("files", files),
                 }
+            resume += 1
         return False
 
     try:

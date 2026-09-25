@@ -662,7 +662,18 @@ class ReviewWorkspace:
                 kpi_ids=tuple(dict.fromkeys(args.kpi_ids)),
                 static_finding_ids=tuple(dict.fromkeys(args.static_finding_ids)),
             )
-        return f"Recorded {finding_id} ({args.severity}) with {len(refs)} validated citation(s)."
+        note = ""
+        if args.severity in ("Critical", "High") and self._all_unreachable(refs):
+            note = (
+                " NOTE: every cited file is unreachable from the application roots (reachability.md) — if this is "
+                "a runtime vulnerability, it is latent: say so and calibrate the severity (update_finding)."
+            )
+        return f"Recorded {finding_id} ({args.severity}) with {len(refs)} validated citation(s).{note}"
+
+    def _all_unreachable(self, refs) -> bool:
+        unreachable = set(self.maps.unreachable)
+        files = {ref.file for ref in refs if ref.file.endswith(".py")}
+        return bool(files) and files <= unreachable
 
     def update_finding(self, category: ReviewCategory, args: _UpdateFindingArgs) -> str:
         with self._lock:
@@ -839,6 +850,13 @@ class ReviewWorkspace:
             extras.append(f"KPIs: {', '.join(finding.kpi_ids)}")
         if finding.static_finding_ids:
             extras.append(f"static findings: {', '.join(finding.static_finding_ids)}")
+        unreachable = sorted({e.file for e in finding.evidence} & set(self.maps.unreachable))
+        if unreachable:
+            extras.append(
+                "REACHABILITY: " + ", ".join(unreachable) + " — not imported by any application root "
+                "(reachability.md); a runtime exploit through only these files is latent, not live. "
+                "Confirm with find_references, then calibrate severity"
+            )
         return (
             f"### {finding.id} [{finding.severity}, confidence {finding.confidence}] {finding.title}\n"
             f"{finding.description}\n\n**Impact:** {finding.impact}\n\n**Evidence:**\n{evidence}\n"

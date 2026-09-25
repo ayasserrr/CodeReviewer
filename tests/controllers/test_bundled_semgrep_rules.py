@@ -20,7 +20,10 @@ pytestmark = pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep
 _PYTHON = '''\
 import os
 import requests
+import random
+import re
 import tempfile
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 
@@ -40,6 +43,20 @@ async def upload(f: UploadFile):
 def send(msg, name):
     msg.add_header("Content-Disposition", "attachment", filename=name)
     df.to_excel("out.xlsx")
+
+
+def correct_years(text):
+    current_year = datetime.now().year
+    return re.sub(r"\\d{4}", lambda m: str(current_year), text)
+
+
+def _generate_random_id():
+    return str(random.randint(100000, 999999))
+
+
+async def upload_endpoint(db, thread_id):
+    if not await try_mark_screening_in_progress(db, thread_id):
+        return None
 
 
 def call():
@@ -98,13 +115,16 @@ def test_rulesets_load_without_config_errors(results):
 @pytest.mark.parametrize(
     ("rule", "line"),
     [
-        ("python-static-files-mount", 8),
-        ("python-insecure-secret-default", 9),
-        ("python-upload-filename-path-traversal", 13),
-        ("python-content-disposition-header", 21),
-        ("python-spreadsheet-export", 22),
-        ("python-http-request-without-timeout", 27),
-        ("python-exception-text-returned-to-client", 29),
+        ("python-static-files-mount", 11),
+        ("python-insecure-secret-default", 12),
+        ("python-upload-filename-path-traversal", 16),
+        ("python-content-disposition-header", 24),
+        ("python-spreadsheet-export", 25),
+        ("python-silent-value-substitution", 30),
+        ("python-random-identifier", 34),
+        ("python-claim-flag-or-lock", 38),
+        ("python-http-request-without-timeout", 44),
+        ("python-exception-text-returned-to-client", 46),
         ("web-secret-in-client-env", 3),
         ("web-iframe-sandbox-escape", 6),
         ("web-spreadsheet-export", 11),
@@ -115,4 +135,4 @@ def test_rule_fires(results, rule, line):
 
 
 def test_basename_sanitizes_the_upload_filename(results):
-    assert 16 not in _hits(results).get("python-upload-filename-path-traversal", [])
+    assert 19 not in _hits(results).get("python-upload-filename-path-traversal", [])

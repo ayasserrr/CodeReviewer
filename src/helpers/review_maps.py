@@ -37,6 +37,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
+from helpers.ast_analyzer import parse_quietly
 from helpers.fs_scanner import IGNORED_DIR_NAMES
 from system import get_logger
 from utils import RepositoryManifest
@@ -193,6 +194,16 @@ BASELINES: tuple[Baseline, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class BackgroundJob:
+    """A function started as background work (``add_task`` / ``create_task`` / executors)."""
+
+    function: str
+    file: str  # where it is defined ("" if not found in the repo)
+    line: int
+    started_at: str  # file:line of the call that schedules it
+
+
 @dataclass
 class ReviewMaps:
     routes: list[RouteInfo] = field(default_factory=list)
@@ -206,6 +217,7 @@ class ReviewMaps:
     unreachable: list[str] = field(default_factory=list)
     orphan_scripts: list[str] = field(default_factory=list)
     absent_baselines: list["Baseline"] = field(default_factory=list)
+    background_jobs: list["BackgroundJob"] = field(default_factory=list)
 
     # -------------------------------------------------------------- derived
     def imported_by(self) -> dict[str, set[str]]:
@@ -355,7 +367,7 @@ def _python_files(repo_path: Path, manifest: RepositoryManifest) -> list[_PyFile
             continue
         try:
             text = (repo_path / entry.path).read_text(encoding="utf-8-sig", errors="replace")
-            files.append(_PyFile(entry.path, ast.parse(text), text))
+            files.append(_PyFile(entry.path, parse_quietly(text, entry.path), text))
         except (OSError, SyntaxError, ValueError):
             continue
     return files
@@ -960,6 +972,50 @@ def _fill_routes(maps: ReviewMaps, files: list[_PyFile]) -> None:
 def _fill_imports(maps: ReviewMaps, files: list[_PyFile]) -> None:
     maps.import_edges, maps.import_roots = _build_import_graph(files)
     maps.app_roots, maps.unreachable, maps.orphan_scripts = _reachability(files, maps.import_edges)
+    maps.background_jobs = _background_jobs(files)
+
+
+def _background_jobs(files: list[_PyFile]) -> list[BackgroundJob]:
+    """Functions scheduled as background work — the long-running pipelines worth tracing."""
+    definitions: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    for py in files:
+        for node in ast.walk(py.tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                definitions[node.name].append((py.path, node.lineno))
+
+    def locate(name: str, caller_file: str) -> tuple[str, int]:
+        candidates = definitions.get(name, [])
+        same_file = [c for c in candidates if c[0] == caller_file]
+        if same_file:
+            return same_file[0]
+        return candidates[0] if len(candidates) == 1 else ("", 0)
+
+    starts: dict[tuple[str, str, int], list[str]] = defaultdict(list)
+    for py in files:
+        for node in ast.walk(py.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = _dotted(node.func).split(".")[-1]
+            target: ast.AST | None = None
+            if callee in ("add_task", "submit") and node.args:
+                target = node.args[0]
+            elif callee in ("create_task", "ensure_future") and node.args and isinstance(node.args[0], ast.Call):
+                target = node.args[0].func
+            elif callee == "run_in_executor" and len(node.args) > 1:
+                target = node.args[1]
+            elif callee == "to_thread" and node.args:
+                target = node.args[0]
+            if target is None or isinstance(target, ast.Lambda):
+                continue
+            name = _dotted(target).split(".")[-1]
+            if not name:
+                continue
+            file, line = locate(name, py.path)
+            starts[(name, file, line)].append(f"{py.path}:{node.lineno}")
+    return sorted(
+        (BackgroundJob(name, file, line, ", ".join(sorted(set(where))[:3])) for (name, file, line), where in starts.items()),
+        key=lambda job: (job.file, job.function),
+    )
 
 
 def _fill_env(maps: ReviewMaps, files, js_sources, repo_path: Path, inspect_real: bool) -> None:
@@ -1112,6 +1168,13 @@ def render_reachability(maps: ReviewMaps) -> str:
         for directory, names in sorted(grouped.items()):
             lines.append(f"- {directory}/ ({len(names)}): {', '.join(sorted(names))}")
         lines.append("")
+    lines.append(f"## Background jobs (functions scheduled with add_task / create_task / executors) ({len(maps.background_jobs)})")
+    lines += [
+        f"- {job.function} ({job.file}:{job.line}) started at {job.started_at}" if job.file
+        else f"- {job.function} (definition not found in the repo) started at {job.started_at}"
+        for job in maps.background_jobs
+    ] or ["- none"]
+    lines.append("")
     lines.append(f"## Standalone scripts (have a __main__ guard, imported by nothing) ({len(maps.orphan_scripts)})")
     lines += [f"- {p}" for p in maps.orphan_scripts] or ["- none"]
     return "\n".join(lines)

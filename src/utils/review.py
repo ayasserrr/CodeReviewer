@@ -53,6 +53,9 @@ class ReviewCategory(BaseModel):
         code: Short prefix for finding ids (e.g. ``"SEC"`` -> ``SEC-3``).
         enabled: Disabled categories are skipped entirely.
         owns_security_kpis: The specialist that must assess every KPI.
+        strong_model: Run this category's specialist on the judge model — for
+            lanes whose value is deep multi-file tracing (the base model tends to
+            stop at surface patterns there).
         focus: Category-specific review checklist injected into its prompt.
     """
 
@@ -63,6 +66,7 @@ class ReviewCategory(BaseModel):
     code: str = Field(..., pattern=r"^[A-Z]{2,6}$")
     enabled: bool = True
     owns_security_kpis: bool = False
+    strong_model: bool = False
     focus: str
 
 

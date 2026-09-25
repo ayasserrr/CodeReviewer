@@ -239,3 +239,20 @@ def test_a_broken_map_does_not_break_the_others(repo, monkeypatch):
     maps = build_review_maps(repo, _manifest(repo))
     assert maps.routes == []
     assert maps.env_reads
+
+
+def test_background_jobs_resolve_to_the_same_file_definition(tmp_path):
+    _write(tmp_path, "svc/a.py", "def _run():\n    pass\n")
+    _write(tmp_path, "svc/b.py", (
+        "import asyncio\n"
+        "def _run():\n    pass\n"
+        "async def pipeline(x):\n    pass\n"
+        "def start(background_tasks):\n"
+        "    background_tasks.add_task(_run)\n"
+        "    asyncio.create_task(pipeline(1))\n"
+        "    asyncio.create_task(pipeline(2))\n"
+    ))
+    maps = build_review_maps(tmp_path, _manifest(tmp_path))
+    jobs = {(j.function, j.file, j.line) for j in maps.background_jobs}
+    assert ("_run", "svc/b.py", 2) in jobs and ("pipeline", "svc/b.py", 4) in jobs
+    assert len([j for j in maps.background_jobs if j.function == "pipeline"]) == 1

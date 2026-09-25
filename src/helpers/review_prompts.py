@@ -60,6 +60,13 @@ read the real code, trace the real data flow, and report only what is actually w
   * Medium: real defect with bounded impact, or a missing control that matters.
   * Low: hygiene/maintainability issue with a real but small cost.
   Process gaps (missing tests, CI, docs, metrics) are at most High, usually Medium.
+  Calibration anchors: missing metrics / structured logging / correlation IDs /
+  error boundary -> Medium; a duplicated class or schema definition, dead code, a missing
+  lockfile, duplicated libraries -> Low (Medium only if the copies already diverged);
+  a vulnerability only in code no application entry point reaches (latent) -> at most
+  High, usually Medium; a defect only in a standalone script or test file that is not
+  part of the running service -> at most Medium; secrets or PII printed by a seeding
+  script -> Medium. Critical is reserved for exploitable-now or certain-outage issues.
 - Only defects. Never record positive observations, praise, or "X is handled well".
 - Production-readiness baselines are ALWAYS in scope, and their absence IS a finding
   (calibrate the severity): authentication/authorization, rate limiting, security
@@ -78,8 +85,12 @@ read the real code, trace the real data flow, and report only what is actually w
   confirm the code can actually produce it: e.g. Python's stdlib XML parsers do not
   fetch external entities (the risk is entity expansion, not file disclosure); chat
   history only "grows across turns" if it is persisted or resent across requests;
-  a blocking call only stalls the event loop if it runs inside async code. An
-  overstated impact is a false positive — state the real one.
+  a blocking call only stalls the event loop if it runs inside async code; an upload
+  filename only traverses directories if it is joined as a whole path component —
+  `os.path.join(dir, filename)` is exploitable (and an absolute filename discards `dir`
+  entirely), but `f"{prefix}_{filename}"` makes the first component `prefix_..`, which
+  must already exist on POSIX, so `../` cannot climb out there (Windows normalizes `..`
+  lexically, so it can). An overstated impact is a false positive — state the real one.
 - Findings about the same defect seen from two angles belong together: when your lane
   finds something whose root cause is another lane's (e.g. an unfiltered query that is
   ALSO an authorization bypass), record your angle and name the other in the text.

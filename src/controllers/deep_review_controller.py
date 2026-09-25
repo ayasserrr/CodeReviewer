@@ -152,6 +152,12 @@ class DeepReviewController(BaseController):
             *(self._category_pipeline(c, config, workspace, brief, files, repo_path, semaphore, runs) for c in categories)
         )
 
+        # Deterministic clean-up before synthesis: the same defect recorded by two lanes
+        # is folded, and static findings a verified finding cites count as triaged.
+        folded = workspace.auto_fold_duplicates()
+        cited = workspace.auto_triage_cited()
+        logger.info("deep_review_consolidated", folded_duplicates=folded, static_findings_triaged_by_citation=cited)
+
         if workspace.findings:
             runs.append(await self._run_synthesizer(workspace, brief, files, repo_path))
         else:
@@ -247,6 +253,7 @@ class DeepReviewController(BaseController):
                 specialist_prompt(config, category, brief),
                 workspace.specialist_tools(category),
                 nothing_recorded,
+                category.strong_model,
             ),
         ]
         if category.owns_security_kpis and config.security_kpis:
@@ -256,10 +263,11 @@ class DeepReviewController(BaseController):
                     kpi_prompt(config, category, brief, workspace.kpi_leads()),
                     workspace.specialist_tools(category, kpi_assessor=True),
                     kpis_unassessed,
+                    False,
                 )
             )
 
-        async def run_part(name: str, prompt: str, tools: list, completion_check) -> None:
+        async def run_part(name: str, prompt: str, tools: list, completion_check, strong: bool) -> None:
             async with semaphore:
                 runs.append(
                     await self._run(
@@ -273,6 +281,7 @@ class DeepReviewController(BaseController):
                         kickoff=kickoff,
                         files=files,
                         completion_check=completion_check,
+                        strong=strong,
                     )
                 )
 
@@ -331,6 +340,7 @@ class DeepReviewController(BaseController):
         kickoff: str,
         files: dict[str, dict],
         completion_check=None,
+        strong: bool = False,
     ) -> AgentRunStats:
         progress = getattr(self, "_progress", None)
         if progress is not None:
@@ -346,6 +356,7 @@ class DeepReviewController(BaseController):
             kickoff=kickoff,
             files=files,
             completion_check=completion_check,
+            strong=strong,
         )
         if progress is not None:
             await progress.agent_finished(stats)
@@ -364,6 +375,7 @@ class DeepReviewController(BaseController):
         kickoff: str,
         files: dict[str, dict],
         completion_check=None,
+        strong: bool = False,
     ) -> AgentRunStats:
         try:
             agent = build_agent(
@@ -375,6 +387,7 @@ class DeepReviewController(BaseController):
                 tools=tools,
                 explorer_tools=explorer_tools,
                 model_calls=model_calls,
+                strong=strong,
             )
         except DeepReviewError:
             raise

@@ -301,3 +301,20 @@ class TestToolResultCap:
     def test_binary_garbage_is_replaced(self):
         out = self._call("\x89PNG\r\n\x1a\n" + "\x00�\x01" * 5000).content
         assert out.startswith("[binary or non-text content omitted")
+
+
+def test_strong_lane_specialist_runs_on_the_judge_model(monkeypatch, tmp_path):
+    from config import settings as cfg
+    from helpers import review_agents
+    from helpers.review_config_loader import load_review_config
+
+    assert load_review_config(cfg.DEEP_REVIEW_CONFIG_PATH).category("correctness").strong_model
+    roles = []
+    monkeypatch.setattr(review_agents, "build_chat_model", lambda settings, role: roles.append(role) or object())
+    monkeypatch.setattr(review_agents, "create_deep_agent", lambda **kwargs: kwargs)
+    for strong in (False, True):
+        review_agents.build_agent(
+            settings=cfg, repo_path=tmp_path, role="specialist", name="s", system_prompt="p",
+            tools=[], explorer_tools=[], model_calls=5, strong=strong,
+        )
+    assert "specialist" in roles and "verifier" in roles

@@ -93,7 +93,11 @@ _SECURITY_LEAD_RULES: dict[str, str] = {
     "python-jwt-verification-disabled": "JWT verification disabled",
     "python-exception-text-returned-to-client": "raw exception text returned to clients",
 }
-_TITLE_STOPWORDS = {"with", "from", "into", "that", "this", "missing", "lack", "lacks", "using", "used", "without"}
+_TITLE_STOPWORDS = {
+    "with", "from", "into", "that", "this", "missing", "lack", "lacks", "using", "used", "without", "the", "and",
+    "for", "via", "not", "all", "any", "are", "absence", "absent", "leads", "lead", "allows", "allowed", "can",
+    "issue", "issues", "potential", "possible", "multiple", "across", "due", "its", "has", "have", "been",
+}
 
 # Static-analysis rules (bundled semgrep ids and bandit test ids) that are leads for a security KPI.
 _KPI_RULES: dict[str, tuple[str, ...]] = {
@@ -859,6 +863,24 @@ class ReviewWorkspace:
                                                          for c in self.maps.unmatched_client_calls()])
         elif category_id == "performance":
             add("Blocking calls inside async functions (semgrep)", static_rows("python-blocking-call-in-async-def"))
+        elif category_id == "correctness":
+            entry_points = [(r.file, r.handler, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.accepts_upload]
+            entry_points += [
+                (job.file, job.function, f"background job {job.function} ({job.file}:{job.line}, started at {job.started_at})")
+                for job in self.maps.background_jobs if job.file
+            ]
+            if entry_points:
+                files: set[str] = set()
+                for file, function, _ in entry_points:
+                    files |= self._reachable_files(file, function, depth=2)
+                groups.append((
+                    "Core pipelines to trace end to end (upload handlers and background jobs; their callees are in scope)",
+                    frozenset(files),
+                    [row for _, _, row in entry_points],
+                ))
+            add("Values rewritten during extraction (semgrep)", static_rows("python-silent-value-substitution"))
+            add("Random identifiers (semgrep)", static_rows("python-random-identifier"))
+            add("Work claims / locks / in-progress flags (semgrep)", static_rows("python-claim-flag-or-lock"))
         elif category_id == "maintainability":
             by_dir: dict[str, list[str]] = defaultdict(list)
             for path in self.maps.unreachable:
@@ -878,6 +900,21 @@ class ReviewWorkspace:
         for label, _ in self._absence_leads(category_id):
             groups.append((label, frozenset(), ["confirm the absence (the static search found nothing) and record it"]))
         return groups
+
+    def _reachable_files(self, file: str, function: str, depth: int) -> set[str]:
+        """``file`` plus the files of functions reachable from ``function`` within ``depth`` calls."""
+        files = {file}
+        frontier = [fid for fid, fn in self.functions.items() if fn.file == file and fn.name == function]
+        for _ in range(depth):
+            nxt = []
+            for fid in frontier:
+                for callee, _line in self._callees.get(fid, ()):
+                    node = self.functions.get(callee)
+                    if node is not None and node.file not in files:
+                        files.add(node.file)
+                    nxt.append(callee)
+            frontier = nxt
+        return files
 
     def _absence_leads(self, category_id: str) -> list[tuple[str, str]]:
         return [
@@ -1014,6 +1051,82 @@ class ReviewWorkspace:
             lines.append(f"{f.id} | {f.severity} | {verified} | {f.title} | {f.evidence[0].label if f.evidence else '-'}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _title_terms(title: str) -> set[str]:
+        return set(re.findall(r"[a-z][a-z0-9_]{2,}", title.lower())) - _TITLE_STOPWORDS
+
+    @staticmethod
+    def _locations_overlap(a: ReviewFinding, b: ReviewFinding, tolerance: int = 5) -> bool:
+        for ea in a.evidence:
+            for eb in b.evidence:
+                if ea.file != eb.file:
+                    continue
+                a_end, b_end = ea.line_end or ea.line_start, eb.line_end or eb.line_start
+                if ea.line_start - tolerance <= b_end and eb.line_start - tolerance <= a_end:
+                    return True
+        return False
+
+    def _same_defect(self, a: ReviewFinding, b: ReviewFinding) -> bool:
+        terms_a, terms_b = self._title_terms(a.title), self._title_terms(b.title)
+        if not terms_a or not terms_b:
+            return False
+        overlap = len(terms_a & terms_b) / len(terms_a | terms_b)
+        if self._locations_overlap(a, b):
+            return overlap >= 0.15
+        shares_file = bool({e.file for e in a.evidence} & {e.file for e in b.evidence})
+        return shares_file and overlap >= 0.34
+
+    def auto_fold_duplicates(self) -> int:
+        """Fold findings that are the same defect recorded twice (overlapping citations + same key terms).
+
+        Deterministic, before synthesis: lanes overlap by design (security and auth both
+        see rate limiting; security and inputs both see upload validation), and the
+        synthesizer does not reliably catch every pair. The more severe / better
+        evidenced finding stays primary and absorbs the other's locations.
+        """
+        with self._lock:
+            live = [f for f in self.findings.values() if f.id not in self.duplicates]
+        rank = {
+            f.id: (SEVERITY_ORDER.index(f.severity), -len(f.evidence), f.verification is None, f.id) for f in live
+        }
+        live.sort(key=lambda f: rank[f.id])
+        folded = 0
+        for i, primary in enumerate(live):
+            if primary.id in self.duplicates:
+                continue
+            for other in live[i + 1 :]:
+                if other.id in self.duplicates:
+                    continue
+                current = self.findings[primary.id]
+                if self._same_defect(current, other):
+                    self.mark_duplicate(
+                        _DuplicateArgs(duplicate_id=other.id, primary_id=primary.id, reason="auto: same defect")
+                    )
+                    folded += 1
+        return folded
+
+    def auto_triage_cited(self) -> int:
+        """Untriaged static findings that sit inside a live finding's cited lines are true positives."""
+        spans: dict[str, list[tuple[int, int, str]]] = defaultdict(list)
+        with self._lock:
+            for finding in self.findings.values():
+                if finding.id in self.duplicates:
+                    continue
+                for ref in finding.evidence:
+                    spans[ref.file].append((ref.line_start - 1, (ref.line_end or ref.line_start) + 1, finding.id))
+            count = 0
+            for static in self.static_by_id.values():
+                if static.id in self.triage or static.line is None:
+                    continue
+                hit = next((fid for lo, hi, fid in spans.get(static.file, ()) if lo <= static.line <= hi), None)
+                if hit is not None:
+                    self.triage[static.id] = StaticTriage(
+                        finding_id=static.id, tool=static.tool, verdict="true_positive",
+                        reason=f"cited by reported finding {hit}", triaged_by="citation",
+                    )
+                    count += 1
+        return count
+
     def duplicate_candidates(self) -> str:
         """Pairs of findings from different categories that cite the same file:line or share a KPI."""
         with self._lock:
@@ -1034,15 +1147,17 @@ class ReviewWorkspace:
                     for b in ordered[i + 1 :]:
                         if category[a] != category[b] or reason == "same KPI":
                             pairs[(a, b)].append(f"{reason} {key}")
-        words = {f.id: set(re.findall(r"[a-z]{4,}", f.title.lower())) - _TITLE_STOPWORDS for f in live}
+        words = {f.id: self._title_terms(f.title) for f in live}
         for i, a in enumerate(live):
             for b in live[i + 1 :]:
-                if a.category_id != b.category_id or not words[a.id] or not words[b.id]:
+                if not words[a.id] or not words[b.id]:
                     continue
                 overlap = len(words[a.id] & words[b.id]) / len(words[a.id] | words[b.id])
-                if overlap >= 0.5:
+                same_lane = a.category_id == b.category_id
+                if overlap >= (0.5 if same_lane else 0.3):
                     key = tuple(sorted((a.id, b.id)))
-                    pairs[key].append(f"same pattern in one category (title overlap {overlap:.0%})")
+                    label = "same pattern in one category" if same_lane else "similar titles across categories"
+                    pairs[key].append(f"{label} (title overlap {overlap:.0%})")
         if not pairs:
             return "No cross-category overlaps found."
         titles = {f.id: f.title for f in live}

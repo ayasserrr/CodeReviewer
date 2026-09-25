@@ -444,12 +444,14 @@ def build_agent(
     tools: list,
     explorer_tools: list,
     model_calls: int,
+    strong: bool = False,
 ):
     """One configured deep agent (see module docstring for the stack)."""
     backend = build_backend(repo_path)
     middleware = [_filesystem_middleware(backend, settings), *_harness_middleware(model_calls, _fallback_model(settings))]
     return create_deep_agent(
-        model=build_chat_model(settings, role),
+        # ``strong`` puts a specialist on the judge model (deep-tracing lanes).
+        model=build_chat_model(settings, "verifier" if strong and role == "specialist" else role),
         tools=[_plan_tool(), *tools] if role == "specialist" else tools,
         system_prompt=system_prompt,
         middleware=middleware,

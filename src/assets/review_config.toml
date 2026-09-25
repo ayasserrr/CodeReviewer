@@ -294,6 +294,9 @@ id = "correctness"
 title = "Correctness & Data-Integrity Bugs"
 code = "BUG"
 enabled = true
+# Deep multi-file tracing is where the base model stops at surface patterns:
+# this lane's specialist runs on DEEP_REVIEW_JUDGE_MODEL.
+strong_model = true
 focus = """
 - Logic errors, wrong conditions, off-by-one, incorrect error handling paths,
   exceptions swallowed so bad state persists, race conditions, locks/flags
@@ -305,6 +308,9 @@ focus = """
   loops, async sessions shared across tasks.
 - Timezone/naive datetime bugs, float/decimal money handling, encoding bugs.
 - Reliance on private APIs of third-party libraries.
+- Your kickoff lists the core pipelines (upload handlers and background jobs) and
+  static leads (values rewritten during extraction, random identifiers, work claims
+  and in-progress flags). Open each and follow the data through the callees.
 - Trace the core business pipeline(s) end to end from their routes (e.g. upload ->
   parse -> store -> embed -> score -> report): look for two code paths that process
   the same data differently, work done twice, values silently rewritten, IDs that

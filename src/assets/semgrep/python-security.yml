@@ -430,3 +430,74 @@ rules:
       - pattern: FileResponse(..., filename=$NAME, ...)
       - pattern: '$H["Content-Disposition"] = $V'
       - pattern: 'Response(..., headers={..., "Content-Disposition": $V, ...}, ...)'
+
+  # ------------------------------------------------------ data-integrity leads
+  # Leads for the correctness lane (not verdicts): shapes behind real pipeline bugs.
+  - id: python-silent-value-substitution
+    languages: [python]
+    severity: INFO
+    message: >-
+      Extracted text is rewritten with the current date/year inside a regex substitution —
+      check that real data (e.g. a graduation year) is not silently "corrected" into a
+      different value that downstream scoring then trusts.
+    metadata: {category: correctness, cwe: "CWE-1284: Improper Validation of Specified Quantity in Input", confidence: LOW}
+    patterns:
+      - pattern-inside: |
+          def $F(...):
+              ...
+      - pattern-either:
+          - pattern-inside: |
+              $Y = datetime.now().year
+              ...
+          - pattern-inside: |
+              $Y = datetime.datetime.now().year
+              ...
+          - pattern-inside: |
+              $Y = date.today().year
+              ...
+      - pattern: re.sub(...)
+
+  - id: python-random-identifier
+    languages: [python]
+    severity: INFO
+    message: >-
+      An identifier is generated with the non-cryptographic `random` module in a small space —
+      check for collisions (birthday bound), whether the ID's shape is used as meaning
+      elsewhere, and whether it is guessable where it matters.
+    metadata: {category: correctness, cwe: "CWE-330: Use of Insufficiently Random Values", confidence: LOW}
+    patterns:
+      - pattern-either:
+          - pattern: random.randint(...)
+          - pattern: random.choice(...)
+          - pattern: random.choices(...)
+          - pattern: random.random()
+      - pattern-either:
+          - patterns:
+              - pattern-inside: |
+                  def $F(...):
+                      ...
+              - metavariable-regex:
+                  metavariable: $F
+                  regex: (?i).*(_id|id_|^id|identifier|uid|key|code|token|filename|name).*
+          - patterns:
+              - pattern-inside: $V = ...
+              - metavariable-regex:
+                  metavariable: $V
+                  regex: (?i).*(_id|^id|identifier|uid|key|code|token|filename).*
+
+  - id: python-claim-flag-or-lock
+    languages: [python]
+    severity: INFO
+    message: >-
+      A work claim / lock / in-progress flag is taken here. Check that it is released on
+      EVERY failure path (exception, cancellation, crash, redeploy) — a flag released only
+      by the happy path or by a background task blocks all later work forever unless it
+      has a TTL or reaper.
+    metadata: {category: correctness, cwe: "CWE-667: Improper Locking", confidence: LOW}
+    patterns:
+      - pattern-either:
+          - pattern: $F(...)
+          - pattern: $O.$F(...)
+      - metavariable-regex:
+          metavariable: $F
+          regex: (?i)^(try_)?(mark|set|claim|acquire|start|begin)_?.*(in_progress|lock|locked|running|busy|processing)$

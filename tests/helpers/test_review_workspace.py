@@ -328,10 +328,38 @@ class TestMapsIntegration:
     def test_lane_leads_and_unaddressed_groups(self, mapped):
         leads = mapped.lane_leads("security")
         assert leads[0][0].startswith("Routes taking a user identity") and leads[0][1] == frozenset({"app/main.py"})
-        assert [label for label, _ in mapped.unaddressed_leads("security")] == [leads[0][0]]
+        assert [label for label, _ in mapped.unaddressed_leads("security")] == [
+            leads[0][0], "Baseline with no trace anywhere in the code: HTTP security headers (HSTS, CSP, X-Content-Type-Options, ...)",
+        ]
         mapped.record_finding(mapped.config.category("security"), _finding(title="Header identity"))
+        mapped.record_finding(mapped.config.category("security"), _finding(title="No security headers (HSTS, CSP)"))
         assert mapped.unaddressed_leads("security") == []
         assert mapped.lane_leads("llm") == []
+
+    def test_absent_baselines_are_leads_addressed_by_mention(self, mapped):
+        assert [b.id for b in mapped.maps.absent_baselines if b.lane == "observability"] == [
+            "request_ids", "metrics", "structured_logging",
+        ]
+        labels = [label for label, _ in mapped.unaddressed_leads("observability")]
+        assert any("request/correlation IDs" in label for label in labels)
+        mapped.record_finding(
+            mapped.config.category("observability"),
+            _finding(title="No correlation IDs", description="`app/main.py:4` has no request-id middleware."),
+        )
+        labels = [label for label, _ in mapped.unaddressed_leads("observability")]
+        assert not any("request/correlation IDs" in label for label in labels)
+        assert any("metrics" in label for label in labels)
+
+    def test_folding_a_duplicate_merges_locations_and_keeps_higher_severity(self, workspace):
+        perf = workspace.config.category("performance")
+        workspace.record_finding(perf, _finding(title="Sync I/O in async A", severity="Medium"))
+        workspace.record_finding(perf, _finding(title="Sync I/O in async B", severity="High",
+                                                evidence=[EvidenceInput(file="app/service.py", line_start=1)]))
+        assert "same pattern in one category" in workspace.duplicate_candidates()
+        workspace.mark_duplicate(_DuplicateArgs(duplicate_id="PERF-2", primary_id="PERF-1", reason="same pattern"))
+        merged = workspace.findings["PERF-1"]
+        assert merged.severity == "High"
+        assert {e.file for e in merged.evidence} == {"app/main.py", "app/service.py"}
 
     def test_module_imports_accepts_repository_paths(self, mapped):
         assert "app/service.py imported by: app/main.py" in mapped.module_imports("app/service.py", "imported_by")

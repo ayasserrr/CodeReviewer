@@ -227,6 +227,9 @@ report, not new findings:
    mark_duplicate every finding that reports the SAME underlying defect as another —
    the same default secret, the same missing rate limiter, the same header-based
    identity reported once per router, the same test credential recorded by two lanes.
+   Also fold the SAME defect pattern recorded once per file within one category (e.g. 15
+   "synchronous file I/O in async function X" findings) into a single finding — the
+   primary absorbs every location and the highest severity automatically.
    Keep the better-evidenced / more complete one as primary. Do not merge findings that
    merely share a file or a theme.
 3. Call submit_executive_summary once with:

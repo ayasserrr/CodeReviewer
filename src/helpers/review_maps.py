@@ -160,6 +160,39 @@ class ClientCall:
     line: int
 
 
+@dataclass(frozen=True)
+class Baseline:
+    """A production baseline whose tell-tale code was searched for across the repository."""
+
+    id: str
+    lane: str  # review category that owns it
+    label: str
+    evidence: str  # regex that marks it as present in code
+    mention: str  # regex a finding must match to count as having addressed its absence
+    frontend_only: bool = False
+
+
+BASELINES: tuple[Baseline, ...] = (
+    Baseline("request_ids", "observability", "request/correlation IDs propagated per request",
+             r"(?i)request[_-]?id|correlation[_-]?id|x-request-id|asgi_correlation_id|trace[_-]?id",
+             r"(?i)correlation|request[- _]?id|trac(e|ing)"),
+    Baseline("metrics", "observability", "application metrics (latency, errors, queue depth, LLM cost)",
+             r"(?i)prometheus|statsd|opentelemetry|datadog|\bmetrics\.(counter|histogram|gauge)",
+             r"(?i)metric"),
+    Baseline("structured_logging", "observability", "structured (JSON) logging configuration",
+             r"(?i)structlog|python-json-logger|jsonlogger|json_logs|logging\.config\.dictconfig",
+             r"(?i)structured|unstructured|print\(|logging config"),
+    Baseline("security_headers", "security", "HTTP security headers (HSTS, CSP, X-Content-Type-Options, ...)",
+             r"(?i)strict-transport-security|content-security-policy|x-content-type-options|x-frame-options|helmet\(",
+             r"(?i)security header|hsts|content-security-policy|csp\b"),
+    Baseline("rate_limiting", "auth", "rate limiting / throttling on any route",
+             r"(?i)slowapi|fastapi[_-]limiter|ratelimit|rate_limit|limiter\.limit|throttl",
+             r"(?i)rate[- ]?limit|throttl|brute"),
+    Baseline("error_boundary", "frontend", "a React error boundary", r"ErrorBoundary|componentDidCatch",
+             r"(?i)error boundar", frontend_only=True),
+)
+
+
 @dataclass
 class ReviewMaps:
     routes: list[RouteInfo] = field(default_factory=list)
@@ -172,6 +205,7 @@ class ReviewMaps:
     app_roots: tuple[str, ...] = ()
     unreachable: list[str] = field(default_factory=list)
     orphan_scripts: list[str] = field(default_factory=list)
+    absent_baselines: list["Baseline"] = field(default_factory=list)
 
     # -------------------------------------------------------------- derived
     def imported_by(self) -> dict[str, set[str]]:
@@ -930,6 +964,12 @@ def _fill_imports(maps: ReviewMaps, files: list[_PyFile]) -> None:
 
 def _fill_env(maps: ReviewMaps, files, js_sources, repo_path: Path, inspect_real: bool) -> None:
     maps.env_reads = _python_env_reads(files) + _js_env_reads(js_sources)
+    has_frontend = any(path.endswith((".tsx", ".jsx", ".vue", ".svelte")) for path, _ in js_sources)
+    corpus = [py.text for py in files] + [text for _, text in js_sources]
+    maps.absent_baselines = [
+        b for b in BASELINES
+        if (has_frontend or not b.frontend_only) and not any(re.search(b.evidence, text) for text in corpus)
+    ]
     maps.env_files = _env_files(repo_path, inspect_real)
 
 
@@ -1106,6 +1146,11 @@ def maps_brief(maps: ReviewMaps) -> list[str]:
             f"- client_calls.md: {len(maps.client_calls)} frontend API call paths; "
             f"{len(maps.unmatched_client_calls())} have no backend route; "
             f"{len(maps.routes_without_client())} backend routes are never called by the frontend."
+        )
+    if maps.absent_baselines:
+        lines.append(
+            "- Production baselines with NO trace anywhere in the code (searched statically): "
+            + "; ".join(b.label for b in maps.absent_baselines)
         )
     lines.append(
         f"- reachability.md: {len(maps.unreachable)} Python modules unreachable from the app roots "

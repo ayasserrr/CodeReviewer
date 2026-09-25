@@ -79,6 +79,9 @@ _ZERO_CALLERS_NOTE = (
 # ---------------------------------------------------------------------------
 
 
+_MAX_MERGED_EVIDENCE = 25
+_TITLE_STOPWORDS = {"with", "from", "into", "that", "this", "missing", "lack", "lacks", "using", "used", "without"}
+
 # Static-analysis rules (bundled semgrep ids and bandit test ids) that are leads for a security KPI.
 _KPI_RULES: dict[str, tuple[str, ...]] = {
     "python-debug-enabled": ("KPI-03",),
@@ -857,11 +860,27 @@ class ReviewWorkspace:
                   + (f"; duplicates: {', '.join(k for k, _ in f.duplicates)}" if f.duplicates else ""))
                  for f in self.maps.env_files if f.flags or f.duplicates])
             add("Insecure secret defaults (semgrep)", static_rows("python-insecure-secret-default"))
+        for label, _ in self._absence_leads(category_id):
+            groups.append((label, frozenset(), ["confirm the absence (the static search found nothing) and record it"]))
         return groups
 
+    def _absence_leads(self, category_id: str) -> list[tuple[str, str]]:
+        return [
+            (f"Baseline with no trace anywhere in the code: {b.label}", b.mention)
+            for b in self.maps.absent_baselines
+            if b.lane == category_id
+        ]
+
     def unaddressed_leads(self, category_id: str) -> list[tuple[str, list[str]]]:
-        cited = {ref.file for f in self.findings.values() if f.category_id == category_id for ref in f.evidence}
-        return [(label, rows) for label, files, rows in self.lane_leads(category_id) if not files & cited]
+        mine = [f for f in self.findings.values() if f.category_id == category_id]
+        cited = {ref.file for f in mine for ref in f.evidence}
+        missing = [
+            (label, rows) for label, files, rows in self.lane_leads(category_id) if files and not files & cited
+        ]
+        for label, mention in self._absence_leads(category_id):
+            if not any(re.search(mention, f"{f.title} {f.description}") for f in mine):
+                missing.append((label, ["confirm the absence (the static search found nothing) and record it"]))
+        return missing
 
     def assess_kpi(self, args: _KpiArgs) -> str:
         kpi = next((k for k in self.config.security_kpis if k.id == args.kpi_id), None)
@@ -1000,6 +1019,15 @@ class ReviewWorkspace:
                     for b in ordered[i + 1 :]:
                         if category[a] != category[b] or reason == "same KPI":
                             pairs[(a, b)].append(f"{reason} {key}")
+        words = {f.id: set(re.findall(r"[a-z]{4,}", f.title.lower())) - _TITLE_STOPWORDS for f in live}
+        for i, a in enumerate(live):
+            for b in live[i + 1 :]:
+                if a.category_id != b.category_id or not words[a.id] or not words[b.id]:
+                    continue
+                overlap = len(words[a.id] & words[b.id]) / len(words[a.id] | words[b.id])
+                if overlap >= 0.5:
+                    key = tuple(sorted((a.id, b.id)))
+                    pairs[key].append(f"same pattern in one category (title overlap {overlap:.0%})")
         if not pairs:
             return "No cross-category overlaps found."
         titles = {f.id: f.title for f in live}
@@ -1025,7 +1053,20 @@ class ReviewWorkspace:
             if primary == args.duplicate_id:
                 return "That would create a cycle."
             self.duplicates[args.duplicate_id] = primary
-        return f"{args.duplicate_id} folded into {primary}."
+            # The primary absorbs the folded finding's locations and links, and keeps the
+            # higher severity: one pattern found in many files becomes one finding.
+            kept, folded = self.findings[primary], self.findings[args.duplicate_id]
+            evidence = {ref.label: ref for ref in (*kept.evidence, *folded.evidence)}
+            severity = min(kept.severity, folded.severity, key=SEVERITY_ORDER.index)
+            self.findings[primary] = kept.model_copy(
+                update={
+                    "evidence": tuple(list(evidence.values())[:_MAX_MERGED_EVIDENCE]),
+                    "kpi_ids": tuple(dict.fromkeys((*kept.kpi_ids, *folded.kpi_ids))),
+                    "static_finding_ids": tuple(dict.fromkeys((*kept.static_finding_ids, *folded.static_finding_ids))),
+                    "severity": severity,
+                }
+            )
+        return f"{args.duplicate_id} folded into {primary} (locations merged)."
 
     def submit_summary(self, args: _SummaryArgs) -> str:
         known = set(self.findings)

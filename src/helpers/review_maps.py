@@ -98,6 +98,7 @@ class RouteInfo:
     identity_inputs: tuple[str, ...]
     user_token_verified: bool
     shared_key: bool
+    accepts_upload: bool = False
 
     @property
     def auth_label(self) -> str:
@@ -119,6 +120,8 @@ class RouteInfo:
             flags.append("AUTH ENTRY POINT")
         elif self.identity_inputs and not self.user_token_verified:
             flags.append("CLIENT-ASSERTED IDENTITY")
+        if self.accepts_upload:
+            flags.append("FILE UPLOAD")
         if not self.dependencies:
             flags.append("NO AUTH DEPENDENCY")
         return tuple(flags)
@@ -730,6 +733,16 @@ def _build_routes(files: list[_PyFile]) -> tuple[list[RouteInfo], list[MountInfo
                 out.append((parent_prefix + include_prefix + router.prefix, parent_deps + include_deps + router.deps))
         return out
 
+    def accepts_upload(handler: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        args = [*handler.args.posonlyargs, *handler.args.args, *handler.args.kwonlyargs]
+        return any(
+            arg.annotation is not None and re.search(r"UploadFile|\bFile\b", ast.unparse(arg.annotation))
+            for arg in args
+        ) or any(
+            isinstance(d, ast.Call) and _dotted(d.func).split(".")[-1] == "File"
+            for d in [*handler.args.defaults, *handler.args.kw_defaults] if d is not None
+        )
+
     routes: list[RouteInfo] = []
     for raw in raw_routes:
         key = (raw.file, raw.router_var.split(".")[-1])
@@ -750,6 +763,7 @@ def _build_routes(files: list[_PyFile]) -> tuple[list[RouteInfo], list[MountInfo
                     identity_inputs=tuple(dict.fromkeys([*handler_identity, *identity, *path_identity])),
                     user_token_verified=verified,
                     shared_key=shared,
+                    accepts_upload=accepts_upload(raw.handler),
                 )
             )
     routes.sort(key=lambda r: (r.path, r.method))
@@ -948,7 +962,8 @@ def render_route_map(maps: ReviewMaps) -> str:
         "'shared API key only', or NONE. Identity inputs = request inputs that name a user/role/tenant.",
         "CLIENT-ASSERTED IDENTITY = the route takes a user identity from the request but nothing verifies",
         "that the caller IS that user. AUTH ENTRY POINT = login/register/OTP/reset/refresh (identity by design;",
-        "these are the routes that need rate limiting). Heuristic — confirm each row in the code before recording.",
+        "these are the routes that need rate limiting). FILE UPLOAD = the handler takes an UploadFile/File",
+        "(the upload-governance checklist). Heuristic — confirm each row in the code before recording.",
         "",
         f"{len(maps.routes)} routes; {len(flagged)} flagged; {len(maps.mounts)} mounted sub-apps.",
         "",
@@ -1066,6 +1081,7 @@ def maps_brief(maps: ReviewMaps) -> list[str]:
     """A few lines for the shared repository brief."""
     identity = [r for r in maps.routes if "CLIENT-ASSERTED IDENTITY" in r.flags]
     entries = [r for r in maps.routes if r.is_auth_entry]
+    uploads = [r for r in maps.routes if r.accepts_upload]
     shared = [r for r in maps.routes if r.shared_key and not r.user_token_verified]
     lines = [
         "## Precomputed maps (walk them row by row; details in /_review/context/)",
@@ -1073,6 +1089,7 @@ def maps_brief(maps: ReviewMaps) -> list[str]:
             f"- route_map.md: {len(maps.routes)} routes — {len(shared)} protected only by a shared API key, "
             f"{len(identity)} take a user identity from the request without verifying it, "
             f"{len(entries)} are auth entry points (login/register/OTP/reset — the rate-limiting checklist); "
+            f"{len(uploads)} accept file uploads (FILE UPLOAD — the upload-governance checklist); "
             f"{len(maps.mounts)} mounted sub-apps ({', '.join(m.path for m in maps.mounts) or 'none'})."
         ),
     ]

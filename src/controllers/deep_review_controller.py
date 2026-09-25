@@ -212,7 +212,7 @@ class DeepReviewController(BaseController):
             parts.append(
                 (
                     f"specialist:{category.id}-kpis",
-                    kpi_prompt(config, category, brief),
+                    kpi_prompt(config, category, brief, workspace.kpi_leads()),
                     workspace.specialist_tools(category, kpi_assessor=True),
                 )
             )

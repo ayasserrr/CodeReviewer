@@ -41,7 +41,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
 from helpers.fs_scanner import is_sensitive_env_file
-from helpers.review_maps import ReviewMaps
+from helpers.review_maps import ReviewMaps, classify_env_value
 from utils import (
     DependencyGraph,
     EvidenceRef,
@@ -77,6 +77,26 @@ _ZERO_CALLERS_NOTE = (
 # ---------------------------------------------------------------------------
 # Tool argument schemas
 # ---------------------------------------------------------------------------
+
+
+# Static-analysis rules (bundled semgrep ids and bandit test ids) that are leads for a security KPI.
+_KPI_RULES: dict[str, tuple[str, ...]] = {
+    "python-debug-enabled": ("KPI-03",),
+    "python-streamlit-unsafe-html": ("KPI-03", "KPI-05"),
+    "web-spreadsheet-export": ("KPI-04", "KPI-12"),
+    "python-spreadsheet-export": ("KPI-04", "KPI-12"),
+    "web-dangerously-set-inner-html": ("KPI-05",),
+    "web-innerhtml-or-document-write": ("KPI-05",),
+    "web-iframe-sandbox-escape": ("KPI-05",),
+    "web-raw-html-markdown": ("KPI-05",),
+    "python-markupsafe-markup-non-literal": ("KPI-05",),
+    "python-jinja2-autoescape-disabled": ("KPI-05",),
+    "python-static-files-mount": ("KPI-06",),
+    "python-exception-text-returned-to-client": ("KPI-07",),
+    "python-content-disposition-header": ("KPI-08",),
+    "python-upload-filename-path-traversal": ("KPI-11",),
+    "B201": ("KPI-03",),
+}
 
 
 class EvidenceInput(BaseModel):
@@ -738,6 +758,30 @@ class ReviewWorkspace:
             return f"No untriaged {args.tool} findings for rule '{args.rule}'{f' under {glob}' if glob else ''}."
         return self.triage_static(category, _TriageArgs(finding_ids=ids, verdict=args.verdict, reason=args.reason))
 
+    def kpi_leads(self) -> dict[str, list[str]]:
+        """Deterministic leads per security KPI: static-rule hits and map rows that bear on it.
+
+        A lead is not a verdict — it is a place the KPI assessor must look at
+        before it may call a KPI closed or not applicable.
+        """
+        leads: dict[str, list[str]] = defaultdict(list)
+        for finding in self.static_by_id.values():
+            rule = finding.category.rsplit(".", 1)[-1]
+            for kpi_id in _KPI_RULES.get(rule, ()):
+                leads[kpi_id].append(f"{finding.file}:{finding.line} ({finding.tool} {rule})")
+        for mount in self.maps.mounts:
+            leads["KPI-06"].append(f"{mount.file}:{mount.line} (mounted sub-app {mount.path} -> {mount.target[:60]})")
+        for route in self.maps.routes:
+            if route.is_auth_entry:
+                leads["KPI-01"].append(f"{route.file}:{route.line} (auth entry point {route.method} {route.path})")
+        for read in self.maps.env_reads:
+            if read.default and any(
+                flag in ("points at localhost/loopback", "contains a private IP address", "points at a dev/staging/test host")
+                for flag in classify_env_value(read.key, read.default.strip("'\""))
+            ):
+                leads["KPI-10"].append(f"{read.file}:{read.line} ({read.key} defaults to a local/dev/private host)")
+        return {kpi: list(dict.fromkeys(items)) for kpi, items in leads.items()}
+
     def assess_kpi(self, args: _KpiArgs) -> str:
         kpi = next((k for k in self.config.security_kpis if k.id == args.kpi_id), None)
         if kpi is None:
@@ -747,6 +791,21 @@ class ReviewWorkspace:
             return "NOT RECORDED — fix and retry: " + "; ".join(errors)
         if args.status in ("open", "partially_open", "closed") and not refs:
             return "NOT RECORDED — open/partially_open/closed need at least one file:line citation."
+        leads = self.kpi_leads().get(kpi.id, [])
+        if leads and args.status == "not_applicable":
+            return (
+                f"NOT RECORDED — {kpi.id} cannot be not_applicable: the capability exists at "
+                + "; ".join(leads[:8])
+                + ". Read those locations and assess open / partially_open / closed."
+            )
+        if leads and args.status == "closed":
+            lead_files = {lead.split(":", 1)[0] for lead in leads}
+            if not lead_files & {ref.file for ref in refs}:
+                return (
+                    f"NOT RECORDED — closing {kpi.id} requires citing the lead locations you checked: "
+                    + "; ".join(leads[:8])
+                    + ". If any of them is unsafe the KPI is open."
+                )
         with self._lock:
             unknown = [fid for fid in args.finding_ids if fid not in self.findings]
             self.kpis[kpi.id] = KpiAssessment(

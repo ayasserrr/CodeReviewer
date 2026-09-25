@@ -400,3 +400,33 @@ rules:
     message: Streamlit renders this content as raw HTML — model or user text reaching it is an XSS vector.
     metadata: {category: security, cwe: "CWE-79: Cross-site Scripting", confidence: MEDIUM}
     pattern: $ST.$FN(..., unsafe_allow_html=True, ...)
+
+  - id: python-spreadsheet-export
+    languages: [python]
+    severity: INFO
+    message: >-
+      Data is written to a spreadsheet/CSV. Cell values starting with = + - @ (or tab/CR) run as
+      formulas when opened — check that stored, user or LLM-derived values are neutralized.
+    metadata: {category: security, cwe: "CWE-1236: CSV/Formula Injection", confidence: LOW}
+    pattern-either:
+      - pattern: $DF.to_excel(...)
+      - pattern: $DF.to_csv(...)
+      - pattern: csv.writer(...)
+      - pattern: csv.DictWriter(...)
+      - pattern: openpyxl.Workbook(...)
+      - pattern: xlsxwriter.Workbook(...)
+
+  - id: python-content-disposition-header
+    languages: [python]
+    severity: INFO
+    message: >-
+      A Content-Disposition header is built here (download or email attachment). A filename with
+      CR/LF or quotes can inject headers — check that user/LLM-controlled names are sanitized and
+      RFC 6266/5987 encoded.
+    metadata: {category: security, cwe: "CWE-113: HTTP Response Splitting", confidence: LOW}
+    pattern-either:
+      - pattern: $MSG.add_header("Content-Disposition", ...)
+      - pattern: $MSG.add_header('Content-Disposition', ...)
+      - pattern: FileResponse(..., filename=$NAME, ...)
+      - pattern: '$H["Content-Disposition"] = $V'
+      - pattern: 'Response(..., headers={..., "Content-Disposition": $V, ...}, ...)'

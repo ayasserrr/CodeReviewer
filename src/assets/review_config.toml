@@ -281,6 +281,12 @@ focus = """
 Produce a markdown table (input path | type check | size limit | other gaps)
 inside the description of a summary finding when there are several upload
 paths.
+- Start from the FILE UPLOAD rows in /_review/context/route_map.md: open every
+  upload handler and the service it calls. You OWN input governance: record the
+  upload/input-control findings here even when the security lane may also report
+  an exploit through the same code (it reports the attack, you report the missing
+  controls). Finishing this lane with no findings on a repository that accepts
+  uploads is almost certainly a miss — re-check before you stop.
 """
 
 [[categories]]
@@ -306,6 +312,8 @@ focus = """
   released only on the happy path. These are the highest-value bugs in this lane.
 - Scripts and entry points that cannot work as written (e.g. an async main() called
   without asyncio.run, a coroutine used without await).
+- Triage pyright in bulk FIRST (triage_static_rule per rule group, a few samples
+  each) so your budget goes to the pipeline tracing above.
 - Triage pyright findings: which are real runtime bugs vs typing noise. A type
   complaint ("str | None passed where str expected") is at most Low unless you show
   the concrete runtime path that fails.
@@ -329,7 +337,10 @@ focus = """
   (e.g. "an entire earlier LangGraph generation under src/nodes, src/states"), each
   confirmed with find_references, not one finding per file.
 - Duplicated implementations (triage jscpd): near-identical functions/modules,
-  multiple code generations coexisting.
+  multiple code generations coexisting. Only duplication that has ALREADY
+  diverged (two copies now behave differently) or doubles real work/maintenance
+  of a core path is a finding; repeated boilerplate (queries, schemas, DI params,
+  API-client wrappers) is not — triage those jscpd groups as low_value in bulk.
 - Complexity hot spots (triage radon / lizard): only report the ones that
   genuinely hurt comprehension or hide bugs, grouped, not one per function.
 - Layering violations, circular imports (use the import graph), god modules.

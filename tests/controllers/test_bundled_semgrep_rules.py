@@ -37,6 +37,11 @@ async def upload(f: UploadFile):
     return safe
 
 
+def send(msg, name):
+    msg.add_header("Content-Disposition", "attachment", filename=name)
+    df.to_excel("out.xlsx")
+
+
 def call():
     try:
         return requests.get("https://example.com")
@@ -96,8 +101,10 @@ def test_rulesets_load_without_config_errors(results):
         ("python-static-files-mount", 8),
         ("python-insecure-secret-default", 9),
         ("python-upload-filename-path-traversal", 13),
-        ("python-http-request-without-timeout", 22),
-        ("python-exception-text-returned-to-client", 24),
+        ("python-content-disposition-header", 21),
+        ("python-spreadsheet-export", 22),
+        ("python-http-request-without-timeout", 27),
+        ("python-exception-text-returned-to-client", 29),
         ("web-secret-in-client-env", 3),
         ("web-iframe-sandbox-escape", 6),
         ("web-spreadsheet-export", 11),

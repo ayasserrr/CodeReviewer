@@ -59,6 +59,9 @@ def repo(tmp_path: Path) -> Path:
         "@router.get('/mine')\n"
         "async def mine(user=Depends(get_current_user)):\n"
         "    return user\n"
+        "@router.post('/upload')\n"
+        "async def upload(f: UploadFile = File(...)):\n"
+        "    return f.filename\n"
         "@router.post('/login')\n"
         "async def login(body: ChatIn):\n"
         "    return body\n".encode()
@@ -137,6 +140,11 @@ class TestRouteMap:
     def test_login_is_an_auth_entry_point_not_client_asserted_identity(self, maps):
         route = next(r for r in maps.routes if r.path == "/api/v1/items/login")
         assert route.flags == ("AUTH ENTRY POINT",)
+
+    def test_upload_routes_are_flagged(self, maps):
+        route = next(r for r in maps.routes if r.path == "/api/v1/items/upload")
+        assert route.accepts_upload and "FILE UPLOAD" in route.flags
+        assert not next(r for r in maps.routes if r.path == "/api/v1/items/chat").accepts_upload
 
     def test_mounted_sub_app_is_listed(self, maps):
         assert [m.path for m in maps.mounts] == ["/static/files"]

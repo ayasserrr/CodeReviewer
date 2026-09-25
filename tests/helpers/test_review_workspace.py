@@ -300,6 +300,21 @@ class TestMapsIntegration:
         assert "GET /items -> items (app/main.py:5)" in out
         assert "header:x-user-email" in out and "CLIENT-ASSERTED IDENTITY" in out and "NO AUTH DEPENDENCY" in out
 
+    def test_kpi_with_leads_cannot_be_not_applicable_or_closed_blindly(self, mapped):
+        mapped.static_by_id["x"] = _static("semgrep", "src.assets.semgrep.python-exception-text-returned-to-client",
+                                           "app/service.py", 1)
+        leads = mapped.kpi_leads()
+        assert leads["KPI-07"] == ["app/service.py:1 (semgrep python-exception-text-returned-to-client)"]
+        na = mapped.assess_kpi(_KpiArgs(kpi_id="KPI-07", status="not_applicable", summary="none"))
+        assert na.startswith("NOT RECORDED") and "app/service.py:1" in na
+        blind = mapped.assess_kpi(_KpiArgs(kpi_id="KPI-07", status="closed", summary="ok",
+                                           evidence=[EvidenceInput(file="app/main.py", line_start=1)]))
+        assert blind.startswith("NOT RECORDED")
+        checked = mapped.assess_kpi(_KpiArgs(kpi_id="KPI-07", status="closed", summary="generic message",
+                                             evidence=[EvidenceInput(file="app/service.py", line_start=1)]))
+        assert checked == "Assessed KPI-07 as closed."
+        assert "Assessed KPI-09" in mapped.assess_kpi(_KpiArgs(kpi_id="KPI-09", status="not_applicable", summary="n/a"))
+
     def test_module_imports_accepts_repository_paths(self, mapped):
         assert "app/service.py imported by: app/main.py" in mapped.module_imports("app/service.py", "imported_by")
         assert "app/main.py imports: app/service.py" in mapped.module_imports("app.main", "imports")

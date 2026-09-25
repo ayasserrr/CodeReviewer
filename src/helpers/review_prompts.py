@@ -206,6 +206,10 @@ Then call submit_verification exactly once per finding:
 - adjusted — real, but the severity is wrong (give adjusted_severity) and/or the
   title/impact needed correcting (give corrected_title / corrected_impact);
 - rejected — false, not a defect, or the evidence does not support it.
+Reject only when the CORE defect is absent. If the defect is real but a detail is wrong
+(a misnamed function, a wrong line, an overstated impact), keep it: adjust and pass
+corrected_title / corrected_impact describing what the code really does. Losing a
+real defect because the reviewer described it imperfectly is the worse error.
 Be fast: verify several findings in parallel (batch your reads). Do not record new
 findings. When every finding has a verdict, reply with one sentence.
 """
@@ -254,12 +258,29 @@ def specialist_prompt(config: ReviewConfig, category: ReviewCategory, brief: str
     return f"{SHARED_RULES}\n{brief}\n\n{role}"
 
 
-def kpi_prompt(config: ReviewConfig, category: ReviewCategory, brief: str) -> str:
+def _format_leads(leads: dict[str, list[str]] | None) -> str:
+    if not leads:
+        return ""
+    lines = [
+        "",
+        "## Leads found by the static tools and maps (you must check these)",
+        "A KPI with leads cannot be not_applicable, and closing it requires citing the lead",
+        "locations you checked (the tool enforces both).",
+    ]
+    for kpi_id in sorted(leads):
+        items = leads[kpi_id]
+        lines.append(f"- {kpi_id}: " + "; ".join(items[:12]) + (f"; ... {len(items) - 12} more" if len(items) > 12 else ""))
+    return "\n".join(lines) + "\n"
+
+
+def kpi_prompt(
+    config: ReviewConfig, category: ReviewCategory, brief: str, leads: dict[str, list[str]] | None = None
+) -> str:
     """The security KPI assessor — runs in parallel with its category's specialist."""
     role = _KPI_ROLE.format(
         title=category.title,
         code=category.code,
-        kpi_section=_KPI_SECTION.format(kpis=_format_kpis(config.security_kpis)),
+        kpi_section=_KPI_SECTION.format(kpis=_format_kpis(config.security_kpis)) + _format_leads(leads),
         remediation_section=_REMEDIATION_SECTION if config.review.include_remediation else "",
     )
     return f"{SHARED_RULES}\n{brief}\n\n{role}"

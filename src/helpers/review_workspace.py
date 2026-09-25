@@ -80,6 +80,7 @@ _ZERO_CALLERS_NOTE = (
 
 
 _MAX_MERGED_EVIDENCE = 25
+_LEAD_LINE_TOLERANCE = 15
 # High-signal bundled semgrep rules the security lane must rule on one by one.
 _SECURITY_LEAD_RULES: dict[str, str] = {
     "python-cors-wildcard-with-credentials": "CORS allows any origin with credentials",
@@ -827,8 +828,10 @@ class ReviewWorkspace:
                 groups.append((label, frozenset(f for f, _ in rows), [r for _, r in rows]))
 
         def static_rows(*rules: str) -> list[tuple[str, str]]:
+            # Keyed "file:line": a static lead is addressed only by a finding citing near
+            # that line, not by any finding in the same (often large) file.
             return [
-                (f.file, f"{f.file}:{f.line} ({f.category.rsplit('.', 1)[-1]})")
+                (f"{f.file}:{f.line}" if f.line else f.file, f"{f.file}:{f.line} ({f.category.rsplit('.', 1)[-1]})")
                 for f in self.static_by_id.values()
                 if f.category.rsplit(".", 1)[-1] in rules
             ]
@@ -925,9 +928,22 @@ class ReviewWorkspace:
 
     def unaddressed_leads(self, category_id: str) -> list[tuple[str, list[str]]]:
         mine = [f for f in self.findings.values() if f.category_id == category_id]
-        cited = {ref.file for f in mine for ref in f.evidence}
+        spans: dict[str, list[tuple[int, int]]] = defaultdict(list)
+        for f in mine:
+            for ref in f.evidence:
+                spans[ref.file].append((ref.line_start, ref.line_end or ref.line_start))
+
+        def addressed(key: str) -> bool:
+            file, sep, line = key.rpartition(":")
+            if sep and line.isdigit():
+                n = int(line)
+                return any(lo - _LEAD_LINE_TOLERANCE <= n <= hi + _LEAD_LINE_TOLERANCE for lo, hi in spans.get(file, ()))
+            return key in spans
+
         missing = [
-            (label, rows) for label, files, rows in self.lane_leads(category_id) if files and not files & cited
+            (label, rows)
+            for label, keys, rows in self.lane_leads(category_id)
+            if keys and not any(addressed(key) for key in keys)
         ]
         for label, mention in self._absence_leads(category_id):
             if not any(re.search(mention, f"{f.title} {f.description}") for f in mine):

@@ -95,3 +95,19 @@ def test_static_findings_inside_cited_lines_become_true_positives(workspace):
     assert ws.auto_triage_cited() == 1
     triaged = next(iter(ws.triage.values()))
     assert triaged.verdict == "true_positive" and triaged.reason.startswith("cited by reported finding SEC-")
+
+
+def test_static_lead_is_addressed_only_by_a_citation_near_its_line(workspace):
+    from utils import StaticFinding
+
+    ws = workspace
+    lock = StaticFinding.from_normalized("semgrep", {
+        "file": "app/services/cv_operations_service.py", "line": 700, "severity": "info",
+        "category": "src.assets.semgrep.python-claim-flag-or-lock", "message": "claim"})
+    ws.static_by_id[lock.id] = lock
+    label = "Work claims / locks / in-progress flags (semgrep)"
+    record(ws, "correctness", "Random IDs collide", "High", ("app/services/cv_operations_service.py", 100, 105))
+    assert label in [name for name, _ in ws.unaddressed_leads("correctness")]
+    record(ws, "correctness", "Screening lock is never released on failure", "High",
+           ("app/services/cv_operations_service.py", 690, 695))
+    assert label not in [name for name, _ in ws.unaddressed_leads("correctness")]

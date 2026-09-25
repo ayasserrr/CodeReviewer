@@ -111,3 +111,33 @@ def test_static_lead_is_addressed_only_by_a_citation_near_its_line(workspace):
     record(ws, "correctness", "Screening lock is never released on failure", "High",
            ("app/services/cv_operations_service.py", 690, 695))
     assert label not in [name for name, _ in ws.unaddressed_leads("correctness")]
+
+
+def test_severity_caps_for_latent_script_and_baseline_findings(workspace):
+    from helpers.review_maps import BASELINES
+
+    ws = workspace
+    ws.maps.unreachable = ["app/services/internal_vacancy_service.py", "src/utils/extract_docx_txt.py"]
+    ws.maps.orphan_scripts = ["src/utils/extract_docx_txt.py"]
+    ws.maps.absent_baselines = [b for b in BASELINES if b.id == "rate_limiting"]
+    latent = record(ws, "security", "SQL injection via LLM-generated SQL", "Critical",
+                    ("app/services/internal_vacancy_service.py", 10, 12))
+    script = record(ws, "observability", "Seed script prints admin passwords", "High",
+                    ("src/utils/extract_docx_txt.py", 5, 5))
+    baseline = record(ws, "auth", "No rate limiting on any route", "Critical", ("app/main.py", 1, 1))
+    live = record(ws, "security", "Client-asserted identity bypass", "Critical", ("app/routers/auth.py", 30, 30))
+    assert ws.apply_severity_caps() == 3
+    assert ws.findings[latent].severity == "High" and "latent" in ws.findings[latent].verification.note
+    assert ws.findings[script].severity == "Medium"
+    assert ws.findings[baseline].severity == "High"
+    assert ws.findings[live].severity == "Critical" and ws.findings[live].verification is None
+
+
+def test_untriaged_groups_only_when_coverage_is_low(workspace):
+    from helpers.review_workspace import _TriageRuleArgs
+
+    ws = workspace
+    assert ws.untriaged_groups("maintainability") == [("ruff", "E501", 1)]
+    ws.triage_rule(ws.config.category("maintainability"),
+                   _TriageRuleArgs(tool="ruff", rule="E501", verdict="low_value", reason="style"))
+    assert ws.untriaged_groups("maintainability") == []

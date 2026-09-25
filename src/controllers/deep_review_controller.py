@@ -43,6 +43,7 @@ from helpers import (
     build_chat_model,
     build_context_files,
     build_repo_brief,
+    build_inventory,
     build_review_maps,
     kpi_prompt,
     load_review_config,
@@ -61,6 +62,7 @@ from utils import (
     DependencyGraph,
     ExecutiveSummary,
     InvalidInputError,
+    MergedFinding,
     KpiAssessment,
     RepositoryManifest,
     ReviewCategory,
@@ -154,9 +156,10 @@ class DeepReviewController(BaseController):
 
         # Deterministic clean-up before synthesis: the same defect recorded by two lanes
         # is folded, and static findings a verified finding cites count as triaged.
+        capped = workspace.apply_severity_caps()
         folded = workspace.auto_fold_duplicates()
         cited = workspace.auto_triage_cited()
-        logger.info("deep_review_consolidated", folded_duplicates=folded, static_findings_triaged_by_citation=cited)
+        logger.info("deep_review_consolidated", severity_capped=capped, folded_duplicates=folded, static_findings_triaged_by_citation=cited)
 
         if workspace.findings:
             runs.append(await self._run_synthesizer(workspace, brief, files, repo_path))
@@ -225,21 +228,29 @@ class DeepReviewController(BaseController):
             )
         def nothing_recorded() -> str | None:
             recorded = any(f.category_id == category.id for f in workspace.findings.values())
-            if recorded or any(fid.startswith(f"{category.code}-") for fid in workspace.withdrawn):
-                missing = workspace.unaddressed_leads(category.id)
-                if not missing:
-                    return None
+            if not recorded and not any(fid.startswith(f"{category.code}-") for fid in workspace.withdrawn):
                 return (
-                    "Before you finish: none of your findings cites these mandatory lead groups. Check each one and "
-                    "record what is real (or reply why a group is not a defect):\n"
+                    f"You are stopping with NO findings recorded for {category.title}. Unless you have verified that "
+                    "this category genuinely does not apply to this repository, go back to your checklist and the "
+                    "relevant /_review/context/ tables, verify the issues you found, and record them with "
+                    "record_finding now. If it truly does not apply, reply with one sentence saying why."
+                )
+            parts = []
+            missing = workspace.unaddressed_leads(category.id)
+            if missing:
+                parts.append(
+                    "None of your findings cites these mandatory lead groups. Check each one and record what is "
+                    "real (or reply why a group is not a defect):\n"
                     + "\n".join(_format_lead_group(label, rows) for label, rows in missing)
                 )
-            return (
-                f"You are stopping with NO findings recorded for {category.title}. Unless you have verified that "
-                "this category genuinely does not apply to this repository, go back to your checklist and the "
-                "relevant /_review/context/ tables, verify the issues you found, and record them with "
-                "record_finding now. If it truly does not apply, reply with one sentence saying why."
-            )
+            untriaged = workspace.untriaged_groups(category.id)
+            if untriaged:
+                parts.append(
+                    "Static findings you own are still untriaged. Sample 2-3 instances per group with "
+                    "query_static_findings, then give each group one verdict with triage_static_rule:\n"
+                    + "\n".join(f"- {tool} {rule}: {count} untriaged" for tool, rule, count in untriaged[:15])
+                )
+            return ("Before you finish:\n\n" + "\n\n".join(parts)) if parts else None
 
         def kpis_unassessed() -> str | None:
             missing = [k.id for k in config.security_kpis if k.id not in workspace.kpis]
@@ -502,6 +513,14 @@ class DeepReviewController(BaseController):
             output_tokens=sum(r.output_tokens for r in runs),
         )
 
+        merged = []
+        for dup_id, primary in workspace.duplicates.items():
+            while primary in workspace.duplicates:
+                primary = workspace.duplicates[primary]
+            folded = workspace.findings.get(dup_id)
+            if folded is not None and primary in reported_ids:
+                merged.append(MergedFinding(id=dup_id, category_id=folded.category_id, title=folded.title, primary_id=primary))
+
         return DeepReviewReport(
             engine_version=self.config.DEEP_REVIEW_ENGINE_VERSION,
             repository_id=repository_id,
@@ -515,6 +534,8 @@ class DeepReviewController(BaseController):
             categories=config.enabled_categories,
             findings=tuple(findings),
             rejected_findings=tuple(workspace.rejected.values()),
+            merged_findings=tuple(sorted(merged, key=lambda m: m.id)),
+            inventory=build_inventory(workspace.maps),
             kpi_assessments=tuple(kpis),
             static_triage=tuple(workspace.triage.values()),
             static_summary=tuple(static_summary),

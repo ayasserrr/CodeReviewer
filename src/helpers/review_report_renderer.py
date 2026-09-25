@@ -157,7 +157,15 @@ def render_report(report: DeepReviewReport) -> str:
                 out.append("")
         findings = by_category.get(category.id, [])
         if not findings:
-            out.append("No findings in this category.")
+            merged_here = [m for m in report.merged_findings if m.category_id == category.id]
+            if merged_here:
+                out.append("This lane's findings were merged into related findings reported elsewhere:")
+                out.append("")
+                for m in merged_here:
+                    target = finding_numbers.get(m.primary_id)
+                    out.append(f"- {m.title} → see {target}" if target else f"- {m.title} → merged into {m.primary_id}")
+            else:
+                out.append("No findings in this category.")
             out.append("")
         for finding in findings:
             out.append(f"### [{finding.severity}] {finding_numbers[finding.id]} {finding.title}")
@@ -172,6 +180,14 @@ def render_report(report: DeepReviewReport) -> str:
             out.append(_evidence_line(finding))
             out.append("")
             out.append(_verification_line(finding))
+            out.append("")
+        merged_elsewhere = [
+            m for m in report.merged_findings
+            if m.category_id == category.id and findings and finding_numbers.get(m.primary_id, "").split(".")[0] != str(number)
+        ]
+        if merged_elsewhere:
+            out.append("*Also found by this lane and merged into related findings:* " + "; ".join(
+                f"{m.title} → {finding_numbers.get(m.primary_id, m.primary_id)}" for m in merged_elsewhere))
             out.append("")
         out.append("---")
         out.append("")
@@ -220,6 +236,26 @@ def render_report(report: DeepReviewReport) -> str:
         for index, cause in enumerate(summary.cross_cutting, start=1):
             out.append(f"{index}. **{cause.title}** {cause.explanation}{_refs(cause.finding_ids, finding_numbers)}")
         out.append("")
+        out.append("---")
+        out.append("")
+
+    # ---- deterministic inventory ------------------------------------------
+    if report.inventory:
+        out.append("## Appendix A. Inventory (static, complete — not model-generated)")
+        out.append("")
+        out.append(
+            "Exhaustive lists computed from the code itself (routes, imports, environment reads, frontend calls). "
+            "They back the findings above and list every instance, including ones the findings group together."
+        )
+        out.append("")
+        for item in report.inventory:
+            out.append(f"**{item.title}** ({len([r for r in item.rows if not r.startswith('... ')])}"
+                       f"{'+' if any(r.startswith('... ') for r in item.rows) else ''})")
+            if item.note:
+                out.append(f"*{item.note}*")
+            out.append("")
+            out.extend(f"- {row}" for row in item.rows)
+            out.append("")
         out.append("---")
         out.append("")
 

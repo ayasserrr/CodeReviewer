@@ -501,3 +501,61 @@ rules:
       - metavariable-regex:
           metavariable: $F
           regex: (?i)^(try_)?(mark|set|claim|acquire|start|begin)_?.*(in_progress|lock|locked|running|busy|processing)$
+
+  # ------------------------------------------------- architecture / LLM leads
+  - id: python-langgraph-compile-without-checkpointer
+    languages: [python]
+    severity: INFO
+    message: >-
+      A LangGraph graph is compiled without a checkpointer — conversation state is not persisted
+      between invocations. Check whether callers resend history; if not, every chat turn is stateless.
+    metadata: {category: llm, confidence: LOW}
+    patterns:
+      - pattern: $B.compile()
+      - pattern-inside: |
+          $B = StateGraph(...)
+          ...
+
+  - id: python-model-call-in-loop
+    languages: [python]
+    severity: INFO
+    message: >-
+      A model / embedding call inside a loop — latency and cost scale with the collection size.
+      Check whether the loop runs over a growing pool (every candidate, every document) on each request
+      or upload, whether results could be batched or cached, and whether it blocks the event loop.
+    metadata: {category: performance, confidence: LOW}
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              for $X in $Y:
+                  ...
+          - pattern-inside: |
+              async for $X in $Y:
+                  ...
+          - pattern-inside: |
+              [... for $X in $Y]
+      - pattern-either:
+          - pattern: $M.generate(...)
+          - pattern: $M.invoke(...)
+          - pattern: await $M.ainvoke(...)
+          - pattern: $M.predict(...)
+          - pattern: $M.encode(...)
+          - pattern: $M.embed_query(...)
+          - pattern: $M.embed_documents(...)
+          - pattern: $M.chat.completions.create(...)
+      - metavariable-regex:
+          metavariable: $M
+          regex: (?i).*(llm|model|client|chain|agent|embed|encoder|openai|watson|gemini|claude|gpt).*
+
+  - id: python-local-vector-store
+    languages: [python]
+    severity: INFO
+    message: >-
+      A vector store persisted to local disk — single-writer, per-machine state: two instances or workers
+      cannot share it safely, and it is lost with the container unless the path is on a volume.
+    metadata: {category: performance, confidence: LOW}
+    pattern-either:
+      - pattern: Chroma(..., persist_directory=$D, ...)
+      - pattern: chromadb.PersistentClient(...)
+      - pattern: FAISS.load_local(...)
+      - pattern: $F.save_local(...)

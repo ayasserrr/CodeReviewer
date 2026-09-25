@@ -301,6 +301,27 @@ class ReviewStatistics(BaseModel):
     output_tokens: int = 0
 
 
+class MergedFinding(BaseModel):
+    """A finding folded into another as the same defect — kept so its lane can point to it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    category_id: str
+    title: str
+    primary_id: str
+
+
+class InventorySection(BaseModel):
+    """One deterministic inventory list (from static maps, not the model)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    note: str = ""
+    rows: tuple[str, ...] = ()
+
+
 class DeepReviewReport(BaseModel):
     """The full, versioned, cacheable output of the Deep Review node."""
 
@@ -319,6 +340,8 @@ class DeepReviewReport(BaseModel):
     categories: tuple[ReviewCategory, ...] = Field(default_factory=tuple)
     findings: tuple[ReviewFinding, ...] = Field(default_factory=tuple)
     rejected_findings: tuple[ReviewFinding, ...] = Field(default_factory=tuple)
+    merged_findings: tuple[MergedFinding, ...] = Field(default_factory=tuple)
+    inventory: tuple[InventorySection, ...] = Field(default_factory=tuple)
     kpi_assessments: tuple[KpiAssessment, ...] = Field(default_factory=tuple)
     static_triage: tuple[StaticTriage, ...] = Field(default_factory=tuple)
     static_summary: tuple[StaticToolSummary, ...] = Field(default_factory=tuple)

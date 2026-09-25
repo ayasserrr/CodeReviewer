@@ -26,7 +26,9 @@ read the real code, trace the real data flow, and report only what is actually w
     diverge between modules, and every .env* file's key names/duplicates/flags;
   * client_calls.md — frontend API calls vs backend routes (calls with no route,
     routes no frontend code calls);
-  * reachability.md — Python modules no application entry point imports.
+  * reachability.md — Python modules no application entry point imports;
+  * architecture.md — process-local state, background jobs, queries that ignore the
+    caller's identity, frontend pages without an auth guard.
   Walk the tables relevant to your assignment row by row instead of rediscovering them
   with greps; then open the code to confirm each row you report (they are heuristics).
   The dependency-graph and static-analysis tools answer "where is X defined / who

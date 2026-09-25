@@ -47,7 +47,7 @@ from .rate_limiter import limiter
 from .review_agents import build_agent, build_chat_model, model_identity, run_agent
 from .review_config_loader import load_review_config, parse_review_config
 from .review_context import build_context_files, build_repo_brief
-from .review_maps import ReviewMaps, build_review_maps
+from .review_maps import ReviewMaps, build_inventory, build_review_maps
 from .review_persistence import (
     complete_review,
     compute_review_cache_key,
@@ -76,6 +76,7 @@ from .validators import validate_access_token, validate_gitlab_url, validate_rep
 __all__ = [
     "ReviewMaps",
     "build_review_maps",
+    "build_inventory",
     "PIPELINE_STAGES",
     "FRAMEWORK_REGISTRY",
     "IGNORED_DIR_NAMES",

@@ -80,6 +80,17 @@ _ZERO_CALLERS_NOTE = (
 
 
 _MAX_MERGED_EVIDENCE = 25
+
+
+def _is_script_or_test(path: str, scripts: set[str], unreachable: set[str]) -> bool:
+    """Tests, and scripts the running service never imports (a ``scripts/`` file the app calls is live code)."""
+    parts = PurePosixPath(path).parts
+    name = parts[-1]
+    is_test = (
+        any(p in ("tests", "test") for p in parts[:-1])
+        or name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
+    )
+    return is_test or path in scripts or ("scripts" in parts[:-1] and path in unreachable)
 _LEAD_LINE_TOLERANCE = 15
 # High-signal bundled semgrep rules the security lane must rule on one by one.
 _SECURITY_LEAD_RULES: dict[str, str] = {
@@ -846,6 +857,13 @@ class ReviewWorkspace:
             add("Upload filenames reaching filesystem paths (semgrep)", static_rows("python-upload-filename-path-traversal"))
             for rule, label in _SECURITY_LEAD_RULES.items():
                 add(f"{label} (semgrep {rule})", static_rows(rule))
+            add("Queries that receive the caller's identity but never use it (possible global data exposure)",
+                [(f"{x.file}:{x.line}", f"{x.function} ({x.file}:{x.line}) ignores {x.identity}")
+                 for x in self.maps.identity_unused])
+            add("Objects addressed by an id in the path with no verified user (IDOR / enumeration)",
+                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line}; {r.auth_label})")
+                 for r in routes if re.search(r"\{[^}]*(id|thread|key|name)[^}]*\}", r.path, re.I)
+                 and not r.user_token_verified and not r.is_auth_entry])
         elif category_id == "auth":
             add("Auth entry points (rate limiting, enumeration, OTP/reset flows)",
                 [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.is_auth_entry])
@@ -854,6 +872,8 @@ class ReviewWorkspace:
             add("Upload handlers (FILE UPLOAD routes)",
                 [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.accepts_upload])
         elif category_id == "frontend":
+            add("Pages rendered without an auth guard (the page must fetch before redirecting)",
+                [(f"{x.file}:{x.line}", f"{x.path} -> <{x.component}> ({x.file}:{x.line})") for x in self.maps.unguarded_routes])
             add("Frontend security hits (semgrep web rules)", [
                 (f.file, f"{f.file}:{f.line} ({f.category.rsplit('.', 1)[-1]})")
                 for f in self.static_by_id.values() if f.category.rsplit(".", 1)[-1].startswith("web-")
@@ -866,6 +886,10 @@ class ReviewWorkspace:
                                                          for c in self.maps.unmatched_client_calls()])
         elif category_id == "performance":
             add("Blocking calls inside async functions (semgrep)", static_rows("python-blocking-call-in-async-def"))
+            add("Process-local state (singletons, caches, flags, semaphores: one process only, lost on restart)",
+                [(f"{x.file}:{x.line}", f"{x.name} ({x.file}:{x.line}): {x.kind}") for x in self.maps.process_state])
+            add("Local on-disk vector stores (semgrep)", static_rows("python-local-vector-store"))
+            add("Model / embedding calls inside loops (semgrep)", static_rows("python-model-call-in-loop"))
         elif category_id == "correctness":
             entry_points = [(r.file, r.handler, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.accepts_upload]
             entry_points += [
@@ -884,10 +908,17 @@ class ReviewWorkspace:
             add("Values rewritten during extraction (semgrep)", static_rows("python-silent-value-substitution"))
             add("Random identifiers (semgrep)", static_rows("python-random-identifier"))
             add("Work claims / locks / in-progress flags (semgrep)", static_rows("python-claim-flag-or-lock"))
+        elif category_id == "llm":
+            add("LangGraph graphs compiled without a checkpointer (semgrep)",
+                static_rows("python-langgraph-compile-without-checkpointer"))
+            add("Model calls inside loops (semgrep)", static_rows("python-model-call-in-loop"))
         elif category_id == "maintainability":
             by_dir: dict[str, list[str]] = defaultdict(list)
             for path in self.maps.unreachable:
                 by_dir[str(PurePosixPath(path).parent)].append(path)
+            add("Backend routes no frontend code calls (dead or external-only endpoints)",
+                [(r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
+                 for r in self.maps.routes_without_client()])
             if by_dir:
                 groups.append((
                     "Modules no application root imports (dead-code candidates, by directory)",
@@ -925,6 +956,18 @@ class ReviewWorkspace:
             for b in self.maps.absent_baselines
             if b.lane == category_id
         ]
+
+    def untriaged_groups(self, category_id: str, threshold: float = 0.25) -> list[tuple[str, str, int]]:
+        """``(tool, rule, count)`` of untriaged static findings this category owns — empty when coverage is fine."""
+        owned = {t for t, owner in self.config.static_tool_owners.items() if owner == category_id}
+        mine = [f for f in self.static_by_id.values() if f.tool in owned]
+        if not mine:
+            return []
+        pending = [f for f in mine if f.id not in self.triage]
+        if len(pending) <= threshold * len(mine):
+            return []
+        groups = Counter((f.tool, f.category) for f in pending)
+        return [(tool, rule, count) for (tool, rule), count in groups.most_common()]
 
     def unaddressed_leads(self, category_id: str) -> list[tuple[str, list[str]]]:
         mine = [f for f in self.findings.values() if f.category_id == category_id]
@@ -1091,6 +1134,41 @@ class ReviewWorkspace:
             return overlap >= 0.15
         shares_file = bool({e.file for e in a.evidence} & {e.file for e in b.evidence})
         return shares_file and overlap >= 0.34
+
+    def apply_severity_caps(self) -> int:
+        """Deterministic severity ceilings the model is not trusted to apply on its own.
+
+        - every cited Python file is unreachable from the application roots -> latent, at most High;
+        - every cited file is a standalone script or a test -> at most Medium;
+        - the finding reports an absent production baseline (rate limiting, metrics, ...) -> at most High.
+        The cap and its reason are appended to the verification note, so the report shows why.
+        """
+        unreachable = set(self.maps.unreachable)
+        scripts = set(self.maps.orphan_scripts)
+        baselines = [b for b in self.maps.absent_baselines]
+        capped = 0
+        with self._lock:
+            for fid, finding in list(self.findings.items()):
+                files = {ref.file for ref in finding.evidence}
+                py_files = {f for f in files if f.endswith(".py")}
+                ceiling, reason = None, ""
+                if py_files and py_files == files and all(_is_script_or_test(f, scripts, unreachable) for f in files):
+                    ceiling, reason = "Medium", "only standalone scripts/tests are affected, not the running service"
+                elif py_files and py_files <= unreachable and py_files == files:
+                    ceiling, reason = "High", "latent — the cited code is not imported by any application entry point"
+                elif any(re.search(b.mention, finding.title) for b in baselines):
+                    ceiling, reason = "High", "missing production baseline"
+                if ceiling is None or SEVERITY_ORDER.index(finding.severity) >= SEVERITY_ORDER.index(ceiling):
+                    continue
+                note = f"Severity capped {finding.severity} → {ceiling}: {reason}."
+                verification = (
+                    finding.verification.model_copy(update={"note": f"{finding.verification.note} {note}".strip()})
+                    if finding.verification
+                    else Verification(verdict="adjusted", original_severity=finding.severity, note=note)
+                )
+                self.findings[fid] = finding.model_copy(update={"severity": ceiling, "verification": verification})
+                capped += 1
+        return capped
 
     def auto_fold_duplicates(self) -> int:
         """Fold findings that are the same defect recorded twice (overlapping citations + same key terms).

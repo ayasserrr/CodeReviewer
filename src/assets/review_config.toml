@@ -240,6 +240,12 @@ focus = """
   pool per upload, re-embedding or re-parsing the same content per item, reloading
   the same rows several times in one job.
 - Use the dependency graph's fan-in (most-called functions) to find hot paths.
+- architecture.md lists every piece of process-local state (singletons, caches,
+  semaphores, flags): together they decide whether the service can run more than
+  one instance/worker — report that as one architectural finding with every item.
+- For each background job, check whether one upload/request triggers work over the
+  WHOLE existing pool (re-scoring, re-embedding, reloading everything): that is
+  O(pool) per event and O(n^2) overall.
 """
 
 [[categories]]
@@ -255,7 +261,11 @@ it does not, record nothing and say "not applicable" in your final message.
   stateless? Report the real behavior; do not assume history "grows" without proof.
 - Token growth: whole histories or unbounded tool outputs resent every turn,
   no input/context guards, no per-user/session budget.
-- Usage/cost metadata discarded instead of logged/persisted.
+- Usage/cost metadata discarded instead of logged/persisted (e.g. the model
+  response's usage_metadata read nowhere), per-request token budgets absent.
+- The agent loop: how many rounds, is the whole message list re-sent each round,
+  are tool outputs size-bounded, are tool exceptions caught (or do they break the
+  stream with no error event)?
 - Model clients constructed at import time with network calls, missing
   timeouts/retries around model calls, no structured-output validation.
 - Prompt construction from untrusted input (hand off exploitable injection

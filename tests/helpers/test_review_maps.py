@@ -226,7 +226,7 @@ class TestImportsAndReachability:
 
 def test_context_files_and_brief(maps):
     files = render_context_files(maps)
-    assert set(files) == {"route_map.md", "env_map.md", "client_calls.md", "reachability.md"}
+    assert set(files) == {"route_map.md", "env_map.md", "client_calls.md", "reachability.md", "architecture.md"}
     assert "CLIENT-ASSERTED IDENTITY" in files["route_map.md"]
     brief = "\n".join(maps_brief(maps))
     assert "mounted sub-apps (/static/files)" in brief
@@ -256,3 +256,51 @@ def test_background_jobs_resolve_to_the_same_file_definition(tmp_path):
     jobs = {(j.function, j.file, j.line) for j in maps.background_jobs}
     assert ("_run", "svc/b.py", 2) in jobs and ("pipeline", "svc/b.py", 4) in jobs
     assert len([j for j in maps.background_jobs if j.function == "pipeline"]) == 1
+
+
+def test_architecture_detectors(tmp_path):
+    _write(tmp_path, "svc/state.py", (
+        "import asyncio, threading\n"
+        "_SEM = asyncio.Semaphore(3)\n"
+        "_CACHE = {}\n"
+        "_ALLOWED = {'a', 'b'}\n"
+        "_MODEL = None\n"
+        "def load():\n    global _MODEL\n    _MODEL = object()\n"
+        "def remember(k, v):\n    _CACHE[k] = v\n"
+    ))
+    _write(tmp_path, "svc/services.py", (
+        "def select(*a):\n    return a\n"
+        "class DirectoryService:\n"
+        "    def __init__(self, email, db):\n        self.email = email\n        self.db = db\n"
+        "    def list(self):\n        return self.db.execute(select('Application'))\n"
+        "class ScopedService:\n"
+        "    def __init__(self, email, db):\n        self.email = email\n        self.db = db\n"
+        "    def _authorized(self):\n        return self.email\n"
+        "    def list(self):\n        self._authorized()\n        return self.db.execute(select('Application'))\n"
+    ))
+    _write(tmp_path, "web/App.tsx", (
+        "<Routes>\n"
+        "  <Route path=\"/login\" element={<LoginPage />} />\n"
+        "  <Route path=\"/candidates\" element={<CandidatesPage />} />\n"
+        "  <Route path=\"/admin\" element={<AdminRoute><AdminPage /></AdminRoute>} />\n"
+        "  <Route path=\"/\" element={<Navigate to=\"/candidates\" />} />\n"
+        "</Routes>\n"
+    ))
+    files = []
+    for path in sorted(tmp_path.rglob("*")):
+        if path.is_file():
+            rel = path.relative_to(tmp_path).as_posix()
+            files.append(FileEntry(path=rel, language="Python" if rel.endswith(".py") else "TypeScript", size_bytes=1, lines=1))
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(files),
+    )
+    maps = build_review_maps(tmp_path, manifest)
+    assert {x.name for x in maps.process_state} == {"_SEM", "_CACHE", "_MODEL"}
+    assert [x.function for x in maps.identity_unused] == ["DirectoryService.list"]
+    assert [(x.path, x.component) for x in maps.unguarded_routes] == [("/candidates", "CandidatesPage")]
+    from helpers.review_maps import build_inventory
+
+    titles = [s.title for s in build_inventory(maps)]
+    assert "Queries that receive the caller's identity but never use it" in titles
+    assert "Frontend pages rendered without an auth guard" in titles

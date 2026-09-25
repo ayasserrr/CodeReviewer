@@ -40,7 +40,7 @@ from pathlib import Path, PurePosixPath
 from helpers.ast_analyzer import parse_quietly
 from helpers.fs_scanner import IGNORED_DIR_NAMES
 from system import get_logger
-from utils import RepositoryManifest
+from utils import InventorySection, RepositoryManifest
 
 logger = get_logger(__name__)
 
@@ -204,6 +204,36 @@ class BackgroundJob:
     started_at: str  # file:line of the call that schedules it
 
 
+@dataclass(frozen=True)
+class ProcessState:
+    """Module-level state that lives in one process (breaks horizontal scaling / restarts)."""
+
+    name: str
+    file: str
+    line: int
+    kind: str
+
+
+@dataclass(frozen=True)
+class IdentityUnused:
+    """A method/function that receives the caller's identity but queries without using it."""
+
+    function: str
+    file: str
+    line: int
+    identity: str
+
+
+@dataclass(frozen=True)
+class ClientRoute:
+    """A frontend route that renders a page without an auth guard wrapper."""
+
+    path: str
+    component: str
+    file: str
+    line: int
+
+
 @dataclass
 class ReviewMaps:
     routes: list[RouteInfo] = field(default_factory=list)
@@ -218,6 +248,9 @@ class ReviewMaps:
     orphan_scripts: list[str] = field(default_factory=list)
     absent_baselines: list["Baseline"] = field(default_factory=list)
     background_jobs: list["BackgroundJob"] = field(default_factory=list)
+    process_state: list["ProcessState"] = field(default_factory=list)
+    identity_unused: list["IdentityUnused"] = field(default_factory=list)
+    unguarded_routes: list["ClientRoute"] = field(default_factory=list)
 
     # -------------------------------------------------------------- derived
     def imported_by(self) -> dict[str, set[str]]:
@@ -973,6 +1006,129 @@ def _fill_imports(maps: ReviewMaps, files: list[_PyFile]) -> None:
     maps.import_edges, maps.import_roots = _build_import_graph(files)
     maps.app_roots, maps.unreachable, maps.orphan_scripts = _reachability(files, maps.import_edges)
     maps.background_jobs = _background_jobs(files)
+    maps.process_state = _process_state(files)
+    maps.identity_unused = _identity_unused(files)
+
+
+_SYNC_PRIMITIVES = frozenset({"Semaphore", "BoundedSemaphore", "Lock", "RLock", "Condition", "Event", "Queue",
+                              "PriorityQueue", "LifoQueue", "SimpleQueue"})
+_MUTATORS = frozenset({"append", "extend", "update", "setdefault", "add", "pop", "clear", "insert", "remove",
+                       "popitem", "discard", "put", "put_nowait"})
+_QUERY_CALLS = frozenset({"select", "query", "execute", "scalars", "filter", "filter_by", "find", "find_one",
+                          "get_collection", "similarity_search", "raw"})
+
+
+def _process_state(files: list[_PyFile]) -> list[ProcessState]:
+    """Module-level singletons, caches, flags and sync primitives mutated at runtime."""
+    found: list[ProcessState] = []
+    for py in files:
+        if _is_test_path(py.path):
+            continue
+        module_names: dict[str, tuple[int, ast.AST]] = {}
+        for node in py.tree.body:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+            value = getattr(node, "value", None)
+            for target in targets:
+                if isinstance(target, ast.Name) and value is not None:
+                    module_names[target.id] = (node.lineno, value)
+        if not module_names:
+            continue
+        declared_global: set[str] = set()
+        mutated: set[str] = set()
+        for node in ast.walk(py.tree):
+            if isinstance(node, ast.Global):
+                declared_global.update(node.names)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _MUTATORS:
+                if isinstance(node.func.value, ast.Name):
+                    mutated.add(node.func.value.id)
+            elif isinstance(node, (ast.Assign, ast.AugAssign)):
+                for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                    if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+                        mutated.add(target.value.id)
+        for name, (line, value) in module_names.items():
+            ctor = _dotted(value.func).split(".")[-1] if isinstance(value, ast.Call) else ""
+            if ctor in _SYNC_PRIMITIVES:
+                kind = f"in-process {ctor} (per worker, not shared across instances)"
+            elif name in declared_global:
+                kind = "module global reassigned at runtime (process-local singleton/flag)"
+            elif name in mutated and isinstance(value, (ast.Dict, ast.List, ast.Set)) or (
+                name in mutated and ctor in ("dict", "list", "set", "defaultdict", "OrderedDict", "deque")
+            ):
+                kind = "module-level cache/registry mutated at runtime (process-local, unbounded unless evicted)"
+            else:
+                continue
+            found.append(ProcessState(name, py.path, line, kind))
+    return found
+
+
+def _identity_unused(files: list[_PyFile]) -> list[IdentityUnused]:
+    """Code that takes the caller's identity and then queries WITHOUT it (possible global data exposure)."""
+    found: list[IdentityUnused] = []
+
+    def calls_query(node: ast.AST) -> bool:
+        return any(
+            isinstance(sub, ast.Call) and _dotted(sub.func).split(".")[-1] in _QUERY_CALLS for sub in ast.walk(node)
+        )
+
+    for py in files:
+        if _is_test_path(py.path):
+            continue
+        for cls in [n for n in ast.walk(py.tree) if isinstance(n, ast.ClassDef)]:
+            methods = {m.name: m for m in cls.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            init = methods.get("__init__")
+            if init is None:
+                continue
+            identity_attrs = set()
+            for sub in ast.walk(init):
+                if isinstance(sub, ast.Assign):
+                    for target in sub.targets:
+                        if (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+                                and target.value.id == "self" and _IDENTITY_NAME.search(target.attr)):
+                            identity_attrs.add(target.attr)
+            if not identity_attrs:
+                continue
+
+            def uses(method: ast.AST, attrs: set[str] = identity_attrs) -> set[str]:
+                direct = {
+                    sub.attr for sub in ast.walk(method)
+                    if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) and sub.value.id == "self"
+                }
+                return direct
+
+            uses_identity: dict[str, bool] = {
+                name: bool(uses(m) & identity_attrs) for name, m in methods.items() if name != "__init__"
+            }
+            changed = True
+            while changed:  # a method uses the identity if it calls a sibling that does
+                changed = False
+                for name, m in methods.items():
+                    if name == "__init__" or uses_identity.get(name):
+                        continue
+                    if any(uses_identity.get(attr) for attr in uses(m)):
+                        uses_identity[name] = changed = True
+            for name, method in methods.items():
+                if name == "__init__" or name.startswith("__") or uses_identity.get(name):
+                    continue
+                if calls_query(method):
+                    found.append(IdentityUnused(f"{cls.name}.{name}", py.path, method.lineno, "self." + "/".join(sorted(identity_attrs))))
+    return found
+
+
+def _unguarded_routes(sources: list[tuple[str, str]]) -> list[ClientRoute]:
+    """React Router routes whose element is a page rendered without any guard wrapper."""
+    found = []
+    pattern = re.compile(r"<Route\s+[^>]*?path=[\"']([^\"']+)[\"'][^>]*?element=\{\s*<([A-Z][A-Za-z0-9_.]*)")
+    guard = re.compile(r"(?i)(guard|protected|require|private|auth|admin|role)")
+    public = re.compile(r"(?i)(login|logout|register|signup|sign-up|forgot|reset|verify|otp|callback|public|^/?\*?$|404|not-found)")
+    for path, text in sources:
+        if not path.endswith((".tsx", ".jsx")):
+            continue
+        for match in pattern.finditer(text):
+            route, component = match.group(1), match.group(2)
+            if component in ("Navigate", "Redirect", "Outlet") or guard.search(component) or public.search(route):
+                continue
+            found.append(ClientRoute(route, component, path, text.count("\n", 0, match.start()) + 1))
+    return found
 
 
 def _background_jobs(files: list[_PyFile]) -> list[BackgroundJob]:
@@ -1030,6 +1186,7 @@ def _fill_env(maps: ReviewMaps, files, js_sources, repo_path: Path, inspect_real
 
 
 def _fill_client_calls(maps: ReviewMaps, js_sources) -> None:
+    maps.unguarded_routes = _unguarded_routes(js_sources)
     segments = {r.path.strip("/").split("/", 1)[0] for r in maps.routes} | {
         m.path.strip("/").split("/", 1)[0] for m in maps.mounts
     }
@@ -1222,10 +1379,71 @@ def maps_brief(maps: ReviewMaps) -> list[str]:
     return lines
 
 
+def render_architecture(maps: ReviewMaps) -> str:
+    lines = ["# Architecture signals (static)", ""]
+    lines.append(f"## Process-local state ({len(maps.process_state)}) — one process only, lost on restart/redeploy")
+    lines += [f"- {x.name} ({x.file}:{x.line}): {x.kind}" for x in maps.process_state] or ["- none"]
+    lines += ["", f"## Background jobs ({len(maps.background_jobs)})"]
+    lines += [f"- {j.function} ({j.file}:{j.line}) started at {j.started_at}" for j in maps.background_jobs] or ["- none"]
+    lines += ["", f"## Queries that receive the caller's identity but never use it ({len(maps.identity_unused)})"]
+    lines += [f"- {x.function} ({x.file}:{x.line}) ignores {x.identity}" for x in maps.identity_unused] or ["- none"]
+    lines += ["", f"## Frontend pages rendered without an auth guard ({len(maps.unguarded_routes)})"]
+    lines += [f"- {x.path} -> <{x.component}> ({x.file}:{x.line})" for x in maps.unguarded_routes] or ["- none"]
+    return "\n".join(lines)
+
+
 def render_context_files(maps: ReviewMaps) -> dict[str, str]:
     return {
+        "architecture.md": render_architecture(maps),
         "route_map.md": render_route_map(maps),
         "env_map.md": render_env_map(maps),
         "client_calls.md": render_client_calls(maps),
         "reachability.md": render_reachability(maps),
     }
+
+
+def build_inventory(maps: ReviewMaps, limit: int = 80) -> tuple[InventorySection, ...]:
+    """Deterministic lists for the report appendix — complete, not sampled by a model."""
+
+    def section(title: str, rows: list[str], note: str = "") -> InventorySection | None:
+        if not rows:
+            return None
+        extra = [f"... {len(rows) - limit} more"] if len(rows) > limit else []
+        return InventorySection(title=title, note=note, rows=tuple(rows[:limit] + extra))
+
+    unreachable_dirs: dict[str, list[str]] = defaultdict(list)
+    for path in maps.unreachable:
+        unreachable_dirs[str(PurePosixPath(path).parent)].append(PurePosixPath(path).name)
+    divergent = maps.env_divergent_defaults()
+    sections = [
+        section(
+            "Routes that take a user identity from the request without verifying it",
+            [f"`{r.method} {r.path}` — {', '.join(r.identity_inputs)} ({r.file}:{r.line}; {r.auth_label})"
+             for r in maps.routes if "CLIENT-ASSERTED IDENTITY" in r.flags],
+        ),
+        section(
+            "Queries that receive the caller's identity but never use it",
+            [f"`{x.function}` ignores {x.identity} ({x.file}:{x.line})" for x in maps.identity_unused],
+            "Each is either an intentional global listing or a data-exposure bug; the findings above say which.",
+        ),
+        section("Mounted sub-apps (no FastAPI dependency applies)",
+                [f"`{m.path}` -> {m.target} ({m.file}:{m.line})" for m in maps.mounts]),
+        section("Frontend pages rendered without an auth guard",
+                [f"`{x.path}` -> <{x.component}> ({x.file}:{x.line})" for x in maps.unguarded_routes]),
+        section("Frontend calls with no backend route",
+                [f"`{c.path}` ({c.file}:{c.line})" for c in maps.unmatched_client_calls()]),
+        section("Backend routes no frontend code calls (dead, or external/integration-only)",
+                [f"`{r.method} {r.path}` -> {r.handler} ({r.file}:{r.line})" for r in maps.routes_without_client()]),
+        section("Python modules no application entry point imports",
+                [f"{d}/ ({len(n)}): {', '.join(sorted(n))}" for d, n in sorted(unreachable_dirs.items())]),
+        section("Process-local state (single process, lost on restart)",
+                [f"`{x.name}` ({x.file}:{x.line}) — {x.kind}" for x in maps.process_state]),
+        section("Background jobs",
+                [f"`{j.function}` ({j.file}:{j.line}) started at {j.started_at}" for j in maps.background_jobs if j.file]),
+        section("Environment keys with different inline defaults in different places",
+                [f"`{key}`: " + "; ".join(f"{_display_default(r)} @ {r.file}:{r.line}" for r in reads)
+                 for key, reads in sorted(divergent.items())]),
+        section("Production baselines with no trace anywhere in the code",
+                [b.label for b in maps.absent_baselines]),
+    ]
+    return tuple(s for s in sections if s is not None)

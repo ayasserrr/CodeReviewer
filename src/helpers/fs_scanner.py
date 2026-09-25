@@ -68,6 +68,7 @@ IGNORED_DIR_NAMES = frozenset(
         "htmlcov",
         "site-packages",
         "cloned_repos",
+        ".grimp_cache",
     }
 )
 

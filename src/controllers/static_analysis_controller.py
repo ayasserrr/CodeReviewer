@@ -37,11 +37,28 @@ from collections.abc import Callable
 from typing import Any
 
 from controllers import BaseController
-from helpers import ToolExitCodeError, run_tool
+from helpers import (
+    IGNORED_DIR_NAMES,
+    ToolExitCodeError,
+    chunk_paths,
+    fits_one_command,
+    run_tool,
+)
 
 _VULTURE_LINE_PATTERN = re.compile(
     r"^(?P<file>.*?):(?P<line>\d+): (?P<message>.*?) \((?P<confidence>\d+)% confidence\)$"
 )
+
+
+def _run_chunked(files: list[str], run: Callable[[list[str]], dict[str, Any]]) -> dict[str, Any]:
+    """Run a per-file tool over command-line-sized chunks and concatenate its findings."""
+    findings: list[Any] = []
+    for chunk in chunk_paths(files):
+        result = run(chunk)
+        if result.get("status") != "success":
+            return result
+        findings.extend(result.get("findings") or [])
+    return {"status": "success", "findings": findings, "error": None}
 
 
 class StaticAnalysisController(BaseController):
@@ -51,18 +68,21 @@ class StaticAnalysisController(BaseController):
         if not files:
             return {"status": "success", "findings": [], "error": None}
 
-        command = ["ruff", "check", *files, "--output-format=json"]
+        options = ["--output-format=json"]
         if self.config.RUFF_CONFIG_PATH and os.path.isfile(self.config.RUFF_CONFIG_PATH):
-            command.append(f"--config={self.config.RUFF_CONFIG_PATH}")
+            options.append(f"--config={self.config.RUFF_CONFIG_PATH}")
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
             if result.returncode not in (0, 1):
                 raise ToolExitCodeError(f"ruff exited with unexpected code {result.returncode}: {result.stderr.strip()}")
             return {"findings": json.loads(result.stdout or "[]")}
 
-        return run_tool(
-            tool_binary="ruff", repo_path=repo_path, command=command,
-            timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, parse_output=parse,
+        return _run_chunked(
+            files,
+            lambda chunk: run_tool(
+                tool_binary="ruff", repo_path=repo_path, command=["ruff", "check", *chunk, *options],
+                timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, parse_output=parse,
+            ),
         )
 
     def run_pyright(self, repo_path: str, files: list[str]) -> dict[str, Any]:
@@ -72,17 +92,24 @@ class StaticAnalysisController(BaseController):
         command = ["pyright", "--outputjson"]
         if self.config.PYRIGHT_CONFIG_PATH and os.path.isfile(self.config.PYRIGHT_CONFIG_PATH):
             command.extend(["--project", self.config.PYRIGHT_CONFIG_PATH])
-        command.extend(files)
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
             # Deliberately not checking returncode: pyright's exit code
             # encodes the diagnostic count, not run success/failure.
             return {"data": json.loads(result.stdout or "{}")}
 
-        return run_tool(
-            tool_binary="pyright", repo_path=repo_path, command=command,
-            timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, parse_output=parse,
-        )
+        results = []
+        for chunk in chunk_paths(files):
+            result = run_tool(
+                tool_binary="pyright", repo_path=repo_path, command=[*command, *chunk],
+                timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, parse_output=parse,
+            )
+            if result["status"] != "success":
+                return result
+            results.append(result)
+        diagnostics = [d for r in results for d in (r.get("data") or {}).get("generalDiagnostics", [])]
+        data = {**(results[0].get("data") or {}), "generalDiagnostics": diagnostics}
+        return {"status": "success", "data": data, "error": None}
 
     def run_radon(self, repo_path: str, files: list[str]) -> dict[str, Any]:
         """Two subprocess calls (complexity, maintainability) merged under one try block."""
@@ -95,23 +122,21 @@ class StaticAnalysisController(BaseController):
 
         timeout = self.config.ANALYSIS_TIMEOUT_SECONDS
 
+        def radon(mode: str, chunk: list[str]) -> dict[str, Any]:
+            result = subprocess.run(
+                ["radon", mode, *chunk, "-j"],
+                cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            )
+            if result.returncode != 0:
+                raise ToolExitCodeError(f"radon {mode} exited with code {result.returncode}: {result.stderr.strip()}")
+            return json.loads(result.stdout or "{}")
+
         try:
-            cc_result = subprocess.run(
-                ["radon", "cc", *files, "-j"],
-                cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-            )
-            if cc_result.returncode != 0:
-                raise ToolExitCodeError(f"radon cc exited with code {cc_result.returncode}: {cc_result.stderr.strip()}")
-
-            mi_result = subprocess.run(
-                ["radon", "mi", *files, "-j"],
-                cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-            )
-            if mi_result.returncode != 0:
-                raise ToolExitCodeError(f"radon mi exited with code {mi_result.returncode}: {mi_result.stderr.strip()}")
-
-            complexity = json.loads(cc_result.stdout or "{}")
-            maintainability = json.loads(mi_result.stdout or "{}")
+            complexity: dict[str, Any] = {}
+            maintainability: dict[str, Any] = {}
+            for chunk in chunk_paths(files):
+                complexity.update(radon("cc", chunk))
+                maintainability.update(radon("mi", chunk))
             return {"status": "success", "data": {"complexity": complexity, "maintainability": maintainability}, "error": None}
         except subprocess.TimeoutExpired as exc:
             return {"status": "error", "findings": [], "error": f"timeout: {exc}"}
@@ -124,7 +149,14 @@ class StaticAnalysisController(BaseController):
         if not files:
             return {"status": "success", "findings": [], "error": None}
 
-        command = ["vulture", *files]
+        # Vulture judges "unused" across all files at once, so it is never chunked. When
+        # the list does not fit one command line, it scans the top-level directories that
+        # hold the files instead, excluding the same noise directories Discovery prunes.
+        if fits_one_command(files):
+            command = ["vulture", *files]
+        else:
+            roots = sorted({path.split("/", 1)[0] for path in files})
+            command = ["vulture", *roots, "--exclude", ",".join(sorted(IGNORED_DIR_NAMES))]
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
             if result.returncode not in (0, 3):
@@ -154,14 +186,32 @@ class StaticAnalysisController(BaseController):
 
         try:
             with tempfile.TemporaryDirectory() as output_dir:
-                subprocess.run(
-                    ["jscpd", *files, "--reporters", "json", "--output", output_dir, "--silent"],
+                # The file list goes through a config file, never the command line: on
+                # Windows (shell=True for the npm .cmd shim) cmd.exe caps a command at
+                # 8,191 characters, which a real repository's paths exceed, and jscpd
+                # then dies before writing a report. Paths are absolute because jscpd
+                # resolves config paths relative to the config file.
+                config_path = os.path.join(output_dir, "jscpd.json")
+                with open(config_path, "w", encoding="utf-8") as config_file:
+                    json.dump(
+                        {
+                            "path": [os.path.abspath(os.path.join(repo_path, f)) for f in files],
+                            "reporters": ["json"],
+                            "output": output_dir,
+                            "silent": True,
+                            "absolute": True,
+                        },
+                        config_file,
+                    )
+                result = subprocess.run(
+                    ["jscpd", "--config", config_path],
                     cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
                     timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"),
                 )
                 report_path = os.path.join(output_dir, "jscpd-report.json")
                 if not os.path.isfile(report_path):
-                    return {"status": "error", "findings": [], "error": "jscpd produced no report file (tool likely crashed)"}
+                    detail = (result.stderr or result.stdout or "").strip()[-300:]
+                    return {"status": "error", "findings": [], "error": f"jscpd produced no report file: {detail or 'no output'}"}
                 with open(report_path, encoding="utf-8") as f:
                     report = json.load(f)
             return {"status": "success", "findings": report.get("duplicates", []), "error": None}
@@ -181,13 +231,18 @@ class StaticAnalysisController(BaseController):
         if not os.path.isdir(repo_path):
             return {"status": "invalid_path", "findings": [], "error": None}
 
-        command = ["lizard", *files, "--csv"]
-
         try:
-            result = subprocess.run(
-                command, cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"),
-            )
+            # The file list goes through -f (a list file), never the command line — see run_jscpd.
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as list_file:
+                list_file.write("\n".join(files))
+            try:
+                result = subprocess.run(
+                    ["lizard", "-f", list_file.name, "--csv"],
+                    cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"),
+                )
+            finally:
+                os.unlink(list_file.name)
             findings = []
             for row in csv.reader(io.StringIO(result.stdout or "")):
                 if len(row) < 10:

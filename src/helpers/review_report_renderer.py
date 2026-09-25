@@ -193,6 +193,12 @@ def render_report(report: DeepReviewReport) -> str:
             f"{tool.low_value} | {tool.untriaged} |"
         )
     out.append("")
+    failed = [tool for tool in report.static_summary if tool.status != "success"]
+    if failed:
+        out.append("**Tools that did not run:** " + "; ".join(
+            f"`{tool.tool}` ({tool.status}: {(tool.error or 'no detail').replace('|', '/')})" for tool in failed
+        ))
+        out.append("")
     dismissed: dict[tuple[str, str], list[str]] = defaultdict(list)
     for triage in report.static_triage:
         if triage.verdict == "false_positive":

@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from controllers import BaseController
-from helpers import ToolExitCodeError, resolve_gitleaks_bin, run_tool
+from helpers import ToolExitCodeError, chunk_paths, resolve_gitleaks_bin, run_tool
 
 
 class SecurityEngineController(BaseController):
@@ -98,9 +98,9 @@ class SecurityEngineController(BaseController):
         if not files_to_analyze:
             return {"tool": "semgrep", "status": "success", "findings": [], "error": None}
 
-        command = [
+        base_command = [
             "semgrep", "scan", f"--config={self.config.SEMGREP_CONFIG}", "--json", "--quiet",
-            "--metrics=off", "--disable-version-check", "--", *files_to_analyze,
+            "--metrics=off", "--disable-version-check", "--",
         ]
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
@@ -111,10 +111,13 @@ class SecurityEngineController(BaseController):
             raw = json.loads(result.stdout or "{}")
             return {"findings": raw.get("results", [])}
 
-        outcome = run_tool(
-            tool_binary="semgrep", repo_path=local_repo_path, command=command,
-            timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
-            env={"SEMGREP_ENABLE_VERSION_CHECK": "0", "SEMGREP_SEND_METRICS": "off"},
+        outcome = _run_chunked(
+            files_to_analyze,
+            lambda chunk: run_tool(
+                tool_binary="semgrep", repo_path=local_repo_path, command=[*base_command, *chunk],
+                timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
+                env={"SEMGREP_ENABLE_VERSION_CHECK": "0", "SEMGREP_SEND_METRICS": "off"},
+            ),
         )
         outcome["tool"] = "semgrep"
         return outcome
@@ -125,7 +128,7 @@ class SecurityEngineController(BaseController):
         if not python_files:
             return {"tool": "bandit", "status": "success", "findings": [], "error": None}
 
-        command = ["bandit", "-q", "-f", "json", "--", *python_files]
+        base_command = ["bandit", "-q", "-f", "json", "--"]
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
             if result.returncode not in (0, 1):
@@ -136,9 +139,12 @@ class SecurityEngineController(BaseController):
             raw = json.loads(stdout[stdout.find("{"):] if "{" in stdout else "{}")
             return {"findings": raw.get("results", [])}
 
-        outcome = run_tool(
-            tool_binary="bandit", repo_path=local_repo_path, command=command,
-            timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
+        outcome = _run_chunked(
+            python_files,
+            lambda chunk: run_tool(
+                tool_binary="bandit", repo_path=local_repo_path, command=[*base_command, *chunk],
+                timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
+            ),
         )
         outcome["tool"] = "bandit"
         return outcome
@@ -182,6 +188,17 @@ class SecurityEngineController(BaseController):
         finally:
             with contextlib.suppress(OSError):
                 os.remove(report_path)
+
+
+def _run_chunked(files: list[str], run) -> dict[str, Any]:
+    """Run a per-file scanner over command-line-sized chunks and concatenate its findings."""
+    findings: list[Any] = []
+    for chunk in chunk_paths(files):
+        result = run(chunk)
+        if result.get("status") != "success":
+            return result
+        findings.extend(result.get("findings") or [])
+    return {"status": "success", "findings": findings, "error": None}
 
 
 def _semgrep_error_detail(result: subprocess.CompletedProcess) -> str:

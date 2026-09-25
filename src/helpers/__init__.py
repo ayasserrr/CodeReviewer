@@ -70,7 +70,7 @@ from .storage import (
     temporary_workspace,
 )
 from .tool_bootstrap import REQUIRED_TOOLS, resolve_gitleaks_bin, verify_tools_available
-from .tool_runner import ToolExitCodeError, run_tool
+from .tool_runner import ToolExitCodeError, chunk_paths, fits_one_command, run_tool
 from .validators import validate_access_token, validate_gitlab_url, validate_repo_id
 
 __all__ = [
@@ -143,6 +143,8 @@ __all__ = [
     "resolve_project",
     "run_agent",
     "run_tool",
+    "chunk_paths",
+    "fits_one_command",
     "save_dependency_graph",
     "save_manifest",
     "save_static_findings",

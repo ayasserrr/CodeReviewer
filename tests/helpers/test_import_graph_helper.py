@@ -101,3 +101,30 @@ class TestBuildImportGraphLive:
 
         pairs = {(e.module, e.imported) for e in edges}
         assert ("sample_pkg.a", "sample_pkg.b") in pairs
+
+
+def test_non_identifier_top_level_folder_is_an_import_root():
+    from datetime import UTC, datetime
+
+    from utils import DiscoveryStatistics, FileEntry, RepositoryManifest
+
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(
+            FileEntry(path=p, language="Python", size_bytes=1, lines=1)
+            for p in ("my-service/app/main.py", "my-service/src/util.py", "tools/x.py", "setup.py")
+        ),
+    )
+    assert discover_package_names(manifest) == ["my-service::app", "my-service::src", "tools"]
+
+
+def test_real_worker_resolves_packages_under_a_project_folder_without_writing_a_cache(tmp_path):
+    root = tmp_path / "my-service"
+    (root / "app").mkdir(parents=True)
+    (root / "app" / "__init__.py").write_text("")
+    (root / "app" / "main.py").write_text("from app import helpers\n")
+    (root / "app" / "helpers.py").write_text("X = 1\n")
+    edges = build_import_graph(tmp_path, ["my-service::app"], timeout=60)
+    assert ("app.main", "app.helpers") in {(e.module, e.imported) for e in edges}
+    assert not any(p.name == ".grimp_cache" for p in tmp_path.rglob("*"))

@@ -44,11 +44,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from controllers import SecurityEngineController, StaticAnalysisController
 from data.repositories import StaticFindingRepository
-from helpers import NORMALIZERS, save_static_findings, to_repo_relative_path, verify_tools_available
+from helpers import (
+    NORMALIZERS,
+    save_static_findings,
+    to_repo_relative_path,
+    verify_tools_available,
+)
 from system import get_logger
 from utils import RepositoryManifest, StaticFinding
 
 logger = get_logger(__name__)
+
+_NON_CODE = frozenset({"Markdown", "JSON", "YAML", "TOML"})
 
 
 async def analyze(
@@ -115,6 +122,9 @@ def _run_analysis_sync(
     repo_root = str(repo_path)
     python_files = [f.path for f in manifest.files if f.language == "Python"]
     all_source_files = [f.path for f in manifest.files if f.language is not None]
+    # Duplication and per-function complexity only mean something for code — docs and
+    # data files make jscpd report fragments like "README.md:text".
+    code_files = [f.path for f in manifest.files if f.language is not None and f.language not in _NON_CODE]
 
     # Track A: sequential. Python-only tools get python_files; the two
     # multi-language tools (duplication, per-function complexity) get every
@@ -124,8 +134,8 @@ def _run_analysis_sync(
         "pyright": python_files,
         "radon": python_files,
         "vulture": python_files,
-        "jscpd": all_source_files,
-        "lizard": all_source_files,
+        "jscpd": code_files,
+        "lizard": code_files,
     }
     for tool_name, run_method in static_controller.run_methods.items():
         result = _run_tool_safely(tool_name, run_method, repo_root, files_by_tool.get(tool_name, []))

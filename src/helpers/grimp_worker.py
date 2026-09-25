@@ -28,7 +28,20 @@ def main() -> int:
         print(json.dumps({"error": "no package names given"}), file=sys.stderr)
         return 2
 
-    sys.path.insert(0, repo_path)
+    # "root::package" entries name a package that lives under a sub-folder of the repo
+    # (a project folder that is not itself importable); that folder goes on sys.path.
+    roots: list[str] = [repo_path]
+    names: list[str] = []
+    for entry in package_names:
+        root, sep, name = entry.partition("::")
+        if sep:
+            roots.append(f"{repo_path}/{root}")
+            names.append(name)
+        else:
+            names.append(entry)
+    package_names = list(dict.fromkeys(names))
+    for root in reversed(roots):
+        sys.path.insert(0, root)
 
     try:
         import grimp
@@ -37,7 +50,8 @@ def main() -> int:
         return 3
 
     try:
-        graph = grimp.build_graph(*package_names)
+        # cache_dir=None: never write a .grimp_cache directory into the reviewed clone.
+        graph = grimp.build_graph(*package_names, cache_dir=None)
     except Exception as exc:  # noqa: BLE001 -- building the graph imports arbitrary target-repo code
         print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
         return 4

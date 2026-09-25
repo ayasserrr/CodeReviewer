@@ -451,6 +451,7 @@ class DeepReviewController(BaseController):
                 StaticToolSummary(
                     tool=tool,
                     status=str(workspace.tool_results.get(tool, {}).get("status", "unknown")),
+                    error=(str(workspace.tool_results.get(tool, {}).get("error") or "").strip()[:300] or None),
                     total=len(by_tool.get(tool, [])),
                     true_positive=verdicts["true_positive"],
                     false_positive=verdicts["false_positive"],

@@ -29,7 +29,10 @@ def discover_package_names(manifest: RepositoryManifest) -> list[str]:
     contains Python source.
 
     When a source root is the repo root itself (``"."``), each top-level
-    directory containing Python files is a candidate package. When a
+    directory containing Python files is a candidate package — unless its name
+    is not a valid identifier (``my-service/``): then it is treated as an
+    import root and the packages inside it are returned as ``"root::package"``
+    (the worker puts ``root`` on ``sys.path``). When a
     source root is a subdirectory (e.g. ``"src"``), that directory's own
     name is the package — it (or its parent) is what ends up on
     ``sys.path`` in ``grimp_worker.py``, exactly like every other file list
@@ -43,12 +46,26 @@ def discover_package_names(manifest: RepositoryManifest) -> list[str]:
     packages: set[str] = set()
     for source_root in manifest.statistics.source_roots:
         if source_root == ".":
-            top_level_dirs = {path.split("/", 1)[0] for path in python_paths if "/" in path}
-            packages.update(top_level_dirs)
+            for top in {path.split("/", 1)[0] for path in python_paths if "/" in path}:
+                if top.isidentifier():
+                    packages.add(top)
+                else:
+                    # Not importable itself (e.g. "billing-service/"): it is a project folder
+                    # whose importable packages sit one level down — ``root::package``.
+                    packages.update(_nested_packages(top, python_paths))
         else:
             packages.add(source_root.split("/", 1)[0])
 
     return sorted(packages)
+
+
+def _nested_packages(root: str, python_paths: set[str]) -> set[str]:
+    nested = set()
+    for path in python_paths:
+        parts = path.split("/")
+        if parts[0] == root and len(parts) >= 3 and parts[1].isidentifier():
+            nested.add(f"{root}::{parts[1]}")
+    return nested
 
 
 def build_import_graph(repo_path: Path, package_names: list[str], timeout: int) -> list[ImportEdge]:

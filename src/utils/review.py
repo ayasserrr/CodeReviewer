@@ -223,6 +223,7 @@ class StaticToolSummary(BaseModel):
 
     tool: str
     status: str
+    error: str | None = None
     total: int = 0
     true_positive: int = 0
     false_positive: int = 0

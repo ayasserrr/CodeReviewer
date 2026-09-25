@@ -90,3 +90,40 @@ def run_tool(
         return {"status": "error", "findings": [], "error": f"parse_error: {exc}"}
     except Exception as exc:
         return {"status": "error", "findings": [], "error": str(exc)}
+
+
+# A single command line is capped by the OS: cmd.exe (shell=True on Windows) at 8,191
+# characters, CreateProcess at 32,767. A real repository's file list blows through both
+# (≈450 paths), and the tool then fails before producing any output. Leave headroom for
+# the fixed part of the command.
+_ARGV_BUDGET_WINDOWS = 24_000
+_ARGV_BUDGET_WINDOWS_SHELL = 6_000
+_ARGV_BUDGET_POSIX = 500_000
+
+
+def argv_budget(*, shell: bool = False) -> int:
+    if os.name == "nt":
+        return _ARGV_BUDGET_WINDOWS_SHELL if shell else _ARGV_BUDGET_WINDOWS
+    return _ARGV_BUDGET_POSIX
+
+
+def chunk_paths(files: list[str], budget: int | None = None) -> list[list[str]]:
+    """Split ``files`` into batches whose joined length fits one command line."""
+    limit = budget if budget is not None else argv_budget()
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    size = 0
+    for path in files:
+        cost = len(path) + 3  # separator + possible quoting
+        if current and size + cost > limit:
+            chunks.append(current)
+            current, size = [], 0
+        current.append(path)
+        size += cost
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def fits_one_command(files: list[str], *, shell: bool = False) -> bool:
+    return sum(len(path) + 3 for path in files) <= argv_budget(shell=shell)

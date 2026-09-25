@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from unittest.mock import patch
 
@@ -253,9 +254,13 @@ class TestRunJscpd:
     def test_report_file_present_returns_success(self):
         controller = StaticAnalysisController()
 
+        seen = {}
+
         def fake_run(*args, **kwargs):
-            output_dir = args[0][args[0].index("--output") + 1]
-            with open(f"{output_dir}/jscpd-report.json", "w", encoding="utf-8") as f:
+            with open(args[0][args[0].index("--config") + 1], encoding="utf-8") as f:
+                config = json.load(f)
+            seen.update(config)
+            with open(f"{config['output']}/jscpd-report.json", "w", encoding="utf-8") as f:
                 json.dump({"duplicates": []}, f)
             return _completed(returncode=0)
 
@@ -265,6 +270,16 @@ class TestRunJscpd:
             result = controller.run_jscpd(".", ["a.py"])
         assert result["status"] == "success"
         assert result["findings"] == []
+        # Files travel in the config file (absolute), never on the command line.
+        assert seen["path"] == [os.path.abspath("a.py")] and seen["absolute"] is True
+
+    def test_missing_report_carries_the_tool_output(self):
+        controller = StaticAnalysisController()
+        with patch("shutil.which", return_value="/usr/bin/jscpd"), patch("os.path.isdir", return_value=True), patch(
+            "subprocess.run", return_value=_completed(returncode=1, stderr="The command line is too long.")
+        ):
+            result = controller.run_jscpd(".", ["a.py"])
+        assert "The command line is too long." in result["error"]
 
     def test_report_file_absent_after_crash_is_error(self):
         controller = StaticAnalysisController()
@@ -328,3 +343,48 @@ class TestRunMethods:
     def test_registry_has_all_six_tools(self):
         controller = StaticAnalysisController()
         assert set(controller.run_methods.keys()) == {"ruff", "pyright", "radon", "vulture", "jscpd", "lizard"}
+
+
+class TestLongFileLists:
+    def test_chunk_paths_respects_the_budget(self):
+        from helpers import chunk_paths
+
+        files = [f"pkg/module_{i:04d}.py" for i in range(1000)]
+        chunks = chunk_paths(files, budget=2_000)
+        assert [f for c in chunks for f in c] == files
+        assert all(sum(len(f) + 3 for f in c) <= 2_000 for c in chunks)
+
+    def test_ruff_runs_per_chunk_and_merges_findings(self):
+        controller = StaticAnalysisController()
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            files = [a for a in command if a.endswith(".py")]
+            return _completed(returncode=1, stdout=json.dumps([{"filename": f} for f in files]))
+
+        files = [f"pkg/m{i}.py" for i in range(10)]
+        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
+            "subprocess.run", side_effect=fake_run
+        ), patch("controllers.static_analysis_controller.chunk_paths", side_effect=lambda f: [f[:4], f[4:]]):
+            result = controller.run_ruff(".", files)
+        assert len(calls) == 2
+        assert [f["filename"] for f in result["findings"]] == files
+
+    def test_vulture_scans_directories_when_the_list_is_too_long(self):
+        controller = StaticAnalysisController()
+        with patch("shutil.which", return_value="/usr/bin/vulture"), patch("os.path.isdir", return_value=True), patch(
+            "subprocess.run", return_value=_completed(returncode=0)
+        ) as run, patch("controllers.static_analysis_controller.fits_one_command", return_value=False):
+            controller.run_vulture(".", ["app/a.py", "app/b.py", "lib/c.py"])
+        command = run.call_args.args[0]
+        assert command[:3] == ["vulture", "app", "lib"] and "--exclude" in command
+
+    def test_lizard_reads_the_file_list_from_a_file(self):
+        controller = StaticAnalysisController()
+        with patch("shutil.which", return_value="/usr/bin/lizard"), patch("os.path.isdir", return_value=True), patch(
+            "subprocess.run", return_value=_completed(returncode=0)
+        ) as run:
+            controller.run_lizard(".", ["a.py", "b.py"])
+        command = run.call_args.args[0]
+        assert command[:2] == ["lizard", "-f"] and "a.py" not in command

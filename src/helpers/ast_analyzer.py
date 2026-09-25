@@ -8,6 +8,7 @@ still classified and sized, just never AST-parsed.
 """
 
 import ast
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
@@ -37,6 +38,14 @@ class ParseOutcome:
     parse_error_message: str | None = None
     skipped_due_to_size: bool = False
     ast_timeout: bool = False
+
+
+def parse_quietly(source: str, filename: str = "<unknown>") -> ast.Module:
+    """``ast.parse`` without the reviewed code's own ``SyntaxWarning``s (e.g. invalid
+    escape sequences) — they are the target repository's lint, not our logs' business."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        return ast.parse(source, filename=filename)
 
 
 def parse_file_ast(path: Path, max_size_mb: float, timeout_ms: int) -> ParseOutcome:
@@ -81,7 +90,7 @@ def parse_file_ast(path: Path, max_size_mb: float, timeout_ms: int) -> ParseOutc
     else:
         lines = source.count("\n") + 1  # last line has no trailing newline but still counts
 
-    future = _AST_EXECUTOR.submit(ast.parse, source, filename=str(path))
+    future = _AST_EXECUTOR.submit(parse_quietly, source, str(path))
     try:
         tree = future.result(timeout=timeout_ms / 1000)
     except FutureTimeoutError:

@@ -8,7 +8,13 @@ import pytest
 from config import settings
 from helpers.review_config_loader import load_review_config
 from helpers.review_workspace import EvidenceInput, ReviewWorkspace, _RecordFindingArgs
-from utils import DependencyGraph, DiscoveryStatistics, FileEntry, RepositoryManifest, StaticFinding
+from utils import (
+    DependencyGraph,
+    DiscoveryStatistics,
+    FileEntry,
+    RepositoryManifest,
+    StaticFinding,
+)
 
 FILES = {
     "app/main.py": 120,
@@ -131,6 +137,20 @@ def test_severity_caps_for_latent_script_and_baseline_findings(workspace):
     assert ws.findings[script].severity == "Medium"
     assert ws.findings[baseline].severity == "High"
     assert ws.findings[live].severity == "Critical" and ws.findings[live].verification is None
+
+
+def test_hardening_findings_are_capped_but_known_exploits_are_not(workspace):
+    ws = workspace
+    ws.maps.absent_baselines = []
+    cors = record(ws, "security", "CORS wildcard origin with credentials allowed", "Critical", ("app/main.py", 20, 22))
+    pins = record(ws, "dependencies", "Unsafe Hugging Face model downloads without revision pinning", "Critical",
+                  ("app/main.py", 40, 40))
+    cve = record(ws, "dependencies", "Unpinned torch with known vulnerability CVE-2025-32434 (RCE)", "Critical",
+                 ("app/main.py", 50, 50))
+    assert ws.apply_severity_caps() == 2
+    assert ws.findings[cors].severity == "High" and "hardening" in ws.findings[cors].verification.note
+    assert ws.findings[pins].severity == "High"
+    assert ws.findings[cve].severity == "Critical"
 
 
 def test_untriaged_groups_only_when_coverage_is_low(workspace):

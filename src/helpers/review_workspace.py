@@ -80,6 +80,12 @@ _ZERO_CALLERS_NOTE = (
 
 
 _MAX_MERGED_EVIDENCE = 25
+# Hardening and hygiene classes: real, but a missing layer of defence rather than an exploit on its own.
+_HARDENING_TITLE = re.compile(
+    r"(?i)\b(cors|unpinned|pinn(ed|ing)|revision|security headers?|hsts|content-security-policy|csp|"
+    r"swagger|openapi|lockfile|version constraints?)\b"
+)
+_EXPLOIT_TITLE = re.compile(r"(?i)\b(cve-\d+|rce|remote code|code execution|known vulnerab\w*)\b")
 
 
 def _is_script_or_test(path: str, scripts: set[str], unreachable: set[str]) -> bool:
@@ -1166,6 +1172,8 @@ class ReviewWorkspace:
                     ceiling, reason = "High", "latent — the cited code is not imported by any application entry point"
                 elif any(re.search(b.mention, finding.title) for b in baselines):
                     ceiling, reason = "High", "missing production baseline"
+                elif _HARDENING_TITLE.search(finding.title) and not _EXPLOIT_TITLE.search(finding.title):
+                    ceiling, reason = "High", "configuration hardening / supply-chain hygiene, not a direct exploit"
                 if ceiling is None or SEVERITY_ORDER.index(finding.severity) >= SEVERITY_ORDER.index(ceiling):
                     continue
                 note = f"Severity capped {finding.severity} → {ceiling}: {reason}."

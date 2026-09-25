@@ -81,8 +81,9 @@ class TestCloneRepositoryMocked:
             stderr="remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://gitlab.example.com/x'",
         )
         with patch("subprocess.run", return_value=fake_result):
-            with pytest.raises(AuthenticationError):
+            with pytest.raises(AuthenticationError) as exc_info:
                 clone_repository("https://gitlab.example.com", "group/project", "main", "token", dest, 30)
+        assert "HTTP Basic: Access denied" in str(exc_info.value)
 
     def test_generic_failure_raises_network_error(self, tmp_path: Path):
         dest = tmp_path / "clone-dest"

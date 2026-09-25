@@ -118,7 +118,7 @@ def clone_repository(
     if result.returncode != 0:
         stderr = _redact(result.stderr.strip(), access_token)
         if _looks_like_auth_failure(stderr):
-            raise AuthenticationError("git clone authentication failed")
+            raise AuthenticationError(f"git clone authentication failed: {stderr[-300:]}")
         raise NetworkError(f"git clone failed: {stderr}")
 
 

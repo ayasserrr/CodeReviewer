@@ -138,4 +138,15 @@ async def disk_error_handler(request: Request, exc: DiskError) -> JSONResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=settings.DEBUG)
+    # Auto-reload watches only this app's code: cloning a reviewed repository writes
+    # hundreds of .py files under cloned_repos/, and a reload mid-review would kill the
+    # running pipeline (its background task dies with the old process).
+    root = Path(__file__).resolve().parent
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.DEBUG,
+        reload_dirs=[str(root / "src")] if settings.DEBUG else None,
+        reload_includes=["*.py", "*.toml", "*.yml"] if settings.DEBUG else None,
+    )

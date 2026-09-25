@@ -32,6 +32,52 @@ Every stage after Ingest is cached by content hash (commit SHA + engine/schema v
 review config's hash for Deep Review) — an unchanged repository at the same commit skips
 straight to the cached result instead of re-running.
 
+## Project structure
+
+```text
+CodeReviewer/
+├── main.py                  # FastAPI entry point (uv run main.py / uvicorn main:app)
+├── pyproject.toml           # Python deps (uv) — dev / analysis-tools dependency groups
+├── alembic.ini              # Migration runner config (points at src/data/alembic)
+├── .env.example             # Every setting, documented — copy to .env.<APP_ENV>
+├── .env.testing             # Committed dummy values so `pytest`/CI need zero secrets
+│
+├── src/                     # Backend — everything importable as top-level packages
+│   ├── api/v1/               # FastAPI routers (auth, ingestion, repositories, reviews)
+│   ├── config/                # Settings (pydantic-settings) — one Settings object, one source of truth
+│   ├── graph/                 # The LangGraph pipeline: state.py, workflow.py (node wiring), runner.py (background execution)
+│   ├── nodes/                  # One thin LangGraph node per pipeline stage — adapts graph state in/out only
+│   ├── controllers/             # Per-stage orchestration logic (what each node actually calls)
+│   ├── helpers/                  # Stateless logic: git ops, tool subprocess runners, review agents/prompts/maps, caching
+│   ├── services/                  # Cross-cutting orchestration above controllers (e.g. static_analysis.py runs both tool tracks)
+│   ├── data/
+│   │   ├── models/                  # SQLAlchemy ORM models
+│   │   ├── repositories/            # DB access layer, one per table, query methods only
+│   │   ├── schemas/                 # Pydantic request/response DTOs (decoupled from ORM)
+│   │   └── alembic/versions/        # Migration history
+│   ├── security/                   # Password hashing, JWT issuance/verification
+│   ├── enums/                      # Shared string enums (ReviewStatus, SourceType, ...)
+│   ├── utils/                       # Pydantic domain models shared across layers (DeepReviewReport, DependencyGraph, ...) + exceptions
+│   ├── system/                       # Structlog setup
+│   └── assets/                       # Bundled config every scanned repo gets: ruff.toml, pyrightconfig.json,
+│                                       review_config.toml, semgrep/*.yml rulesets, gitleaks.exe
+│
+├── frontend/                # React 19 + TypeScript SPA (Vite)
+│   └── src/
+│       ├── api/                # Typed fetch client (client.ts), API response types, GitLab-session storage
+│       ├── auth/                # AuthContext — token refresh, current-user state
+│       ├── components/           # Layout (navbar), PipelineTracker, ReportView, Markdown, shared UI primitives
+│       ├── pages/                  # One component per route (Dashboard, Repositories, Reviews, NewReview, ...)
+│       ├── lib/                     # Formatting helpers, polling hook
+│       └── styles/global.css         # The entire design system: tokens, layout, components — one file, no CSS-in-JS
+│
+└── tests/                   # Mirrors src/'s layout 1:1 (tests/helpers/, tests/controllers/, tests/api/, ...)
+```
+
+The rule of thumb through `src/`: **nodes** are thin (graph-state in/out only), **controllers** hold the actual
+per-stage logic, **helpers** are stateless building blocks controllers compose, and **data/** is the only layer
+allowed to touch the database. A node never calls a repository directly — it goes through its controller.
+
 ### The deep-review agents
 
 One specialist agent per enabled category in `src/assets/review_config.toml` (security,

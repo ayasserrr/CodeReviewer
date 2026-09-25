@@ -135,7 +135,7 @@ function Overview({ report, onOpenFinding }: { report: DeepReviewReport; onOpenF
           <ol style={{ margin: 0, padding: "6px 20px 12px", listStyle: "none", display: "grid" }}>
             {report.summary.priority_order.map((item, i) => (
               <li key={i} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 12, padding: "12px 0", borderBottom: i < report.summary.priority_order.length - 1 ? "1px solid var(--border-soft)" : 0 }}>
-                <span style={{ width: 26, height: 26, borderRadius: 7, background: i === 0 ? "var(--accent)" : "var(--surface-3)", color: "#fff", display: "grid", placeItems: "center", fontWeight: 700, fontSize: 12.5 }}>{i + 1}</span>
+                <span style={{ width: 26, height: 26, borderRadius: 7, background: i === 0 ? "var(--accent)" : "var(--surface-3)", color: i === 0 ? "#fff" : "var(--text-strong)", display: "grid", placeItems: "center", fontWeight: 700, fontSize: 12.5 }}>{i + 1}</span>
                 <div className="stack" style={{ gap: 6 }}>
                   <span className="strong">{item.title}</span>
                   <span className="muted-2 small">{item.rationale}</span>
@@ -265,8 +265,8 @@ function FindingCard({ finding, number, defaultOpen }: { finding: Finding; numbe
           <span className="muted small truncate mono">{finding.evidence.map((e) => loc(e)).join("  ·  ")}</span>
         </span>
         <span className="row finding-meta" style={{ gap: 8 }}>
-          {v?.verdict === "confirmed" && <Badge color="var(--ok)"><Icon name="check" size={12} />Verified</Badge>}
-          {v?.verdict === "adjusted" && <Badge color="var(--warn)">Re-rated from {v.original_severity}</Badge>}
+          {v?.verdict === "confirmed" && <Badge color="var(--ok)"><Icon name="check" size={12} style={{ color: "var(--ok)" }} />Verified</Badge>}
+          {v?.verdict === "adjusted" && <Badge color="var(--warn)"><span className="dot" style={{ color: "var(--warn)" }} />Re-rated from {v.original_severity}</Badge>}
           {finding.kpi_ids.map((k) => <Badge key={k}><Icon name="shield" size={12} />{k}</Badge>)}
           <Icon name="chevron" size={16} style={{ color: "var(--muted)", transform: open ? "rotate(90deg)" : undefined, transition: "transform .15s" }} />
         </span>
@@ -360,7 +360,7 @@ function Kpis({ report, onOpenFinding }: { report: DeepReviewReport; onOpenFindi
 const TRIAGE_SEGMENTS: { key: keyof StaticToolSummary; label: string; color: string }[] = [
   { key: "true_positive", label: "Real issue", color: "var(--sev-high)" },
   { key: "false_positive", label: "False positive", color: "var(--muted-2)" },
-  { key: "low_value", label: "Low value", color: "#555" },
+  { key: "low_value", label: "Low value", color: "var(--muted)" },
   { key: "untriaged", label: "Not triaged", color: "var(--surface-3)" },
 ];
 
@@ -401,7 +401,9 @@ function StaticAnalysis({ report }: { report: DeepReviewReport }) {
             {tools.map((t) => (
               <tr key={t.tool}>
                 <td className="strong mono">{t.tool}</td>
-                <td>{t.status === "success" ? <Badge color="var(--ok)">ran</Badge> : <Badge color="var(--warn)">{t.status}</Badge>}</td>
+                <td>{t.status === "success"
+                  ? <Badge color="var(--ok)"><span className="dot" style={{ color: "var(--ok)" }} />ran</Badge>
+                  : <Badge color="var(--warn)"><span className="dot" style={{ color: "var(--warn)" }} />{t.status}</Badge>}</td>
                 <td>
                   {t.total ? (
                     <div style={{ display: "flex", gap: 2, height: 8 }}>

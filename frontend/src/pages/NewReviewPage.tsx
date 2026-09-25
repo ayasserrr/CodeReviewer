@@ -91,7 +91,7 @@ export function NewReviewPage() {
               </li>
             ))}
           </ol>
-          <p className="muted small">Typically 5–10 minutes. You can leave the page — the review keeps running.</p>
+          <p className="muted small">You can leave the page — the review keeps running in the background.</p>
         </div>
       </div>
     </div>

@@ -24,6 +24,8 @@ const PATHS: Record<string, string> = {
   branch: "M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9",
   bolt: "M13 2L4 14h7l-1 8 9-12h-7z",
   layers: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
+  sun: "M12 3v2M12 19v2M5 5l1.5 1.5M17.5 17.5L19 19M3 12h2M19 12h2M5 19l1.5-1.5M17.5 6.5L19 5M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+  moon: "M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z",
 };
 
 export function Icon({ name, size = 16, style }: { name: keyof typeof PATHS | string; size?: number; style?: CSSProperties }) {
@@ -46,9 +48,12 @@ export function Logo({ size = 18 }: { size?: number }) {
 
 // ---- badges -----------------------------------------------------------------
 
+// Color rides the dot/icon only, never the label text — a pale ordinal step
+// (e.g. severity "Low") can fail text contrast on a light surface even though
+// it's a perfectly good mark color. Text always stays in a fixed ink token.
 export function Badge({ color, children, title }: { color?: string; children: ReactNode; title?: string }) {
   return (
-    <span className="badge" title={title} style={color ? { color, borderColor: `color-mix(in srgb, ${color} 40%, transparent)` } : undefined}>
+    <span className="badge" title={title} style={color ? { borderColor: `color-mix(in srgb, ${color} 40%, transparent)` } : undefined}>
       {children}
     </span>
   );
@@ -57,7 +62,7 @@ export function Badge({ color, children, title }: { color?: string; children: Re
 export function SeverityBadge({ severity }: { severity: Severity }) {
   return (
     <Badge color={SEVERITY_COLOR[severity]}>
-      <span className="dot" />
+      <span className="dot" style={{ color: SEVERITY_COLOR[severity] }} />
       {severity}
     </Badge>
   );
@@ -65,9 +70,10 @@ export function SeverityBadge({ severity }: { severity: Severity }) {
 
 export function StatusBadge({ status }: { status: ReviewStatus }) {
   const meta = STATUS_META[status];
+  const dotClass = status === "running" || status === "pending" ? "dot pulse" : "dot";
   return (
     <Badge color={meta.color}>
-      {status === "running" || status === "pending" ? <span className="dot pulse" /> : <span className="dot" />}
+      <span className={dotClass} style={{ color: meta.color }} />
       {meta.label}
     </Badge>
   );
@@ -77,7 +83,7 @@ export function KpiBadge({ status }: { status: KpiStatus }) {
   const meta = KPI_STATUS[status];
   return (
     <Badge color={meta.color}>
-      <span aria-hidden="true" style={{ fontWeight: 800 }}>{meta.icon}</span>
+      <span aria-hidden="true" style={{ fontWeight: 800, color: meta.color }}>{meta.icon}</span>
       {meta.label}
     </Badge>
   );

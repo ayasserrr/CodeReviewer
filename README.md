@@ -6,6 +6,10 @@ scans), then runs a multi-agent LLM review that reads the real code, verifies it
 and produces a findings-based engineering review — evidence-cited, severity-rated, false
 positives triaged out.
 
+> **Architecture & design decisions:** see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the agents are designed,
+> how context is managed, how static analysis and the dependency graph were improved, how quality is measured,
+> and every issue we hit and how it was solved.
+
 ## Pipeline
 
 One [LangGraph](https://github.com/langchain-ai/langgraph) graph, five stages, each a thin node

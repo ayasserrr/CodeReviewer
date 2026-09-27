@@ -478,7 +478,16 @@ Agents triage per **(tool, rule)** group with `triage_static_rule` after samplin
 report shows per-tool counts of true positives, false positives, low value and
 untriaged, and the most common dismissal reasons.
 
-### 9.5 Report rendering is code, not a model
+### 9.5 Coverage accounting
+Every report ends with a computed **Review coverage** table: files discovered
+(every folder walked except dependency/build/VCS/cache directories), the files
+handed to the Python tools and to the cross-language tools, the Python files in
+the dependency graph (any file that failed to parse is named), and the source
+files the agents opened directly, with the least-opened areas listed.
+Time-budget hits, failed tools and unreadable directories appear as coverage
+warnings. This answers "did it really look at everything?" with numbers.
+
+### 9.6 Report rendering is code, not a model
 `helpers/review_report_renderer.py` renders the markdown from structured data:
 priority order, KPI checklist, one numbered section per category, static
 triage table, cross-cutting root causes, and:
@@ -657,7 +666,19 @@ grimp not finding nested projects and writing into the clone, SyntaxWarning nois
 | 27 | Report could still "forget" instances | Appendix A: complete static inventory |
 | 28 | "severity adjusted High → High" wording | Rendered as "confirmed" when the severity didn't change |
 
-### 13.5 Frontend (our UI)
+### 13.5 Found on a real Windows run (engine 1.9.0 fixes)
+
+| # | Issue | Root cause | Fix |
+|---|---|---|---|
+| 29 | Folders next to `src/`/`app/` (e.g. `frontend/`, `tests/`, `scripts/`) were **never reviewed** | Discovery walked only recognized source roots when one existed at the repository root | Discovery walks every folder, pruning only dependency/build/VCS/cache directories |
+| 30 | Files after discovery's time budget were **dropped** | The loop stopped (`break`) when the budget ran out | Every remaining file is still listed (only per-file AST work is skipped); a partial scan is never cached |
+| 31 | Static findings saved under **another repository's id** | Discovery/graph caches are keyed by commit, and a cached manifest kept the id of the record that produced it | Cached manifests and graphs are rebound to the requesting repository |
+| 32 | Security agent **timed out** (87 calls on a 60-call budget, 900 s) | Each resume started a fresh run, resetting the per-run call counter; the wrap-up notice only watched calls, not time | One budget object shared across resumes (+12 calls when a completion check sends the agent back), wrap-up notice at 20% of the time left, resumes skipped when too little time remains |
+| 33 | Deep review took 21.5 min | Heavy lanes queued behind light ones for the 6 agent slots | Longest-first scheduling (`effort` per lane in the config): 12.2 min on the same repository |
+| 34 | Maintainability agent spent its budget on 1,209 whitespace findings | Formatting-only lint (whitespace, blank lines, line length, import order) needed manual triage | Auto-triaged as low value before the agents start; counts stay in the report |
+| 35 | No proof that every file was covered | Coverage was not reported | A computed **Review coverage** section: files discovered, files given to each tool, Python files in the dependency graph (misses named), source files opened by agents, and any time-budget or tool warnings |
+
+### 13.6 Frontend (our UI)
 
 | Issue | Fix |
 |---|---|

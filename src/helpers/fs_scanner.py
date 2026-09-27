@@ -182,19 +182,13 @@ def targeted_deep_traversal(
     repo_path: Path,
     timeout_seconds: float,
 ) -> TraversalResult:
-    """Step 1.2: walk the repo, recursing deeply only into the identified source roots.
+    """Step 1.2: walk the whole repository, pruning only ``IGNORED_DIR_NAMES`` at any depth.
 
-    A single walk from ``repo_path``: at the root level, only descend into
-    directories that are recognized source roots (everything else —
-    ``docs/``, ``scripts/``, heavy asset dirs, ...) is pruned there and never
-    visited. Root-level *files* are always kept though (not just pruned
-    directories) — a repo's actual entrypoint (``main.py``, ``manage.py``)
-    very commonly sits next to ``src/`` rather than inside it, and losing
-    that would defeat the point of entrypoint detection. Once traversal
-    descends into a source root, it recurses freely (still pruning heavy/
-    irrelevant directory names at any depth). If no recognized source root
-    was found, ``source_roots`` is just ``[repo_path]`` and this walks the
-    whole tree.
+    Every file a reviewer could care about is kept — backend, frontend, tests,
+    scripts, deployment files, root-level entrypoints. ``source_roots`` (from
+    ``rapid_surface_scan``) is informational only (reported on the manifest);
+    it no longer restricts the walk, because a repository with ``src/`` next to
+    ``frontend/`` or ``tests/`` used to lose everything outside ``src/``.
 
     Args:
         source_roots: Directories to prioritize (from ``rapid_surface_scan``).
@@ -212,7 +206,6 @@ def targeted_deep_traversal(
     start = time.monotonic()
     result = TraversalResult()
     repo_root = repo_path.resolve()
-    source_root_names = {root.resolve().name for root in source_roots if root.resolve() != repo_root}
 
     def on_error(exc: OSError) -> None:
         path = getattr(exc, "filename", None) or str(exc)
@@ -229,10 +222,10 @@ def targeted_deep_traversal(
             logger.warning("discovery_traversal_timed_out", timeout_seconds=timeout_seconds)
             break
 
-        pruned = [d for d in dirnames if d not in IGNORED_DIR_NAMES and not d.endswith(".egg-info")]
-        if Path(dirpath).resolve() == repo_root and source_root_names:
-            pruned = [d for d in pruned if d in source_root_names]
-        dirnames[:] = pruned
+        # Every directory is walked except dependency/build/VCS/cache junk. Pruning root-level
+        # folders that are not a recognized source root (the old behaviour) silently dropped
+        # frontend/, tests/, scripts/ and deploy/ whenever a src/ or app/ sat next to them.
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIR_NAMES and not d.endswith(".egg-info")]
 
         for filename in filenames:
             result.discovered_files.append(Path(dirpath) / filename)

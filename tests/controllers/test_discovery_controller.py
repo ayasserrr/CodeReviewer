@@ -120,12 +120,15 @@ class TestDiscoveryControllerCaching:
             "controllers.discovery_controller.rapid_surface_scan"
         ) as scan_spy:
             controller = DiscoveryController(db_session=MagicMock())
-            result = await controller.discover(repository_id=uuid4(), repo_path=tmp_path, head_sha="c" * 40)
+            this_repository = uuid4()
+            result = await controller.discover(repository_id=this_repository, repo_path=tmp_path, head_sha="c" * 40)
 
         scan_spy.assert_not_called()  # cache hit must skip traversal entirely
         mock_repo.create.assert_not_awaited()  # must not re-save an already-cached manifest
         assert result.cache_key == cached.cache_key
         assert result.generated_at == cached.generated_at
+        # Cached for another repository record at the same commit: rebound to this one.
+        assert result.repository_id == str(this_repository)
 
 
 class TestDiscoveryControllerCriticalFailure:
@@ -160,3 +163,19 @@ class TestDiscoveryControllerPartialFailure:
         assert any("locked" in d for d in manifest.unreadable_directories)
         # the rest of the repo was still scanned successfully
         assert manifest.statistics.total_files_scanned > 0
+
+
+class TestDiscoveryControllerTimeBudget:
+    async def test_over_budget_still_lists_every_file_and_is_not_cached(self, tmp_path: Path, patched_manifest_repo, monkeypatch):
+        _build_fake_fastapi_repo(tmp_path)
+        (tmp_path / "web").mkdir()
+        (tmp_path / "web" / "App.tsx").write_text("export const App = () => null\n")
+        monkeypatch.setattr("controllers.discovery_controller.settings.DISCOVERY_TOTAL_TIMEOUT_SECONDS", 1e-9)
+
+        controller = DiscoveryController(db_session=MagicMock())
+        manifest = await controller.discover(repository_id=uuid4(), repo_path=tmp_path, head_sha="d" * 40)
+
+        assert manifest.statistics.discovery_timed_out
+        paths = {f.path for f in manifest.files}
+        assert {"src/main.py", "src/broken.py", "web/App.tsx", "pyproject.toml"} <= paths  # nothing dropped
+        patched_manifest_repo.create.assert_not_awaited()  # a partial scan is never cached

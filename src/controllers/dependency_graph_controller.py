@@ -75,7 +75,8 @@ class DependencyGraphController(BaseController):
 
         cached_graph = await get_cached_dependency_graph(self._graph_repo, cache_key)
         if cached_graph is not None:
-            return cached_graph
+            # Content-only key (commit + engine): rebind a graph cached for another record at this commit.
+            return cached_graph.model_copy(update={"repository_id": str(repository_id)})
 
         logger.info(
             "dependency_graph_started", repository_id=str(repository_id), head_sha=head_sha, cache_key=cache_key

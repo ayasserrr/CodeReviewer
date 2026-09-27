@@ -143,11 +143,13 @@ class TestDependencyGraphControllerCaching:
         with patch("controllers.dependency_graph_controller.DependencyGraphRepository", return_value=mock_repo), \
                 patch("controllers.dependency_graph_controller.build_python_parser") as parser_spy:
             controller = DependencyGraphController(db_session=MagicMock())
+            this_repository = uuid4()
             result = await controller.build(
-                repository_id=uuid4(), repo_path=tmp_path, head_sha="a" * 40, manifest=manifest
+                repository_id=this_repository, repo_path=tmp_path, head_sha="a" * 40, manifest=manifest
             )
 
         parser_spy.assert_not_called()  # cache hit must skip parsing entirely
         mock_repo.create.assert_not_awaited()  # must not re-save an already-cached graph
         assert result.cache_key == cached.cache_key
         assert result.generated_at == cached.generated_at
+        assert result.repository_id == str(this_repository)

@@ -71,16 +71,20 @@ class TestTargetedDeepTraversal:
         assert "main.py" in names
         assert "app.py" in names
 
-    def test_prunes_non_source_root_directories(self, tmp_path: Path):
-        (tmp_path / "src").mkdir()
-        (tmp_path / "src" / "main.py").write_text("x")
-        (tmp_path / "docs").mkdir()
-        (tmp_path / "docs" / "notes.md").write_text("x")
+    def test_walks_every_folder_next_to_a_source_root(self, tmp_path: Path):
+        """Regression: frontend/, tests/, scripts/ next to src/ were pruned and never reviewed."""
+        for rel in ("src/main.py", "frontend/src/App.tsx", "tests/test_main.py", "scripts/seed.py",
+                    "docs/notes.md", "deploy/nomad.hcl"):
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_text("x")
+        (tmp_path / "frontend" / "node_modules" / "react").mkdir(parents=True)
+        (tmp_path / "frontend" / "node_modules" / "react" / "index.js").write_text("x")
         surface = rapid_surface_scan(tmp_path)
         result = targeted_deep_traversal(surface.source_roots, tmp_path, timeout_seconds=5.0)
-        names = {p.name for p in result.discovered_files}
-        assert "notes.md" not in names
-        assert "main.py" in names
+        found = {p.relative_to(tmp_path).as_posix() for p in result.discovered_files}
+        assert {"src/main.py", "frontend/src/App.tsx", "tests/test_main.py", "scripts/seed.py",
+                "docs/notes.md", "deploy/nomad.hcl"} <= found
+        assert not any("node_modules" in f for f in found)
 
     def test_prunes_ignored_directories(self, tmp_path: Path):
         (tmp_path / "src").mkdir()

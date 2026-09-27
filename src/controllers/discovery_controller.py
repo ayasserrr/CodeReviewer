@@ -15,7 +15,7 @@ continues.
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -39,7 +39,14 @@ from helpers import (
     targeted_deep_traversal,
 )
 from system import get_logger
-from utils import DiscoveryStatistics, Endpoint, Entrypoint, FileEntry, LanguageStat, RepositoryManifest
+from utils import (
+    DiscoveryStatistics,
+    Endpoint,
+    Entrypoint,
+    FileEntry,
+    LanguageStat,
+    RepositoryManifest,
+)
 
 logger = get_logger(__name__)
 
@@ -69,7 +76,10 @@ class DiscoveryController:
 
         cached_manifest = await get_cached_manifest(self._manifest_repo, cache_key)
         if cached_manifest is not None:
-            return cached_manifest
+            # The key is content-only (commit + engine), so the cached manifest may have been
+            # produced for another repository record at the same commit: rebind it to this one,
+            # or everything persisted downstream (static findings, graph) lands on the wrong row.
+            return cached_manifest.model_copy(update={"repository_id": str(repository_id)})
 
         logger.info("discovery_started", repository_id=str(repository_id), head_sha=head_sha, cache_key=cache_key)
 
@@ -77,7 +87,11 @@ class DiscoveryController:
             self._run_discovery_sync, repository_id, repo_path, head_sha, cache_key
         )
 
-        await save_manifest(self._manifest_repo, repository_id, manifest)
+        if manifest.statistics.traversal_timed_out or manifest.statistics.discovery_timed_out:
+            # A partial scan is used for this run but never cached: the next run retries in full.
+            logger.warning("discovery_partial_not_cached", repository_id=str(repository_id), cache_key=cache_key)
+        else:
+            await save_manifest(self._manifest_repo, repository_id, manifest)
 
         logger.info(
             "discovery_completed",
@@ -124,12 +138,11 @@ class DiscoveryController:
         discovery_timed_out = False
 
         for file_path in traversal.discovered_files:
-            if time.monotonic() - start > settings.DISCOVERY_TOTAL_TIMEOUT_SECONDS:
+            if not discovery_timed_out and time.monotonic() - start > settings.DISCOVERY_TOTAL_TIMEOUT_SECONDS:
                 discovery_timed_out = True
                 logger.warning(
                     "discovery_total_timeout", timeout_seconds=settings.DISCOVERY_TOTAL_TIMEOUT_SECONDS
                 )
-                break
 
             if is_sensitive_env_file(file_path.name):
                 # CRITICAL SECURITY: never opened, never classified, never listed —
@@ -144,6 +157,23 @@ class DiscoveryController:
             language = classify_language(file_path)
             tree = None
             lines: int | None = None
+
+            if discovery_timed_out:
+                # Over budget: still LIST every remaining file (cheap) so static analysis, the
+                # dependency graph and the agents see it — only the per-file AST work is skipped.
+                # Breaking out here used to drop the rest of the repository from the review.
+                try:
+                    size_bytes = file_path.stat().st_size
+                except OSError:
+                    size_bytes = 0
+                files.append(FileEntry(path=relative_path, language=language, size_bytes=size_bytes))
+                files_scanned += 1
+                total_bytes += size_bytes
+                if language:
+                    language_totals[language] = _accumulate_language_stat(
+                        language_totals.get(language), language, size_bytes, 0
+                    )
+                continue
 
             if language == "Python":
                 outcome = parse_file_ast(
@@ -219,7 +249,7 @@ class DiscoveryController:
             repository_id=str(repository_id),
             head_sha=head_sha,
             cache_key=cache_key,
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(UTC),
             files=tuple(files),
             languages=tuple(language_totals.values()),
             frameworks=frameworks,

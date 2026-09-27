@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -170,7 +170,7 @@ class Settings(BaseSettings):
         description="Review categories + security KPIs; bundled at src/assets/review_config.toml",
     )
     DEEP_REVIEW_ENGINE_VERSION: str = Field(
-        "1.9.0", min_length=1, description="Version of the review prompts/orchestration; part of the cache key"
+        "1.9.2", min_length=1, description="Version of the review prompts/orchestration; part of the cache key"
     )
     DEEP_REVIEW_MAX_CONCURRENCY: int = Field(
         6, gt=0, description="Max review agents running at once (bounded by the provider's rate limits)"
@@ -192,6 +192,11 @@ class Settings(BaseSettings):
         12000, gt=0, description="Tool results above this many tokens are offloaded to the agent's virtual filesystem"
     )
     DEEP_REVIEW_MAX_OUTPUT_TOKENS: int = Field(16000, gt=0, description="Max output tokens per model call")
+    DEEP_REVIEW_FUNCTION_CALLING_MODE: Literal["VALIDATED", "AUTO"] = Field(
+        "VALIDATED",
+        description="Gemini function-calling mode. VALIDATED constrains tool calls to the declared schemas "
+        "(removes MALFORMED_FUNCTION_CALL retries); AUTO is Gemini's unconstrained default.",
+    )
 
     model_config = SettingsConfigDict(
         env_file=(".env", f".env.{_APP_ENV}"),

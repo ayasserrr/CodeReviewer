@@ -126,6 +126,17 @@ def _coverage(workspace: ReviewWorkspace, runs: list[AgentRunStats]) -> ReviewCo
     )
 
 
+def _unverified_nudge(workspace: ReviewWorkspace, category_id: str) -> str | None:
+    """Completion check for a verifier: every finding it was given needs a verdict."""
+    pending = workspace.findings_to_verify(category_id)
+    if not pending:
+        return None
+    return (
+        "These findings still have no verdict: " + ", ".join(f.id for f in pending)
+        + ". Call submit_verification once for each (confirmed / adjusted / rejected)."
+    )
+
+
 def _format_lead_group(label: str, rows: list[str], limit: int = 15) -> str:
     more = f"\n  - ... {len(rows) - limit} more" if len(rows) > limit else ""
     return f"- {label}:\n" + "\n".join(f"  - {row}" for row in rows[:limit]) + more
@@ -367,6 +378,7 @@ class DeepReviewController(BaseController):
                     model_calls=self.config.DEEP_REVIEW_VERIFIER_MODEL_CALLS,
                     kickoff=verify_kickoff,
                     files=files,
+                    completion_check=lambda: _unverified_nudge(workspace, category.id),
                 )
             )
 
@@ -389,6 +401,10 @@ class DeepReviewController(BaseController):
             model_calls=self.config.DEEP_REVIEW_SYNTHESIZER_MODEL_CALLS,
             kickoff=kickoff,
             files=files,
+            completion_check=lambda: None if workspace.summary is not None else (
+                "The executive summary is not recorded yet. Call submit_executive_summary now "
+                "(scope, verdict, priority order, cross-cutting root causes, verification note)."
+            ),
         )
 
     async def _run(

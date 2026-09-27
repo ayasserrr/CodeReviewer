@@ -932,7 +932,8 @@ class ReviewWorkspace:
             by_dir: dict[str, list[str]] = defaultdict(list)
             for path in self.maps.unreachable:
                 by_dir[str(PurePosixPath(path).parent)].append(path)
-            add("Backend routes no frontend code calls (dead or external-only endpoints)",
+            add("Backend routes no frontend code calls — an API route is NOT dead just because this frontend skips it; "
+                "record at most ONE grouped finding, only for routes nothing else uses (scripts, other services, docs)",
                 [(r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
                  for r in self.maps.routes_without_client()])
             if by_dir:

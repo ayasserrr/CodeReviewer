@@ -118,7 +118,7 @@ class TestMiddleware:
         replies = iter(
             [
                 AIMessage(content="", response_metadata={"finish_reason": "MALFORMED_FUNCTION_CALL"}),
-                AIMessage(content=""),
+                AIMessage(content="", response_metadata={"finish_reason": "MAX_TOKENS"}),
                 AIMessage(content="", tool_calls=[{"name": "ls", "args": {}, "id": "1"}]),
             ]
         )
@@ -140,12 +140,23 @@ class TestMiddleware:
             calls.append(request)
             if getattr(request, "model", None) is judge:
                 return _Response(AIMessage(content="", tool_calls=[{"name": "ls", "args": {}, "id": "1"}]))
-            return _Response(AIMessage(content=""))
+            return _Response(AIMessage(content="", response_metadata={"finish_reason": "MALFORMED_FUNCTION_CALL"}))
 
         middleware = _EmptyTurnRetryMiddleware(max_retries=3, fallback_model=judge)
         response = middleware.wrap_model_call(_Request(0), handler)
         assert [getattr(c, "model", None) is judge for c in calls] == [False, False, False, True]
         assert response.result[0].tool_calls
+
+    def test_silent_normal_end_is_not_retried(self):
+        """A thinking model that is done often ends with thoughts only (STOP, no text): not a failure."""
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            return _Response(AIMessage(content="", response_metadata={"finish_reason": "STOP"}))
+
+        _EmptyTurnRetryMiddleware().wrap_model_call(_Request(0), handler)
+        assert len(calls) == 1
 
     def test_text_answer_is_not_retried(self):
         calls = []
@@ -274,6 +285,27 @@ class TestRunAgentResume:
         assert agent.inputs[1]["messages"][-1].content.startswith("You recorded nothing — continue.")
         assert "model turns for this" in agent.inputs[1]["messages"][-1].content  # time/budget left is stated
 
+    async def test_silent_end_with_work_done_completes_without_resume(self):
+        from helpers.review_agents import run_agent
+
+        agent = _FakeAgent([AIMessage(content="", response_metadata={"finish_reason": "STOP"})])
+        stats = await run_agent(
+            agent, name="verifier:x", kickoff="go", files={}, timeout_seconds=30, completion_check=lambda: None
+        )
+        assert stats.status == "completed" and len(agent.inputs) == 1
+
+    async def test_silent_end_with_work_missing_is_resumed_with_the_check(self):
+        from helpers.review_agents import run_agent
+
+        agent = _FakeAgent([AIMessage(content=""), AIMessage(content="Verified.")])
+        pending = ["BUG-1"]
+        stats = await run_agent(
+            agent, name="verifier:x", kickoff="go", files={}, timeout_seconds=30,
+            completion_check=lambda: f"No verdict yet: {pending[0]}" if pending else None,
+        )
+        assert stats.status == "completed" and len(agent.inputs) == 2
+        assert agent.inputs[1]["messages"][-1].content.startswith("No verdict yet: BUG-1")
+
     async def test_satisfied_completion_check_does_not_resume(self):
         from helpers.review_agents import run_agent
 
@@ -339,8 +371,10 @@ def test_run_budget_is_shared_across_resumes_and_warns_on_time():
         assert _BudgetNudgeMiddleware(limit=20, shared=False).before_model({}, None) is None
 
         class _Req:
-            messages = [HumanMessage(content="hi")]
-            state: dict = {}
+            def __init__(self):
+                self.messages = [HumanMessage(content="hi")]
+                self.state = {}
+
             def override(self, messages):
                 self.messages = messages
                 return self
@@ -350,3 +384,23 @@ def test_run_budget_is_shared_across_resumes_and_warns_on_time():
         assert "minute" in mw._nudge(_Req()).messages[-1].content
     finally:
         _RUN_BUDGET.reset(token)
+
+
+def test_gemini_tools_are_bound_in_validated_mode(monkeypatch):
+    from langchain_core.tools import tool
+    from pydantic import SecretStr
+
+    from config import settings as real
+    from helpers.review_agents import build_chat_model
+
+    @tool
+    def ping(x: str) -> str:
+        """Echo."""
+        return x
+
+    monkeypatch.setattr(real, "GEMINI_API_KEY", SecretStr("test-key"))
+    bound = build_chat_model(real, "specialist").bind_tools([ping])
+    assert bound.kwargs["tool_config"]["function_calling_config"]["mode"] == "VALIDATED"
+
+    monkeypatch.setattr(real, "DEEP_REVIEW_FUNCTION_CALLING_MODE", "AUTO")
+    assert not build_chat_model(real, "specialist").bind_tools([ping]).kwargs.get("tool_config")

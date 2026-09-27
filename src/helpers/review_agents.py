@@ -107,6 +107,33 @@ def model_identity(settings: Settings) -> tuple[str, str]:
     return _PROVIDER, model if judge == model else f"{model} + judge {judge}"
 
 
+def _gemini_class(function_calling_mode: str) -> type:
+    """``ChatGoogleGenerativeAI`` whose tool binding sets Gemini's function-calling mode.
+
+    Root cause of the ``MALFORMED_FUNCTION_CALL`` turns: in the default AUTO
+    mode Gemini decodes tool calls freely, and batches of parallel calls
+    (typically 3-6 ``grep``/``glob``/``read_file`` at once) regularly come back
+    unparseable — measured on the talent repository at ~27% of all turns in one
+    lane, each costing a retry (and often a fallback to the judge model).
+    ``VALIDATED`` constrains the output to the declared tool schemas (or plain
+    text): 0 malformed turns in 82 calls across three lanes and both models.
+    The empty-turn retry stays in place as a safety net.
+    """
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    mode = function_calling_mode.upper()
+    if mode == "AUTO":
+        return ChatGoogleGenerativeAI
+
+    class _ModeGemini(ChatGoogleGenerativeAI):
+        def bind_tools(self, tools, tool_config=None, *, tool_choice=None, **kwargs):
+            if tools and tool_config is None and tool_choice is None:
+                tool_config = {"function_calling_config": {"mode": mode}}
+            return super().bind_tools(tools, tool_config, tool_choice=tool_choice, **kwargs)
+
+    return _ModeGemini
+
+
 def build_chat_model(settings: Settings, role: Role) -> BaseChatModel:
     """Construct the chat model for one agent role.
 
@@ -122,9 +149,7 @@ def build_chat_model(settings: Settings, role: Role) -> BaseChatModel:
     model_id = _model_id(settings, role)
     if settings.GEMINI_API_KEY is None:
         raise DeepReviewError("GEMINI_API_KEY is not set")
-    from langchain_google_genai import ChatGoogleGenerativeAI
-
-    return ChatGoogleGenerativeAI(
+    return _gemini_class(settings.DEEP_REVIEW_FUNCTION_CALLING_MODE)(
         model=model_id,
         google_api_key=settings.GEMINI_API_KEY.get_secret_value(),
         max_output_tokens=settings.DEEP_REVIEW_MAX_OUTPUT_TOKENS,
@@ -196,10 +221,9 @@ _EMPTY_TURN_NUDGE = (
 class _EmptyTurnRetryMiddleware(AgentMiddleware):
     """Re-issue model turns that return neither text nor a tool call.
 
-    Gemini intermittently answers with ``finish_reason=MALFORMED_FUNCTION_CALL``
-    (or an otherwise empty message). An agent loop treats an AIMessage without
-    tool calls as "done", so without this a specialist can silently end with
-    its category half-reviewed. Retries go out with a transient nudge on the
+    Covers turns that are broken rather than finished: ``MALFORMED_FUNCTION_CALL``
+    (rare since tools are bound in Gemini's VALIDATED mode) and empty turns cut
+    off by the output limit or a safety block. Retries go out with a transient nudge on the
     same model; if that keeps failing — observed on 2.5 Flash for the
     security-heavy prompts — the final attempt goes to ``fallback_model``
     (the stronger judge model), which continues the same conversation.
@@ -219,11 +243,20 @@ class _EmptyTurnRetryMiddleware(AgentMiddleware):
 
     @classmethod
     def _is_empty(cls, response: Any) -> bool:
+        """A broken turn: a malformed call, or no content because the output was cut off / blocked.
+
+        An empty turn that ends normally (``finish_reason=STOP``) is NOT broken: a thinking
+        model that has decided it is done often ends its turn with thoughts only. Retrying it
+        cost a call and pushed a finished agent to keep going; ``run_agent`` instead lets the
+        completion check decide whether the work is really done.
+        """
         message = cls._last_ai(response)
         if message is None or message.tool_calls:
             return False
-        malformed = message.response_metadata.get("finish_reason") == "MALFORMED_FUNCTION_CALL"
-        return malformed or not (message.text or "").strip()
+        finish = message.response_metadata.get("finish_reason")
+        if finish == "MALFORMED_FUNCTION_CALL":
+            return True
+        return not (message.text or "").strip() and finish not in (None, "STOP")
 
     def _retry_request(self, request: ModelRequest, attempt: int) -> ModelRequest:
         """Same request plus a transient nudge; the last attempt switches to the fallback model."""
@@ -623,21 +656,24 @@ async def run_agent(
         while resume <= _MAX_RESUMES:
             result = await agent.ainvoke(state, config=config)
             messages = result.get("messages", [])
-            if not _ended_empty(messages):
+            ended_empty = _ended_empty(messages)
+            if not ended_empty or completion_check is not None:
+                # A silent end (thoughts only) is a normal end: the completion check, not the
+                # missing prose, decides whether the agent's work is actually done.
                 nudge = completion_check() if completion_check and not checked else None
                 if not nudge:
                     return True
                 checked = True
                 if budget.seconds_left() < min(120.0, budget.timeout * 0.1):
                     # Too close to the wall-clock cap to act on it; stopping cleanly beats a timeout.
-                    logger.warning("deep_review_agent_incomplete_work_skipped", agent=name, reason="too little time left")
+                    logger.info("deep_review_agent_incomplete_work_skipped", agent=name, reason="too little time left")
                     return True
                 # Room to act on the nudge even when the lane already used its whole budget.
                 budget.limit = max(budget.limit, budget.used) + _RESUME_BONUS_CALLS
                 minutes = int(budget.seconds_left() // 60)
                 left = f"about {minutes} minute(s)" if minutes else "under a minute"
                 nudge = f"{nudge}\n\n(You have {left} and {_RESUME_BONUS_CALLS} model turns for this.)"
-                logger.warning("deep_review_agent_incomplete_work_resumed", agent=name, nudge=nudge[:200])
+                logger.info("deep_review_agent_incomplete_work_resumed", agent=name, nudge=nudge[:200])
                 state = {"messages": [*messages, HumanMessage(content=nudge)], "files": result.get("files", files)}
                 continue
             if resume < _MAX_RESUMES:

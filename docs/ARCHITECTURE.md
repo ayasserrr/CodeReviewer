@@ -678,6 +678,12 @@ grimp not finding nested projects and writing into the clone, SyntaxWarning nois
 | 34 | Maintainability agent spent its budget on 1,209 whitespace findings | Formatting-only lint (whitespace, blank lines, line length, import order) needed manual triage | Auto-triaged as low value before the agents start; counts stay in the report |
 | 35 | No proof that every file was covered | Coverage was not reported | A computed **Review coverage** section: files discovered, files given to each tool, Python files in the dependency graph (misses named), source files opened by agents, and any time-budget or tool warnings |
 
+| 36 | Dozens of `MALFORMED_FUNCTION_CALL` retries per run (up to ~27% of one lane's turns), each costing a retry and often a fallback to the judge model | In Gemini's default AUTO mode, tool calls are decoded freely; batches of 3–6 parallel `grep`/`glob`/`read_file` calls regularly came back unparseable (measured by replaying lanes against the real model) | Tools are bound in Gemini's **VALIDATED** function-calling mode, which constrains calls to the declared schemas: 0 malformed turns in 82 calls across three lanes and both models (`DEEP_REVIEW_FUNCTION_CALLING_MODE`, default `VALIDATED`) |
+| 37 | "Empty model turn" retries with `finish_reason=STOP` | A thinking model that has finished often ends its turn with thoughts only; the retry treated that as a failure and pushed a finished agent to continue | A silent normal end is accepted; completion checks (now also for verifiers — every finding has a verdict — and the synthesizer — summary submitted) decide if work is missing. Retries remain only for broken turns (malformed, output-limit, blocked) |
+| 38 | 11 "Dead endpoint" findings, all rejected by the verifier | The lead listed every route the frontend doesn't call; the agent recorded one finding per route | The lead now says an API route isn't dead just because the frontend skips it, and asks for at most one grouped finding; the appendix keeps the full list |
+
+Result on the same repository after 36–38: **zero warnings and zero errors** in the whole run, deep review in 7.2 min, 46 of the team's 47 Critical/High items.
+
 ### 13.6 Frontend (our UI)
 
 | Issue | Fix |

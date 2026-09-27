@@ -101,7 +101,7 @@ def results(tmp_path_factory) -> dict:
     completed = subprocess.run(
         ["semgrep", "scan", "--json", "--quiet", "--metrics=off", "--disable-version-check",
          f"--config={settings.SEMGREP_CONFIG}", "app.py", "web.tsx"],
-        cwd=repo, capture_output=True, text=True, timeout=300, check=False,
+        cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, check=False,
         env={**os.environ, "SEMGREP_ENABLE_VERSION_CHECK": "0"},
     )
     assert completed.returncode in (0, 1), completed.stderr[-2000:]

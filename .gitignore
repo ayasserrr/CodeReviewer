@@ -4,6 +4,7 @@
 !.env.testing
 storage/logs
 cloned_repos/
+docs/
 __pycache__/
 *.pyc
 .pytest_cache/

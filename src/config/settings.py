@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # ===========================
     # Repository Discovery Configuration
     # ===========================
-    DISCOVERY_ENGINE_VERSION: str = Field("1.0.2", min_length=1, description="Version of the discovery algorithm/heuristics")
+    DISCOVERY_ENGINE_VERSION: str = Field("1.1.0", min_length=1, description="Version of the discovery algorithm/heuristics")
     DISCOVERY_SCHEMA_VERSION: str = Field("1.0.0", min_length=1, description="Version of the RepositoryManifest schema")
     DISCOVERY_TRAVERSAL_TIMEOUT_SECONDS: float = Field(30.0, gt=0, description="Max wall-clock time for filesystem traversal")
     DISCOVERY_AST_PER_FILE_TIMEOUT_MS: int = Field(1000, gt=0, description="Max time to spend AST-parsing a single file")
@@ -135,7 +135,7 @@ class Settings(BaseSettings):
     # DependencyGraph Configuration (tree-sitter + grimp)
     # ===========================
     DEPENDENCY_GRAPH_ENGINE_VERSION: str = Field(
-        "1.0.2", min_length=1, description="Version of the extraction/call-resolution heuristics"
+        "1.1.0", min_length=1, description="Version of the extraction/call-resolution heuristics"
     )
     DEPENDENCY_GRAPH_SCHEMA_VERSION: str = Field(
         "1.0.0", min_length=1, description="Version of the DependencyGraph schema"
@@ -170,7 +170,7 @@ class Settings(BaseSettings):
         description="Review categories + security KPIs; bundled at src/assets/review_config.toml",
     )
     DEEP_REVIEW_ENGINE_VERSION: str = Field(
-        "1.8.2", min_length=1, description="Version of the review prompts/orchestration; part of the cache key"
+        "1.9.0", min_length=1, description="Version of the review prompts/orchestration; part of the cache key"
     )
     DEEP_REVIEW_MAX_CONCURRENCY: int = Field(
         6, gt=0, description="Max review agents running at once (bounded by the provider's rate limits)"

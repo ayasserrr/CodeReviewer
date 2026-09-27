@@ -271,7 +271,8 @@ class TestRunAgentResume:
         )
         assert stats.status == "completed"
         assert len(agent.inputs) == 2 and len(checks) == 1
-        assert agent.inputs[1]["messages"][-1].content == "You recorded nothing — continue."
+        assert agent.inputs[1]["messages"][-1].content.startswith("You recorded nothing — continue.")
+        assert "model turns for this" in agent.inputs[1]["messages"][-1].content  # time/budget left is stated
 
     async def test_satisfied_completion_check_does_not_resume(self):
         from helpers.review_agents import run_agent
@@ -318,3 +319,34 @@ def test_strong_lane_specialist_runs_on_the_judge_model(monkeypatch, tmp_path):
             tools=[], explorer_tools=[], model_calls=5, strong=strong,
         )
     assert "specialist" in roles and "verifier" in roles
+
+
+def test_run_budget_is_shared_across_resumes_and_warns_on_time():
+    import time as _time
+
+    from langchain_core.messages import HumanMessage
+
+    from helpers.review_agents import _RUN_BUDGET, _BudgetNudgeMiddleware, _RunBudget
+
+    budget = _RunBudget(limit=3, deadline=_time.monotonic() + 1000, timeout=1000)
+    token = _RUN_BUDGET.set(budget)
+    try:
+        mw = _BudgetNudgeMiddleware(limit=3)
+        assert [mw.before_model({}, None) for _ in range(3)] == [None, None, None]
+        # A resumed invocation shares the same counter: the 4th call ends the run.
+        assert mw.before_model({}, None)["jump_to"] == "end"
+        # The code-explorer never consumes (or is ended by) its parent's budget.
+        assert _BudgetNudgeMiddleware(limit=20, shared=False).before_model({}, None) is None
+
+        class _Req:
+            messages = [HumanMessage(content="hi")]
+            state: dict = {}
+            def override(self, messages):
+                self.messages = messages
+                return self
+        budget.limit, budget.used = 100, 0
+        assert len(mw._nudge(_Req()).messages) == 1  # plenty of calls and time: no notice
+        budget.deadline = _time.monotonic() + 60  # 6% of the timeout left
+        assert "minute" in mw._nudge(_Req()).messages[-1].content
+    finally:
+        _RUN_BUDGET.reset(token)

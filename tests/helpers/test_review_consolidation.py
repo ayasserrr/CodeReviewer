@@ -161,3 +161,20 @@ def test_untriaged_groups_only_when_coverage_is_low(workspace):
     ws.triage_rule(ws.config.category("maintainability"),
                    _TriageRuleArgs(tool="ruff", rule="E501", verdict="low_value", reason="style"))
     assert ws.untriaged_groups("maintainability") == []
+
+
+def test_formatting_only_lint_is_auto_triaged_low_value(workspace):
+    from utils import StaticFinding
+
+    ws = workspace
+    def add(code, line):
+        f = StaticFinding.from_normalized("ruff", {"file": "app/main.py", "line": line, "severity": "warning",
+                                                   "category": code, "message": code})
+        ws.static_by_id[f.id] = f
+        return f.id
+    whitespace, long_line, imports, real_bug = add("W293", 3), add("E501", 4), add("I001", 1), add("B006", 9)
+    preexisting = sum(1 for f in ws.static_by_id.values() if f.tool == "ruff" and f.category == "E501") - 1
+    assert ws.auto_triage_formatting() == 3 + preexisting
+    assert {ws.triage[i].verdict for i in (whitespace, long_line, imports)} == {"low_value"}
+    assert real_bug not in ws.triage
+    assert ws.auto_triage_formatting() == 0  # idempotent

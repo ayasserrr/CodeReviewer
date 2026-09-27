@@ -56,6 +56,8 @@ class ReviewCategory(BaseModel):
         strong_model: Run this category's specialist on the judge model — for
             lanes whose value is deep multi-file tracing (the base model tends to
             stop at surface patterns there).
+        effort: Relative run length (1-5). Heavier lanes are launched first, so the longest
+            agents don't queue behind short ones for a free slot (longest-first scheduling).
         focus: Category-specific review checklist injected into its prompt.
     """
 
@@ -67,6 +69,7 @@ class ReviewCategory(BaseModel):
     enabled: bool = True
     owns_security_kpis: bool = False
     strong_model: bool = False
+    effort: int = Field(2, ge=1, le=5)
     focus: str
 
 
@@ -280,6 +283,35 @@ class AgentRunStats(BaseModel):
     output_tokens: int = 0
     subagent_calls: int = 0
     error: str | None = None
+    # Repository files this agent opened with read_file (feeds ReviewCoverage; not persisted per agent).
+    files_read: tuple[str, ...] = Field(default=(), exclude=True)
+
+
+class ReviewCoverage(BaseModel):
+    """Where every file of the repository went — computed, not model-generated.
+
+    Answers "did the review really see everything?": what discovery found,
+    what each static tool was given, which Python files are in the dependency
+    graph (and which are not, by name), and how much of the source the agents
+    actually opened.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    files_discovered: int = 0
+    source_files: int = 0
+    python_files: int = 0
+    python_files_in_graph: int = 0
+    python_not_in_graph: tuple[str, ...] = ()
+    static_tools_run: tuple[str, ...] = ()
+    static_tools_failed: tuple[str, ...] = ()
+    static_python_files: int = 0
+    static_code_files: int = 0
+    source_files_opened_by_agents: int = 0
+    unopened_source_dirs: tuple[str, ...] = ()
+    traversal_timed_out: bool = False
+    discovery_timed_out: bool = False
+    unreadable_directories: tuple[str, ...] = ()
 
 
 class ReviewStatistics(BaseModel):
@@ -342,6 +374,7 @@ class DeepReviewReport(BaseModel):
     rejected_findings: tuple[ReviewFinding, ...] = Field(default_factory=tuple)
     merged_findings: tuple[MergedFinding, ...] = Field(default_factory=tuple)
     inventory: tuple[InventorySection, ...] = Field(default_factory=tuple)
+    coverage: ReviewCoverage | None = None
     kpi_assessments: tuple[KpiAssessment, ...] = Field(default_factory=tuple)
     static_triage: tuple[StaticTriage, ...] = Field(default_factory=tuple)
     static_summary: tuple[StaticToolSummary, ...] = Field(default_factory=tuple)

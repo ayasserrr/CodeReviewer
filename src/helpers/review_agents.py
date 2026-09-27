@@ -41,9 +41,12 @@ deepagents features used, and why:
   (re-asks turns that come back with neither text nor a tool call).
 """
 
+import ast
 import asyncio
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -61,6 +64,7 @@ from langchain.agents.middleware import (
     ModelCallLimitMiddleware,
     ModelRequest,
     ModelRetryMiddleware,
+    hook_config,
 )
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
@@ -232,6 +236,7 @@ class _EmptyTurnRetryMiddleware(AgentMiddleware):
         message = self._last_ai(response)
         logger.warning(
             "deep_review_empty_model_turn_retry",
+            agent=_AGENT_NAME.get() or None,
             attempt=attempt + 1,
             finish_reason=message.response_metadata.get("finish_reason") if message else None,
             fallback=self.fallback_model is not None and attempt == self.max_retries - 1,
@@ -256,27 +261,84 @@ class _EmptyTurnRetryMiddleware(AgentMiddleware):
         return response
 
 
-class _BudgetNudgeMiddleware(AgentMiddleware):
-    """Warn the agent (transiently, not persisted) when its model-call budget is nearly spent.
+@dataclass
+class _RunBudget:
+    """One agent run's model-call budget and deadline, shared across its resumes.
 
-    Reads the run counter ``ModelCallLimitMiddleware`` keeps in state. The
-    reminder is appended to this request only, so the conversation prefix —
-    and with it the provider's prompt cache — is untouched.
+    ``ModelCallLimitMiddleware`` counts per ``ainvoke``, and ``run_agent``
+    resumes an agent with a fresh ``ainvoke`` (completion check, empty turn) —
+    so its counter restarted and one agent could spend ~1.5x its budget and
+    run into the wall-clock cap (observed: 87 calls on a 60-call budget, then
+    ``timed_out`` at 900 s). This object lives outside the agent state.
     """
 
-    def __init__(self, limit: int, remaining_threshold: int = 6) -> None:
+    limit: int
+    deadline: float
+    timeout: float
+    used: int = 0
+
+    def seconds_left(self) -> float:
+        return self.deadline - time.monotonic()
+
+
+_RUN_BUDGET: ContextVar[_RunBudget | None] = ContextVar("deep_review_run_budget", default=None)
+_AGENT_NAME: ContextVar[str] = ContextVar("deep_review_agent_name", default="")
+
+_RESUME_BONUS_CALLS = 12
+"""Extra model calls granted when the completion check sends an agent back to work."""
+
+
+class _BudgetNudgeMiddleware(AgentMiddleware):
+    """Enforce the shared run budget and warn the agent (transiently) before calls or time run out.
+
+    The warning is appended to the request only, so the conversation prefix —
+    and with it the provider's prompt cache — is untouched. Outside
+    ``run_agent`` (no shared budget) it falls back to the per-run counter
+    ``ModelCallLimitMiddleware`` keeps in state.
+    """
+
+    def __init__(self, limit: int, remaining_threshold: int = 6, time_fraction: float = 0.2, shared: bool = True) -> None:
         super().__init__()
         self.limit = limit
+        self.shared = shared  # False for the code-explorer: it runs inside its parent's context
         self.remaining_threshold = remaining_threshold
+        self.time_fraction = time_fraction
+
+    def _budget(self) -> _RunBudget | None:
+        return _RUN_BUDGET.get() if self.shared else None
+
+    def _exhausted(self) -> dict[str, Any] | None:
+        budget = self._budget()
+        if budget is None:
+            return None
+        if budget.used >= budget.limit:
+            return {"jump_to": "end", "messages": [AIMessage(content="Model call budget for this review lane is spent.")]}
+        budget.used += 1
+        return None
+
+    @hook_config(can_jump_to=["end"])
+    def before_model(self, state, runtime) -> dict[str, Any] | None:
+        return self._exhausted()
+
+    @hook_config(can_jump_to=["end"])
+    async def abefore_model(self, state, runtime) -> dict[str, Any] | None:
+        return self._exhausted()
 
     def _nudge(self, request: ModelRequest) -> ModelRequest:
-        used = int(request.state.get("run_model_call_count", 0) or 0)
-        remaining = self.limit - used
-        if remaining > self.remaining_threshold:
+        budget = self._budget()
+        if budget is not None:
+            remaining = budget.limit - budget.used
+            seconds = budget.seconds_left()
+            low_time = seconds <= budget.timeout * self.time_fraction
+        else:
+            remaining = self.limit - int(request.state.get("run_model_call_count", 0) or 0)
+            seconds, low_time = None, False
+        if remaining > self.remaining_threshold and not low_time:
             return request
+        left = f"{max(remaining, 0)} model turns" + (f" and about {max(int(seconds // 60), 0)} minute(s)" if seconds is not None else "")
         reminder = HumanMessage(
             content=(
-                f"[Budget notice] You have {max(remaining, 0)} model turns left. Stop exploring now: record every "
+                f"[Budget notice] You have {left} left. Stop exploring now: record every "
                 "verified finding / verdict / KPI assessment you still hold (use parallel tool calls), then reply "
                 "with your short final summary."
             )
@@ -355,7 +417,7 @@ class _ToolResultCapMiddleware(AgentMiddleware):
         return self._cap(await handler(request))
 
 
-def _harness_middleware(model_calls: int, fallback_model: BaseChatModel | None = None) -> list:
+def _harness_middleware(model_calls: int, fallback_model: BaseChatModel | None = None, *, shared_budget: bool = True) -> list:
     return [
         _ToolResultCapMiddleware(),
         ContextEditingMiddleware(
@@ -370,7 +432,7 @@ def _harness_middleware(model_calls: int, fallback_model: BaseChatModel | None =
             ]
         ),
         ModelCallLimitMiddleware(run_limit=model_calls, exit_behavior="end"),
-        _BudgetNudgeMiddleware(model_calls),
+        _BudgetNudgeMiddleware(model_calls, shared=shared_budget),
         ModelRetryMiddleware(max_retries=3, initial_delay=2.0, backoff_factor=2.0, max_delay=60.0),
         _EmptyTurnRetryMiddleware(fallback_model=fallback_model),
     ]
@@ -429,7 +491,7 @@ def _explorer_subagent(settings: Settings, backend: CompositeBackend, tools: lis
         "tools": tools,
         "middleware": [
             _filesystem_middleware(backend, settings),
-            *_harness_middleware(settings.DEEP_REVIEW_EXPLORER_MODEL_CALLS, _fallback_model(settings)),
+            *_harness_middleware(settings.DEEP_REVIEW_EXPLORER_MODEL_CALLS, _fallback_model(settings), shared_budget=False),
         ],
     }
 
@@ -475,6 +537,7 @@ class _UsageCounter(BaseCallbackHandler):
         self.input_tokens = 0
         self.output_tokens = 0
         self.subagent_calls = 0
+        self.files_read: set[str] = set()
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         self.calls += 1
@@ -491,6 +554,22 @@ class _UsageCounter(BaseCallbackHandler):
         # the general-purpose code-explorer subagent this agent was given.
         if serialized.get("name") == "task":
             self.subagent_calls += 1
+        elif serialized.get("name") == "read_file":
+            path = _tool_input_path(kwargs.get("inputs"), input_str)
+            # Repository files only: the agent-side /_review/ area is tooling, not code.
+            if path and not path.startswith(AGENT_ROOT.strip("/")):
+                self.files_read.add(path)
+
+
+def _tool_input_path(inputs: Any, input_str: str) -> str | None:
+    """The ``file_path`` argument of a read_file call, repository-relative (no leading slash)."""
+    if not isinstance(inputs, dict):
+        try:
+            inputs = ast.literal_eval(input_str)
+        except (ValueError, SyntaxError):
+            return None
+    path = inputs.get("file_path") if isinstance(inputs, dict) else None
+    return str(path).lstrip("/") if path else None
 
 
 _MAX_RESUMES = 2
@@ -511,6 +590,7 @@ async def run_agent(
     files: dict[str, dict],
     timeout_seconds: int,
     completion_check: Callable[[], str | None] | None = None,
+    model_calls: int | None = None,
 ) -> AgentRunStats:
     """Run one agent to completion under a wall-clock cap; never raises.
 
@@ -532,6 +612,9 @@ async def run_agent(
     error: str | None = None
     config = {"callbacks": [usage], "recursion_limit": 1000, "run_name": name}
     logger.info("deep_review_agent_started", agent=name)
+    budget = _RunBudget(limit=model_calls or 10**9, deadline=start + timeout_seconds, timeout=timeout_seconds)
+    _RUN_BUDGET.set(budget)
+    _AGENT_NAME.set(name)
 
     async def run_with_resume() -> bool:
         state: dict[str, Any] = {"messages": [HumanMessage(content=kickoff)], "files": files}
@@ -545,6 +628,15 @@ async def run_agent(
                 if not nudge:
                     return True
                 checked = True
+                if budget.seconds_left() < min(120.0, budget.timeout * 0.1):
+                    # Too close to the wall-clock cap to act on it; stopping cleanly beats a timeout.
+                    logger.warning("deep_review_agent_incomplete_work_skipped", agent=name, reason="too little time left")
+                    return True
+                # Room to act on the nudge even when the lane already used its whole budget.
+                budget.limit = max(budget.limit, budget.used) + _RESUME_BONUS_CALLS
+                minutes = int(budget.seconds_left() // 60)
+                left = f"about {minutes} minute(s)" if minutes else "under a minute"
+                nudge = f"{nudge}\n\n(You have {left} and {_RESUME_BONUS_CALLS} model turns for this.)"
                 logger.warning("deep_review_agent_incomplete_work_resumed", agent=name, nudge=nudge[:200])
                 state = {"messages": [*messages, HumanMessage(content=nudge)], "files": result.get("files", files)}
                 continue
@@ -586,4 +678,5 @@ async def run_agent(
         output_tokens=usage.output_tokens,
         subagent_calls=usage.subagent_calls,
         error=error,
+        files_read=tuple(sorted(usage.files_read)),
     )

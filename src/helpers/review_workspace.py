@@ -80,6 +80,8 @@ _ZERO_CALLERS_NOTE = (
 
 
 _MAX_MERGED_EVIDENCE = 25
+# ruff codes that only describe layout: pycodestyle whitespace/indent/blank-line/line-length and isort.
+_FORMATTING_RULE = re.compile(r"^(W29\d|W391|E1\d\d|E2\d\d|E3\d\d|E501|I00\d)$")
 # Hardening and hygiene classes: real, but a missing layer of defence rather than an exploit on its own.
 _HARDENING_TITLE = re.compile(
     r"(?i)\b(cors|unpinned|pinn(ed|ing)|revision|security headers?|hsts|content-security-policy|csp|"
@@ -1214,6 +1216,26 @@ class ReviewWorkspace:
                     )
                     folded += 1
         return folded
+
+    def auto_triage_formatting(self) -> int:
+        """Pure-formatting lint groups (whitespace, blank lines, line length, import order) are low value.
+
+        They are never defects, and on a real repository they number in the thousands
+        (observed: 1,209 ruff W293 alone) — triaging them by hand only burns the owning
+        agent's budget. Their counts stay visible in the report's static-analysis table.
+        """
+        count = 0
+        with self._lock:
+            for static in self.static_by_id.values():
+                if static.id in self.triage or static.tool != "ruff" or not _FORMATTING_RULE.match(static.category):
+                    continue
+                self.triage[static.id] = StaticTriage(
+                    finding_id=static.id, tool=static.tool, verdict="low_value",
+                    reason="formatting only (whitespace, blank lines, line length, import order) — not a defect",
+                    triaged_by="formatting",
+                )
+                count += 1
+        return count
 
     def auto_triage_cited(self) -> int:
         """Untriaged static findings that sit inside a live finding's cited lines are true positives."""

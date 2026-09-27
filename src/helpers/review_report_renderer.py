@@ -239,6 +239,46 @@ def render_report(report: DeepReviewReport) -> str:
         out.append("---")
         out.append("")
 
+    # ---- coverage (every file accounted for) ------------------------------
+    cov = report.coverage
+    if cov is not None:
+        out.append("## Review coverage (computed, not model-generated)")
+        out.append("")
+        out.append("| Stage | Covered |")
+        out.append("|---|---|")
+        out.append(f"| Discovery | {cov.files_discovered} files found ({cov.source_files} source files) — every folder "
+                   "walked except dependency/build/VCS/cache directories |")
+        tools = ", ".join(cov.static_tools_run) or "none"
+        out.append(f"| Static analysis | {cov.static_python_files} Python files to the Python tools, "
+                   f"{cov.static_code_files} source files to the cross-language tools; ran: {tools} |")
+        graph_gap = cov.python_files - cov.python_files_in_graph
+        out.append(f"| Dependency graph | {cov.python_files_in_graph} of {cov.python_files} Python files parsed"
+                   f"{f' ({graph_gap} not parsed, listed below)' if graph_gap > 0 and cov.python_not_in_graph else ''} |")
+        pct = round(100 * cov.source_files_opened_by_agents / cov.source_files) if cov.source_files else 0
+        out.append(f"| Agents | {cov.source_files_opened_by_agents} of {cov.source_files} source files opened directly "
+                   f"({pct}%); the rest were covered through static analysis, the dependency graph, grep and the maps |")
+        out.append("")
+        warnings = []
+        if cov.traversal_timed_out:
+            warnings.append("the filesystem walk hit its time budget — files beyond that point were not discovered")
+        if cov.discovery_timed_out:
+            warnings.append("discovery hit its time budget — every file is still listed, but late files were not AST-parsed")
+        if cov.static_tools_failed:
+            warnings.append("static tools that did not run: " + ", ".join(cov.static_tools_failed))
+        if cov.unreadable_directories:
+            warnings.append("unreadable directories: " + ", ".join(f"`{d}`" for d in cov.unreadable_directories[:10]))
+        for warning in warnings:
+            out.append(f"> **Coverage warning:** {warning}.")
+            out.append("")
+        if cov.python_not_in_graph:
+            out.append("*Python files not in the dependency graph:* " + "; ".join(f"`{f}`" for f in cov.python_not_in_graph))
+            out.append("")
+        if cov.unopened_source_dirs:
+            out.append("*Least-opened areas (reviewed via tools only):* " + "; ".join(cov.unopened_source_dirs))
+            out.append("")
+        out.append("---")
+        out.append("")
+
     # ---- deterministic inventory ------------------------------------------
     if report.inventory:
         out.append("## Appendix A. Inventory (static, complete — not model-generated)")

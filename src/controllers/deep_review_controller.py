@@ -67,6 +67,7 @@ from utils import (
     RepositoryManifest,
     ReviewCategory,
     ReviewConfig,
+    ReviewCoverage,
     ReviewStatistics,
     StaticFinding,
     StaticToolSummary,
@@ -74,6 +75,55 @@ from utils import (
 from utils.review import CONFIDENCE_ORDER
 
 logger = get_logger(__name__)
+
+
+_NON_SOURCE = frozenset({"Markdown", "JSON", "YAML", "TOML"})
+"""Languages that are data/docs rather than code (mirrors static analysis' code-file filter)."""
+
+
+def _coverage(workspace: ReviewWorkspace, runs: list[AgentRunStats]) -> ReviewCoverage:
+    """Account for every file: discovered -> static tools -> dependency graph -> opened by an agent."""
+    manifest, graph = workspace.manifest, workspace.graph
+    source = [f.path for f in manifest.files if f.language is not None and f.language not in _NON_SOURCE]
+    python = [f for f in manifest.files if f.language == "Python"]
+    not_in_graph = sorted(
+        f"{f.path} ({reason})"
+        for f in python
+        for reason in [
+            "syntax error" if f.parse_error else "over the size limit" if f.skipped_due_to_size
+            else "parse timeout" if f.ast_timeout else None
+        ]
+        if reason
+    ) + sorted(f"{failure.file} (graph extraction failed)" for failure in graph.failed_files)
+    opened = set().union(*(set(r.files_read) for r in runs)) if runs else set()
+    unopened: Counter[str] = Counter()
+    per_dir: Counter[str] = Counter()
+    for path in source:
+        parts = path.split("/")
+        directory = "/".join(parts[:2]) if len(parts) > 2 else (parts[0] if len(parts) == 2 else ".")
+        per_dir[directory] += 1
+        if path not in opened:
+            unopened[directory] += 1
+    statuses = {tool: str(result.get("status")) for tool, result in workspace.tool_results.items()}
+    stats = manifest.statistics
+    return ReviewCoverage(
+        files_discovered=len(manifest.files),
+        source_files=len(source),
+        python_files=len(python),
+        python_files_in_graph=graph.statistics.files_parsed,
+        python_not_in_graph=tuple(not_in_graph[:50]),
+        static_tools_run=tuple(sorted(t for t, st in statuses.items() if st == "success")),
+        static_tools_failed=tuple(sorted(f"{t} ({st})" for t, st in statuses.items() if st != "success")),
+        static_python_files=len(python),
+        static_code_files=len(source),
+        source_files_opened_by_agents=len(opened & set(source)),
+        unopened_source_dirs=tuple(
+            f"{d}/ — {n} of {per_dir[d]} source files not opened" for d, n in unopened.most_common(12)
+        ),
+        traversal_timed_out=stats.traversal_timed_out,
+        discovery_timed_out=stats.discovery_timed_out,
+        unreadable_directories=tuple(manifest.unreadable_directories),
+    )
 
 
 def _format_lead_group(label: str, rows: list[str], limit: int = 15) -> str:
@@ -132,9 +182,11 @@ class DeepReviewController(BaseController):
             config=config,
             maps=maps,
         )
+        formatting = workspace.auto_triage_formatting()
         brief = build_repo_brief(workspace, repository_name)
         files = build_context_files(workspace, brief)
-        categories = config.enabled_categories
+        # Report order stays the config's; launch order is longest-first.
+        categories = sorted(config.enabled_categories, key=lambda c: -c.effort)
 
         logger.info(
             "deep_review_started",
@@ -144,6 +196,7 @@ class DeepReviewController(BaseController):
             model=model,
             categories=[c.id for c in categories],
             static_findings=len(workspace.static_by_id),
+            formatting_findings_auto_triaged=formatting,
             max_concurrency=self.config.DEEP_REVIEW_MAX_CONCURRENCY,
         )
 
@@ -412,6 +465,7 @@ class DeepReviewController(BaseController):
             files=files,
             timeout_seconds=self.config.DEEP_REVIEW_AGENT_TIMEOUT_SECONDS,
             completion_check=completion_check,
+            model_calls=model_calls,
         )
 
     # ------------------------------------------------------------------
@@ -536,6 +590,7 @@ class DeepReviewController(BaseController):
             rejected_findings=tuple(workspace.rejected.values()),
             merged_findings=tuple(sorted(merged, key=lambda m: m.id)),
             inventory=build_inventory(workspace.maps),
+            coverage=_coverage(workspace, runs),
             kpi_assessments=tuple(kpis),
             static_triage=tuple(workspace.triage.values()),
             static_summary=tuple(static_summary),

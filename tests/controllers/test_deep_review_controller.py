@@ -93,7 +93,7 @@ def _script(system: str, turn: int) -> AIMessage:
         if turn == 0:
             return AIMessage(
                 content="",
-                tool_calls=[_call("triage_static_rule", tool="ruff", rule="E501", verdict="false_positive", reason="URLs")],
+                tool_calls=[_call("triage_static_rule", tool="ruff", rule="F401", verdict="false_positive", reason="re-export")],
             )
         return done
     if "independent verification (Security & Authorization)" in system:
@@ -142,7 +142,7 @@ def _inputs(repo: Path):
     )
     static = [
         StaticFinding.from_normalized(
-            "ruff", {"file": "app/main.py", "line": 1, "severity": "warning", "category": "E501", "message": "long"}
+            "ruff", {"file": "app/main.py", "line": 1, "severity": "warning", "category": "F401", "message": "unused import"}
         )
     ]
     return manifest, graph, static
@@ -188,6 +188,12 @@ async def test_full_review_with_scripted_agents(repo: Path, scripted_models, mon
     agents = {r.agent: r.status for r in report.agent_runs}
     assert agents["specialist:security-kpis"] == "completed"
     assert agents["verifier:security"] == "completed" and "verifier:auth" not in agents
+
+    # Coverage is computed from the manifest/graph/tool results and rendered as its own section.
+    assert report.coverage is not None
+    assert report.coverage.files_discovered == len(manifest.files)
+    assert report.coverage.static_tools_run == ("ruff",)
+    assert "## Review coverage" in markdown
     assert agents["synthesizer"] == "completed"
     assert all(status == "completed" for status in agents.values())
 

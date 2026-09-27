@@ -52,12 +52,15 @@ pip_audit = "dependencies"
 
 # ---------------------------------------------------------------------------
 # Review categories (one specialist agent each, run concurrently)
+# effort (1-5): relative run length, measured on real runs. Heavier lanes are
+# launched first so they never wait behind short ones for a free agent slot.
 # ---------------------------------------------------------------------------
 
 [[categories]]
 id = "integration"
 title = "Integration & Configuration"
 code = "INT"
+effort = 3
 enabled = true
 focus = """
 - Base URLs, hostnames and service endpoints: where each is defined, whether
@@ -82,6 +85,7 @@ focus = """
 id = "security"
 title = "Security & Authorization"
 code = "SEC"
+effort = 5
 enabled = true
 owns_security_kpis = true
 focus = """
@@ -118,6 +122,7 @@ focus = """
 id = "auth"
 title = "Authentication, Sessions & Token Lifecycle"
 code = "AUTH"
+effort = 3
 enabled = true
 focus = """
 - JWT / session handling: secret source and fallback defaults, algorithm
@@ -141,6 +146,7 @@ focus = """
 id = "frontend"
 title = "Frontend & Client Security"
 code = "WEB"
+effort = 2
 enabled = true
 focus = """
 Only applicable if the repository contains a browser client (React/Vue/Angular/
@@ -167,6 +173,7 @@ Svelte/plain JS). If it does not, record nothing and say "not applicable".
 id = "observability"
 title = "Logging, Observability & Governance"
 code = "OBS"
+effort = 1
 enabled = true
 focus = """
 - Request/correlation IDs: can one request be traced end to end (API -> DB ->
@@ -185,6 +192,7 @@ focus = """
 id = "testing"
 title = "Testing & CI"
 code = "TST"
+effort = 1
 enabled = true
 focus = """
 - Is there an automated test suite? What does it actually cover (units only,
@@ -202,6 +210,7 @@ focus = """
 id = "secrets"
 title = "Environment & Secrets Handling"
 code = "ENV"
+effort = 1
 enabled = true
 focus = """
 - Hardcoded credentials, API keys, tokens, private keys and connection strings
@@ -223,6 +232,7 @@ focus = """
 id = "performance"
 title = "Performance & Scalability"
 code = "PERF"
+effort = 2
 enabled = true
 focus = """
 - Blocking work on the async event loop (sync I/O, CPU-heavy work, sync SDK
@@ -252,6 +262,7 @@ focus = """
 id = "llm"
 title = "AI/LLM Usage: Memory, Tokens & Cost"
 code = "LLM"
+effort = 2
 enabled = true
 focus = """
 Only applicable if the repository calls LLM / embedding / ML model APIs. If
@@ -276,6 +287,7 @@ it does not, record nothing and say "not applicable" in your final message.
 id = "inputs"
 title = "Upload Governance & Input Controls"
 code = "INP"
+effort = 4
 enabled = true
 focus = """
 - File uploads: size limits enforced before reading the body, type validation
@@ -303,6 +315,7 @@ paths.
 id = "correctness"
 title = "Correctness & Data-Integrity Bugs"
 code = "BUG"
+effort = 4
 enabled = true
 # Deep multi-file tracing is where the base model stops at surface patterns:
 # this lane's specialist runs on DEEP_REVIEW_JUDGE_MODEL.
@@ -339,6 +352,7 @@ focus = """
 id = "maintainability"
 title = "Dead Code, Duplication & Architecture"
 code = "MNT"
+effort = 4
 enabled = true
 focus = """
 - Dead code: unused modules/packages, orphaned entrypoints, commented-out
@@ -368,6 +382,7 @@ focus = """
 id = "dependencies"
 title = "Dependencies & Supply Chain"
 code = "DEP"
+effort = 4
 enabled = true
 focus = """
 - Known-vulnerable packages (triage pip-audit: is the vulnerable code path

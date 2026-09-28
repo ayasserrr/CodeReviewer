@@ -25,13 +25,18 @@ shape that wouldn't actually make every tool better.
 import contextlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
 
 from controllers import BaseController
 from helpers import ToolExitCodeError, chunk_paths, resolve_gitleaks_bin, run_tool
+from helpers.fs_scanner import IGNORED_DIR_NAMES
+from helpers.tool_runner import safe_env
 
 
 class SecurityEngineController(BaseController):
@@ -72,19 +77,52 @@ class SecurityEngineController(BaseController):
         return results
 
     def _run_pip_audit(self, local_repo_path: str, files_to_analyze: list[str]) -> dict[str, Any]:
-        command = ["pip-audit", "--format=json", "--strict"]
+        """Audit the REVIEWED repository's pinned requirements — never this server's own environment.
 
-        def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
-            if result.returncode not in (0, 1):
-                raise ToolExitCodeError(f"pip-audit exited with unexpected code {result.returncode}: {result.stderr.strip()}")
-            return {"data": json.loads(result.stdout or "[]")}
+        Bare ``pip-audit`` audits the environment it runs in (CodeReviewer's venv). Instead every
+        ``requirements*.txt`` in the repository is reduced to its exactly-pinned lines and audited
+        with ``--no-deps --disable-pip``: nothing is resolved, downloaded or installed, so no
+        package build step (``setup.py``) from the repository's dependency list ever runs.
+        Unpinned lines cannot be audited this way; the dependencies lane reports them as unpinned.
+        """
+        if not shutil.which("pip-audit"):
+            return {"tool": "pip_audit", "status": "tool_missing", "findings": [], "error": None}
+        root = Path(local_repo_path)
+        dependencies: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for req_file in _requirement_files(root):
+            pinned = _pinned_requirements(req_file)
+            if not pinned:
+                continue
+            with tempfile.TemporaryDirectory(prefix="pip-audit-") as tmp:
+                req_path = Path(tmp) / "requirements.txt"
+                req_path.write_text("\n".join(line for line, _ in pinned.values()) + "\n", encoding="utf-8")
 
-        outcome = run_tool(
-            tool_binary="pip-audit", repo_path=local_repo_path, command=command,
-            timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
-        )
-        outcome["tool"] = "pip_audit"
-        return outcome
+                def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
+                    if result.returncode not in (0, 1):
+                        raise ToolExitCodeError(
+                            f"pip-audit exited with unexpected code {result.returncode}: {result.stderr.strip()[:300]}"
+                        )
+                    return {"data": json.loads(result.stdout or "{}")}
+
+                outcome = run_tool(
+                    tool_binary="pip-audit", repo_path=local_repo_path,
+                    command=["pip-audit", "-r", str(req_path), "--no-deps", "--disable-pip", "--format=json",
+                             "--progress-spinner=off"],
+                    timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
+                )
+            rel = req_file.relative_to(root).as_posix()
+            if outcome["status"] != "success":
+                errors.append(f"{rel}: {outcome.get('error') or outcome['status']}")
+                continue
+            data = outcome.get("data") or {}
+            for dep in data.get("dependencies", []) if isinstance(data, dict) else data:
+                dep["source_file"] = rel
+                dep["source_line"] = pinned.get(str(dep.get("name", "")).lower(), (None, None))[1]
+                dependencies.append(dep)
+        status = "error" if errors and not dependencies else "success"
+        return {"tool": "pip_audit", "status": status, "data": {"dependencies": dependencies},
+                "error": "; ".join(errors)[:500] or None}
 
     def _run_semgrep(self, local_repo_path: str, files_to_analyze: list[str]) -> dict[str, Any]:
         """SAST with the bundled, offline ruleset (``SEMGREP_CONFIG``).
@@ -172,7 +210,7 @@ class SecurityEngineController(BaseController):
         try:
             result = subprocess.run(
                 command, cwd=local_repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=self.config.SECURITY_TOOL_TIMEOUT,
+                timeout=self.config.SECURITY_TOOL_TIMEOUT, env=safe_env(),
             )
             if result.returncode not in (0, 1):
                 raise ToolExitCodeError(f"gitleaks exited with unexpected code {result.returncode}: {result.stderr.strip()}")
@@ -199,6 +237,31 @@ def _run_chunked(files: list[str], run) -> dict[str, Any]:
             return result
         findings.extend(result.get("findings") or [])
     return {"status": "success", "findings": findings, "error": None}
+
+
+_PINNED_LINE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*==\s*([A-Za-z0-9.+!_-]+)\s*(?:;.*)?$")
+
+
+def _requirement_files(root: Path) -> list[Path]:
+    """Every ``requirements*.txt`` outside dependency/build/VCS directories."""
+    return sorted(
+        path for path in root.rglob("requirements*.txt")
+        if path.is_file() and not any(part in IGNORED_DIR_NAMES for part in path.relative_to(root).parts[:-1])
+    )
+
+
+def _pinned_requirements(req_file: Path) -> dict[str, tuple[str, int]]:
+    """``{lowercased name: ("name==version", line)}`` for the exactly-pinned lines of one requirements file."""
+    pinned: dict[str, tuple[str, int]] = {}
+    try:
+        lines = req_file.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError:
+        return pinned
+    for number, raw in enumerate(lines, start=1):
+        match = _PINNED_LINE.match(raw.split(" #", 1)[0])
+        if match:
+            pinned[match.group(1).lower()] = (f"{match.group(1)}=={match.group(2)}", number)
+    return pinned
 
 
 def _semgrep_error_detail(result: subprocess.CompletedProcess) -> str:

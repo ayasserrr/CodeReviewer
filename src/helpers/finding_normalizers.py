@@ -189,8 +189,8 @@ def normalize_pip_audit(raw_data: dict[str, Any]) -> list[dict[str, Any]]:
             severity = "critical" if not vuln.get("fix_versions") else "high"
             normalized.append(
                 {
-                    "file": "requirements.txt",
-                    "line": None,
+                    "file": dep.get("source_file") or "requirements.txt",
+                    "line": dep.get("source_line"),
                     "severity": severity,
                     "category": vuln.get("id", "cve"),
                     "message": f"{dep.get('name')} {dep.get('version')}: {vuln.get('description') or vuln.get('id', '')}",

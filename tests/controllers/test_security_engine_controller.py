@@ -18,35 +18,54 @@ class TestGitleaksBinResolvedAtInit:
 
 
 class TestRunPipAudit:
-    def test_ignores_files_to_analyze(self):
-        controller = SecurityEngineController()
-        completed = _completed(returncode=0, stdout="[]")
-        with patch("shutil.which", return_value="/usr/bin/pip-audit"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
-        ) as mock_run:
-            controller._run_pip_audit(".", ["should/be/ignored.py"])
-        command = mock_run.call_args.args[0]
-        assert "should/be/ignored.py" not in command
+    """pip-audit audits the reviewed repository's pinned requirements, never this server's environment."""
 
-    def test_exit_code_1_is_accepted(self):
-        controller = SecurityEngineController()
-        raw = {"dependencies": [{"name": "pkg", "version": "1.0", "vulns": [{"id": "CVE-1", "fix_versions": [], "description": "bad"}]}]}
-        completed = _completed(returncode=1, stdout=json.dumps(raw))
-        with patch("shutil.which", return_value="/usr/bin/pip-audit"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
-        ):
-            result = controller._run_pip_audit(".", [])
-        assert result["status"] == "success"
-        assert result["tool"] == "pip_audit"
+    def _repo(self, tmp_path):
+        (tmp_path / "requirements.txt").write_text("requests==2.19.0\nflask>=2.0\n# comment\ntorch\n")
+        (tmp_path / "svc").mkdir()
+        (tmp_path / "svc" / "requirements-dev.txt").write_text("pyyaml==5.3  # old\n")
+        (tmp_path / "node_modules" / "x").mkdir(parents=True)
+        (tmp_path / "node_modules" / "x" / "requirements.txt").write_text("evil==1.0\n")
+        return tmp_path
 
-    def test_exit_code_2_is_rejected(self):
+    def test_audits_only_pinned_repo_requirements_without_installing(self, tmp_path):
+        repo = self._repo(tmp_path)
+        seen = []
+
+        def fake_run(command, **kwargs):
+            req = command[command.index("-r") + 1]
+            seen.append((command, open(req).read()))
+            name = open(req).read().split("==")[0]
+            payload = {"dependencies": [{"name": name, "version": "x", "vulns": [{"id": "PYSEC-1", "fix_versions": []}]}]}
+            return _completed(returncode=1, stdout=json.dumps(payload))
+
         controller = SecurityEngineController()
-        completed = _completed(returncode=2, stderr="bad invocation")
-        with patch("shutil.which", return_value="/usr/bin/pip-audit"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with patch("shutil.which", return_value="/usr/bin/pip-audit"), patch("subprocess.run", side_effect=fake_run):
+            result = controller._run_pip_audit(str(repo), ["ignored.py"])
+        assert result["status"] == "success" and result["tool"] == "pip_audit"
+        assert len(seen) == 2  # repo files only; node_modules is never scanned
+        for command, content in seen:
+            assert "--no-deps" in command and "--disable-pip" in command
+            assert "flask" not in content and "torch" not in content  # unpinned lines are not audited
+        deps = {d["name"]: d for d in result["data"]["dependencies"]}
+        assert deps["requests"]["source_file"] == "requirements.txt" and deps["requests"]["source_line"] == 1
+        assert deps["pyyaml"]["source_file"] == "svc/requirements-dev.txt"
+
+    def test_no_requirements_means_no_subprocess(self, tmp_path):
+        controller = SecurityEngineController()
+        with patch("shutil.which", return_value="/usr/bin/pip-audit"), patch("subprocess.run") as run:
+            result = controller._run_pip_audit(str(tmp_path), [])
+        run.assert_not_called()
+        assert result["status"] == "success" and result["data"] == {"dependencies": []}
+
+    def test_unexpected_exit_code_is_an_error(self, tmp_path):
+        repo = self._repo(tmp_path)
+        controller = SecurityEngineController()
+        with patch("shutil.which", return_value="/usr/bin/pip-audit"), patch(
+            "subprocess.run", return_value=_completed(returncode=2, stderr="bad invocation")
         ):
-            result = controller._run_pip_audit(".", [])
-        assert result["status"] == "error"
+            result = controller._run_pip_audit(str(repo), [])
+        assert result["status"] == "error" and "bad invocation" in result["error"]
 
 
 class TestRunSemgrep:

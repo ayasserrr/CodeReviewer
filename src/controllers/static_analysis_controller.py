@@ -44,6 +44,7 @@ from helpers import (
     fits_one_command,
     run_tool,
 )
+from helpers.tool_runner import safe_env
 
 _VULTURE_LINE_PATTERN = re.compile(
     r"^(?P<file>.*?):(?P<line>\d+): (?P<message>.*?) \((?P<confidence>\d+)% confidence\)$"
@@ -126,6 +127,7 @@ class StaticAnalysisController(BaseController):
             result = subprocess.run(
                 ["radon", mode, *chunk, "-j"],
                 cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                env=safe_env(),
             )
             if result.returncode != 0:
                 raise ToolExitCodeError(f"radon {mode} exited with code {result.returncode}: {result.stderr.strip()}")
@@ -206,7 +208,7 @@ class StaticAnalysisController(BaseController):
                 result = subprocess.run(
                     ["jscpd", "--config", config_path],
                     cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"),
+                    timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"), env=safe_env(),
                 )
                 report_path = os.path.join(output_dir, "jscpd-report.json")
                 if not os.path.isfile(report_path):
@@ -239,7 +241,7 @@ class StaticAnalysisController(BaseController):
                 result = subprocess.run(
                     ["lizard", "-f", list_file.name, "--csv"],
                     cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"),
+                    timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"), env=safe_env(),
                 )
             finally:
                 os.unlink(list_file.name)

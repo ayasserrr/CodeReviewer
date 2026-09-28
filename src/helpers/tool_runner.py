@@ -17,10 +17,35 @@ contract by hand instead of forcing an awkward fit.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
 from typing import Any
+
+# Environment variables that can carry credentials. Subprocesses analyse untrusted
+# repositories (grimp imports their packages, pip-audit reads their requirements), so
+# they never inherit the server's secrets — in container deployments those live in the
+# process environment (GEMINI_API_KEY, JWT_SECRET_KEY, POSTGRES_PASSWORD, ...).
+_SECRET_ENV = re.compile(
+    r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH|DSN|DATABASE_URL|COOKIE|SESSION|PRIVATE)"
+    r"|^(POSTGRES_|PG|AWS_|AZURE_|GOOGLE_|GCP_|GEMINI|OPENAI|ANTHROPIC|GITLAB|GITHUB|JWT)",
+    re.IGNORECASE,
+)
+_SAFE_ENV = {"PATH", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR", "SYSTEMROOT", "WINDIR", "COMSPEC",
+             "PATHEXT", "LANG", "LC_ALL", "LC_CTYPE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "NODE_PATH",
+             "VIRTUAL_ENV", "PYTHONIOENCODING", "PYTHONUTF8"}
+
+
+def safe_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The current environment without anything that looks like a credential, plus ``extra``."""
+    env = {
+        k: v for k, v in os.environ.items()
+        # GIT_CONFIG_COUNT/KEY_n/VALUE_n are git's own settings (e.g. a proxy) and only work as a set.
+        if k.upper() in _SAFE_ENV or k.upper().startswith("GIT_CONFIG_") or not _SECRET_ENV.search(k)
+    }
+    env.update(extra or {})
+    return env
 
 
 class ToolExitCodeError(ValueError):
@@ -81,7 +106,7 @@ def run_tool(
             errors="replace",
             timeout=timeout,
             shell=shell,
-            env={**os.environ, **env} if env else None,
+            env=safe_env(env),
         )
         return {"status": "success", **parse_output(result), "error": None}
     except subprocess.TimeoutExpired as exc:

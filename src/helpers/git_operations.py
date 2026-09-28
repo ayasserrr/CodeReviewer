@@ -7,7 +7,6 @@ handed to git through a short-lived GIT_ASKPASS helper script, via an
 environment variable that only this process and its direct child can see.
 """
 
-import os
 import re
 import stat
 import subprocess
@@ -15,6 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from helpers.tool_runner import safe_env
 from utils import AuthenticationError, DiskError, NetworkError
 
 _HEAD_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -86,10 +86,11 @@ def clone_repository(
     with tempfile.TemporaryDirectory(prefix="askpass-") as askpass_dir:
         askpass_script = _write_askpass_script(Path(askpass_dir))
 
-        env = os.environ.copy()
-        env["GIT_ASKPASS"] = str(askpass_script)
-        env["GIT_ASKPASS_TOKEN"] = access_token
-        env["GIT_TERMINAL_PROMPT"] = "0"
+        env = safe_env({
+            "GIT_ASKPASS": str(askpass_script),
+            "GIT_ASKPASS_TOKEN": access_token,
+            "GIT_TERMINAL_PROMPT": "0",
+        })
 
         cmd = [
             "git",
@@ -156,6 +157,7 @@ def get_head_sha(repo_dir: Path, timeout_seconds: int) -> str:
     try:
         result = subprocess.run(
             ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
+            env=safe_env(),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -185,6 +187,7 @@ def get_current_branch(repo_dir: Path, timeout_seconds: int) -> str:
     try:
         result = subprocess.run(
             ["git", "-C", str(repo_dir), "rev-parse", "--abbrev-ref", "HEAD"],
+            env=safe_env(),
             capture_output=True,
             text=True,
             encoding="utf-8",

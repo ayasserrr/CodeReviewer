@@ -12,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from helpers.tool_runner import safe_env
 from system import get_logger
 from utils import ImportEdge, RepositoryManifest
 
@@ -85,6 +86,7 @@ def build_import_graph(repo_path: Path, package_names: list[str], timeout: int) 
             [sys.executable, str(_WORKER_SCRIPT), str(repo_path), json.dumps(package_names)],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout, cwd=repo_path, check=False,
+            env=safe_env({"PYTHONDONTWRITEBYTECODE": "1"}),  # the target repo's code runs here: no secrets
         )
     except subprocess.TimeoutExpired:
         logger.warning("import_graph_timeout", timeout_seconds=timeout, package_names=package_names)

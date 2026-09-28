@@ -250,3 +250,30 @@ def test_generic_words_do_not_make_two_findings_the_same_defect(workspace):
     record(ws, "maintainability", "Unused API endpoints", "Low", ("app/routers/auth.py", 20, 20))
     record(ws, "performance", "API endpoints return unpaginated collections", "High", ("app/routers/auth.py", 20, 20))
     assert ws.auto_fold_duplicates() == 0
+
+
+def test_documented_rule_is_attached_as_evidence(tmp_path):
+    (tmp_path / "AGENTS.md").write_text("# Flow\n1. The screening lock is always released.\n")
+    (tmp_path / "app.py").write_text("x = 1\n" * 5)
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=(FileEntry(path="AGENTS.md", language="Markdown", size_bytes=1, lines=2),
+               FileEntry(path="app.py", language="Python", size_bytes=1, lines=5)),
+    )
+    graph = DependencyGraph(schema_version="1", engine_version="1", repository_id="r", head_sha="a" * 40,
+                            cache_key="k", generated_at=datetime.now(UTC))
+    ws = ReviewWorkspace(repo_path=tmp_path, manifest=manifest, static_findings=[], tool_results={},
+                         graph=graph, config=load_review_config(settings.DEEP_REVIEW_CONFIG_PATH))
+    cat = ws.config.category("correctness")
+    out = ws.record_finding(cat, _RecordFindingArgs(
+        title="Screening lock is never released on failure", severity="High", confidence="high", description="d",
+        impact="i", evidence=[EvidenceInput(file="app.py", line_start=3, line_end=3)],
+        violates_documented_rule="AGENTS.md:2"))
+    finding = next(iter(ws.findings.values()))
+    assert out.startswith("Recorded") and [e.file for e in finding.evidence] == ["app.py", "AGENTS.md"]
+    assert not any("AGENTS.md" in label for label, _ in ws.unaddressed_leads("correctness"))  # lead addressed
+    bad = ws.record_finding(cat, _RecordFindingArgs(
+        title="x", severity="Low", confidence="high", description="d", impact="i",
+        evidence=[EvidenceInput(file="app.py", line_start=1, line_end=1)], violates_documented_rule="README.md:2"))
+    assert bad.startswith("NOT RECORDED")

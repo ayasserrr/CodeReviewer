@@ -87,6 +87,7 @@ _DEAD_MODULE_TITLE = re.compile(
     r"|\b(modules?|files?|packages?)\b.*\b(dead|unreachable|unused|orphan\w*|not imported)",
     re.IGNORECASE,
 )
+_DOC_CLAIM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
 SYSTEM_DOC_NAME = "agents.md"
 _SYSTEM_DOC_FILE_CHARS = 40_000
 _SYSTEM_DOC_TOTAL_CHARS = 80_000
@@ -235,6 +236,11 @@ class _RecordFindingArgs(BaseModel):
         default_factory=list, description="Ids of static-analysis findings this finding confirms or aggregates."
     )
     remediation: str | None = Field(None, description="Only if remediation is requested in your instructions.")
+    violates_documented_rule: str | None = Field(
+        None,
+        description="When the repository's AGENTS.md documents the behaviour this finding contradicts: that "
+        "rule's path:line, e.g. 'AGENTS.md:17'. It is added to the evidence as the documented intent.",
+    )
 
 
 class _UpdateFindingArgs(BaseModel):
@@ -405,6 +411,17 @@ class ReviewWorkspace:
         self.rejected: dict[str, ReviewFinding] = {}
         self.duplicates: dict[str, str] = {}
         self.summary: ExecutiveSummary | None = None
+
+    def _documented_rule_ref(self, raw: str) -> tuple[list[EvidenceRef], list[str]]:
+        """``AGENTS.md:17`` -> an evidence ref on that line, noted as the documented intent."""
+        match = re.fullmatch(r"\s*(.+?):(\d+)(?:-(\d+))?\s*", raw)
+        if not match or PurePosixPath(self._normalize_path(match.group(1))).name.lower() != SYSTEM_DOC_NAME:
+            return [], [f"violates_documented_rule must be an AGENTS.md path:line (got {raw!r})"]
+        start, end = int(match.group(2)), int(match.group(3)) if match.group(3) else None
+        refs, errors = self.validate_evidence(
+            [EvidenceInput(file=match.group(1), line_start=start, line_end=end, note="documented intent (AGENTS.md)")]
+        )
+        return refs, errors
 
     def _check_dead_module_claim(self, title: str, refs: list[EvidenceRef]) -> list[str]:
         """A finding that calls whole modules dead may only cite modules the import map finds unreachable."""
@@ -731,6 +748,10 @@ class ReviewWorkspace:
                 "(e.g. dead code sized in lines, a duplicated implementation that diverged)."
             )
         refs, errors = self.validate_evidence(args.evidence)
+        if args.violates_documented_rule:
+            doc_refs, doc_errors = self._documented_rule_ref(args.violates_documented_rule)
+            refs += [r for r in doc_refs if r not in refs]
+            errors += doc_errors
         errors += self._check_links(args.kpi_ids, args.static_finding_ids)
         errors += self._check_dead_module_claim(args.title, refs)
         if errors or not refs:
@@ -977,7 +998,14 @@ class ReviewWorkspace:
                     [row for _, _, row in entry_points],
                 ))
             if self.system_docs:
-                headings = [
+                # Every bullet / numbered line is a checkable claim about the system; headings as fallback.
+                claims = [
+                    f"{path}:{n} {line.strip()[:160]}"
+                    for path, text in self.system_docs
+                    for n, line in enumerate(text.splitlines(), start=1)
+                    if _DOC_CLAIM.match(line)
+                ]
+                headings = claims or [
                     f"{path}:{n} {line.lstrip('#').strip()}"
                     for path, text in self.system_docs
                     for n, line in enumerate(text.splitlines(), start=1)
@@ -985,11 +1013,11 @@ class ReviewWorkspace:
                 ]
                 groups.append((
                     (
-                        "Flows the developers documented in AGENTS.md — trace each against the code; "
-                        "every divergence is a finding (cite the AGENTS.md line and the code)"
+                        "Rules the developers documented in AGENTS.md — check each against the code; record every "
+                        "divergence with violates_documented_rule='<path>:<line>' of the rule it breaks"
                     ),
                     frozenset(path for path, _ in self.system_docs),
-                    headings[:25] or [path for path, _ in self.system_docs],
+                    headings[:40] or [path for path, _ in self.system_docs],
                 ))
             add("Values rewritten during extraction (semgrep)", static_rows("python-silent-value-substitution"))
             add("Random identifiers (semgrep)", static_rows("python-random-identifier"))

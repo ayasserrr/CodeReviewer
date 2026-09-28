@@ -1214,6 +1214,10 @@ class ReviewWorkspace:
         if not terms_a or not terms_b:
             return False
         overlap = len(terms_a & terms_b) / len(terms_a | terms_b)
+        if overlap >= 0.7:
+            # Near-identical titles from two lanes citing different sides of one defect
+            # (e.g. the bundled API key seen in session.ts and in .env.example).
+            return True
         if self._locations_overlap(a, b):
             return overlap >= 0.15
         shares_file = bool({e.file for e in a.evidence} & {e.file for e in b.evidence})

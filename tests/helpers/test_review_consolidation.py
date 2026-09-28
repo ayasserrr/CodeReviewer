@@ -220,3 +220,11 @@ def test_maintainability_rejects_lint_restatements(workspace):
         title="Widespread unused imports (F401)", severity="Low", confidence="high", description="d", impact="i",
         evidence=[EvidenceInput(file="app/main.py", line_start=1, line_end=1)]))
     assert out.startswith("NOT RECORDED") and not workspace.findings
+
+
+def test_near_identical_titles_from_two_lanes_fold_without_shared_locations(workspace):
+    ws = workspace
+    a = record(ws, "frontend", "API Key exposed in frontend bundle", "High", ("app/main.py", 10, 10))
+    b = record(ws, "secrets", "Frontend API key exposed in browser bundle", "High", ("app/routers/auth.py", 20, 20))
+    assert ws.auto_fold_duplicates() == 1
+    assert {a, b} & set(ws.duplicates)

@@ -77,6 +77,8 @@ read the real code, trace the real data flow, and report only what is actually w
   when it buries the real code path: thousands of lines or whole parallel
   implementations, else Low); several libraries doing the same job, or unpinned heavy
   runtime dependencies -> Medium; a duplicated class/schema or a missing lockfile -> Low;
+  a frontend route rendered without a client-side auth guard -> Medium (the backend is the
+  security boundary; High only if the page shows data the backend serves without auth);
   a vulnerability only in code no application entry point reaches (latent) -> at most
   High, usually Medium; a defect only in a standalone script or test file that is not
   part of the running service -> at most Medium; secrets or PII printed by a seeding
@@ -151,7 +153,9 @@ _SPECIALIST_ROLE = """\
 # Your assignment: {title} ({code})
 You own the "{title}" section of the report. Other specialists cover the other
 categories in parallel — stay in your lane; if you notice something serious in
-another area, record it only if it clearly also belongs to yours.
+another area, record it only if it clearly also belongs to yours. Production baselines
+owned by other lanes (security headers, rate limiting, logging, request IDs, metrics,
+error boundaries) are reviewed there — do not record them here.
 
 ## What to look for
 {focus}

@@ -605,6 +605,9 @@ def _tool_input_path(inputs: Any, input_str: str) -> str | None:
     return str(path).lstrip("/") if path else None
 
 
+_MAX_CHECK_RESUMES = 3
+"""How many times a completion check may send an agent back while it still makes progress."""
+
 _MAX_RESUMES = 2
 """How many times an agent that ended on an empty model turn is resumed."""
 
@@ -651,7 +654,8 @@ async def run_agent(
 
     async def run_with_resume() -> bool:
         state: dict[str, Any] = {"messages": [HumanMessage(content=kickoff)], "files": files}
-        checked = False
+        checks = 0
+        last_nudge: str | None = None
         resume = 0
         while resume <= _MAX_RESUMES:
             result = await agent.ainvoke(state, config=config)
@@ -659,11 +663,13 @@ async def run_agent(
             ended_empty = _ended_empty(messages)
             if not ended_empty or completion_check is not None:
                 # A silent end (thoughts only) is a normal end: the completion check, not the
-                # missing prose, decides whether the agent's work is actually done.
-                nudge = completion_check() if completion_check and not checked else None
-                if not nudge:
+                # missing prose, decides whether the agent's work is actually done. It may send
+                # the agent back several times, but stops as soon as a round changes nothing.
+                nudge = completion_check() if completion_check and checks < _MAX_CHECK_RESUMES else None
+                if not nudge or nudge == last_nudge:
                     return True
-                checked = True
+                checks += 1
+                last_nudge = nudge
                 if budget.seconds_left() < min(120.0, budget.timeout * 0.1):
                     # Too close to the wall-clock cap to act on it; stopping cleanly beats a timeout.
                     logger.info("deep_review_agent_incomplete_work_skipped", agent=name, reason="too little time left")
@@ -673,6 +679,8 @@ async def run_agent(
                 minutes = int(budget.seconds_left() // 60)
                 left = f"about {minutes} minute(s)" if minutes else "under a minute"
                 nudge = f"{nudge}\n\n(You have {left} and {_RESUME_BONUS_CALLS} model turns for this.)"
+                if ended_empty:
+                    nudge = f"Your last turn ended without doing anything. {nudge}"
                 logger.info("deep_review_agent_incomplete_work_resumed", agent=name, nudge=nudge[:200])
                 state = {"messages": [*messages, HumanMessage(content=nudge)], "files": result.get("files", files)}
                 continue

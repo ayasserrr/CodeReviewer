@@ -281,7 +281,8 @@ class TestRunAgentResume:
             agent, name="specialist:x", kickoff="go", files={}, timeout_seconds=30, completion_check=nothing_recorded
         )
         assert stats.status == "completed"
-        assert len(agent.inputs) == 2 and len(checks) == 1
+        # Resumed once; re-checked after the resume, and an unchanged answer ends the loop.
+        assert len(agent.inputs) == 2 and len(checks) == 2
         assert agent.inputs[1]["messages"][-1].content.startswith("You recorded nothing — continue.")
         assert "model turns for this" in agent.inputs[1]["messages"][-1].content  # time/budget left is stated
 
@@ -304,7 +305,34 @@ class TestRunAgentResume:
             completion_check=lambda: f"No verdict yet: {pending[0]}" if pending else None,
         )
         assert stats.status == "completed" and len(agent.inputs) == 2
-        assert agent.inputs[1]["messages"][-1].content.startswith("No verdict yet: BUG-1")
+        assert "No verdict yet: BUG-1" in agent.inputs[1]["messages"][-1].content
+
+    async def test_completion_check_resends_while_progress_is_made_and_stops_when_stuck(self):
+        from helpers.review_agents import run_agent
+
+        agent = _FakeAgent([AIMessage(content="", response_metadata={"finish_reason": "STOP"})] * 6)
+        pending = ["SEC-1", "SEC-2", "SEC-3"]
+
+        def check():
+            return f"No verdict yet: {', '.join(pending)}" if pending else None
+
+        def ainvoke_side_effect():
+            if len(agent.inputs) in (2, 3):
+                pending.pop()  # the agent verifies one finding on each of the first two resumes
+
+        original = agent.ainvoke
+
+        async def tracking(state, config=None):
+            result = await original(state, config=config)
+            ainvoke_side_effect()
+            return result
+
+        agent.ainvoke = tracking
+        stats = await run_agent(agent, name="verifier:x", kickoff="go", files={}, timeout_seconds=30,
+                                completion_check=check)
+        assert stats.status == "completed"
+        # 1 initial + resumes while the pending list shrinks; the round that changes nothing ends it.
+        assert len(agent.inputs) == 4
 
     async def test_satisfied_completion_check_does_not_resume(self):
         from helpers.review_agents import run_agent

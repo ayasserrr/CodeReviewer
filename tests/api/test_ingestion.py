@@ -81,8 +81,10 @@ class TestIngestRepository:
 
         with (
             patch("api.v1.ingestion.RepositoryRepository") as repo_repo_cls,
+            patch("api.v1.ingestion.ReviewReportRepository") as reviews_cls,
             patch("api.v1.ingestion.queue_review", new=AsyncMock(return_value=MagicMock(id=uuid4()))),
         ):
+            reviews_cls.return_value.get_active_by_repository = AsyncMock(return_value=None)
             repo_repo = repo_repo_cls.return_value
             repo_repo.get = AsyncMock(return_value=MagicMock(user_id=current_user.id))  # already exists, same owner
             repo_repo.create = AsyncMock()
@@ -148,3 +150,23 @@ class TestIngestRepository:
         assert exc_info.value.status_code == 404
         queue_review.assert_not_awaited()
         background_tasks.add_task.assert_not_called()
+
+
+class TestOneActiveReviewPerRepository:
+    async def test_second_review_while_one_runs_is_409(self):
+        current_user = MagicMock(id=uuid4())
+        running = MagicMock(id=uuid4())
+        with (
+            patch("api.v1.ingestion.RepositoryRepository") as repo_repo_cls,
+            patch("api.v1.ingestion.ReviewReportRepository") as reviews_cls,
+            patch("api.v1.ingestion.queue_review", new=AsyncMock()) as queue_review,
+        ):
+            reviews_cls.return_value.get_active_by_repository = AsyncMock(return_value=running)
+            repo_repo_cls.return_value.get = AsyncMock(return_value=MagicMock(user_id=current_user.id))
+            with pytest.raises(HTTPException) as exc:
+                await _route(
+                    request=MagicMock(), payload=_payload(repo_id=str(uuid4())), current_user=current_user,
+                    db_session=_session(), background_tasks=MagicMock(),
+                )
+        assert exc.value.status_code == 409 and str(running.id) in exc.value.detail
+        queue_review.assert_not_awaited()

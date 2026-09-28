@@ -25,6 +25,7 @@ from data.repositories import RepositoryRepository
 from enums import SourceType
 from helpers import (
     check_disk_space,
+    check_gitlab_host,
     clone_repository,
     get_cloned_repos_root,
     get_current_branch,
@@ -38,7 +39,12 @@ from helpers import (
     verify_clone_integrity,
 )
 from system import get_logger
-from utils import DiskError, RepoNotFoundError, RepositoryContext, RepositoryIngestionResult
+from utils import (
+    DiskError,
+    RepoNotFoundError,
+    RepositoryContext,
+    RepositoryIngestionResult,
+)
 
 logger = get_logger(__name__)
 
@@ -83,6 +89,10 @@ class IngestionController:
 
         access_token = validate_access_token(access_token)
         base_url, project_path = validate_gitlab_url(gitlab_url)
+        await asyncio.to_thread(
+            check_gitlab_host, base_url, settings.GITLAB_ALLOWED_HOSTS,
+            settings.GITLAB_ALLOW_PRIVATE_HOSTS, settings.GITLAB_ALLOW_HTTP,
+        )
         repository_id = validate_repo_id(repo_id)
         repo_uuid = UUID(repository_id)
         host = urlsplit(base_url).hostname

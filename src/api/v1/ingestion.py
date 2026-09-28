@@ -9,10 +9,12 @@ returning 202 immediately. Clients poll ``GET /reviews/{review_report_id}``
 (see ``api.v1.reviews``) until its status is ``completed`` or ``failed``.
 """
 
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
+from config import settings
 from data.repositories import RepositoryRepository, ReviewReportRepository
 from data.schemas import IngestionAcceptedResponse, IngestionRequest
 from enums import ReviewStatus, SourceType
@@ -20,6 +22,7 @@ from graph import PipelineState, run_pipeline_background
 from helpers import (
     CurrentUser,
     DbSession,
+    check_gitlab_host,
     limiter,
     queue_review,
     validate_access_token,
@@ -45,6 +48,10 @@ async def ingest_repository(
     # to still be accepted once the background task reaches ingest_node.
     access_token = validate_access_token(payload.access_token.get_secret_value())
     base_url, project_path = validate_gitlab_url(payload.gitlab_url)
+    await asyncio.to_thread(
+        check_gitlab_host, base_url, settings.GITLAB_ALLOWED_HOSTS,
+        settings.GITLAB_ALLOW_PRIVATE_HOSTS, settings.GITLAB_ALLOW_HTTP,
+    )
     repository_id = validate_repo_id(payload.repo_id)
     repo_uuid = UUID(repository_id)
     clone_url = f"{base_url}/{project_path}.git"
@@ -65,7 +72,15 @@ async def ingest_repository(
             id=repo_uuid, user_id=current_user.id, name=repo_name, clone_url=clone_url, source_type=SourceType.GITLAB
         )
 
-    review_report = await queue_review(ReviewReportRepository(db_session), repository_id=repo_uuid)
+    reviews = ReviewReportRepository(db_session)
+    active = await reviews.get_active_by_repository(repo_uuid) if existing is not None else None
+    if active is not None:
+        # One run per repository at a time: both would write the same clone directory.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A review of this repository is already in progress (review {active.id}).",
+        )
+    review_report = await queue_review(reviews, repository_id=repo_uuid)
     # Commit NOW, before scheduling the background task. The DbSession dependency
     # only commits at teardown, which FastAPI runs after background tasks finish —
     # so without this the pipeline's own sessions can't see these rows, and

@@ -52,6 +52,19 @@ class ReviewReportRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_active_by_repository(self, repository_id: UUID) -> ReviewReport | None:
+        """The newest PENDING/RUNNING review of a repository, or ``None``."""
+        result = await self._db_session.execute(
+            select(ReviewReport)
+            .where(
+                ReviewReport.repository_id == repository_id,
+                ReviewReport.status.in_((ReviewStatus.PENDING, ReviewStatus.RUNNING)),
+            )
+            .order_by(ReviewReport.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def fail_stale(self, older_than: datetime, error: str, now: datetime) -> int:
         """Mark PENDING/RUNNING rows created before ``older_than`` as FAILED.
 

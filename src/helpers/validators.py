@@ -4,6 +4,8 @@ Nothing here touches the network or the filesystem — pure functions only,
 so they're cheap to unit test and safe to run before any expensive work.
 """
 
+import ipaddress
+import socket
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -118,3 +120,35 @@ def validate_repo_id(repo_id: str | None) -> str:
         raise InvalidInputError("repo_id must be a valid UUID") from exc
 
     return str(parsed)
+
+
+def check_gitlab_host(base_url: str, allowed_hosts: str, allow_private: bool, allow_http: bool) -> None:
+    """Server-side request forgery guard for the host a review will contact with the user's token.
+
+    ``base_url`` comes from ``validate_gitlab_url``. Hosts on the allow-list pass (they may be
+    private or plain http: an internal GitLab). Otherwise the host must be https and must not
+    resolve to a private, loopback, link-local, reserved or multicast address — e.g. cloud
+    metadata at 169.254.169.254 or an admin port on localhost.
+
+    Raises:
+        InvalidInputError: If the host is not allowed.
+    """
+    parsed = urlsplit(base_url)
+    host = (parsed.hostname or "").lower()
+    allowed = {h.strip().lower() for h in allowed_hosts.split(",") if h.strip()}
+    if host in allowed:
+        return
+    if allowed:
+        raise InvalidInputError(f"GitLab host {host!r} is not in the allowed hosts")
+    if parsed.scheme != "https" and not allow_http:
+        raise InvalidInputError("gitlab_url must use https (the access token would be sent unencrypted)")
+    if allow_private:
+        return
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)}
+    except (socket.gaierror, UnicodeError):
+        return  # unresolvable: the clone itself will fail with a clear network error
+    for address in addresses:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+        if not ip.is_global:
+            raise InvalidInputError(f"GitLab host {host!r} resolves to a non-public address; add it to GITLAB_ALLOWED_HOSTS")

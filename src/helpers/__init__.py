@@ -59,7 +59,12 @@ from .review_persistence import (
     skip_review,
     start_review,
 )
-from .review_prompts import kpi_prompt, specialist_prompt, synthesizer_prompt, verifier_prompt
+from .review_prompts import (
+    kpi_prompt,
+    specialist_prompt,
+    synthesizer_prompt,
+    verifier_prompt,
+)
 from .review_report_renderer import render_report
 from .review_workspace import ReviewWorkspace
 from .static_finding_persistence import save_static_findings
@@ -71,7 +76,12 @@ from .storage import (
 )
 from .tool_bootstrap import REQUIRED_TOOLS, resolve_gitleaks_bin, verify_tools_available
 from .tool_runner import ToolExitCodeError, chunk_paths, fits_one_command, run_tool
-from .validators import validate_access_token, validate_gitlab_url, validate_repo_id
+from .validators import (
+    check_gitlab_host,
+    validate_access_token,
+    validate_gitlab_url,
+    validate_repo_id,
+)
 
 __all__ = [
     "ReviewMaps",
@@ -158,6 +168,7 @@ __all__ = [
     "to_repo_relative_path",
     "validate_access_token",
     "validate_gitlab_url",
+    "check_gitlab_host",
     "validate_repo_id",
     "verifier_prompt",
     "verify_clone_integrity",

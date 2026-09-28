@@ -8,8 +8,10 @@ own session via ``db_manager.session()``, and this function opens one more
 of its own, only to record a pipeline-level failure.
 """
 
+import asyncio
 from uuid import UUID
 
+from config import settings
 from data import db_manager
 from data.repositories import ReviewReportRepository
 from graph.state import PipelineState
@@ -18,6 +20,17 @@ from helpers import fail_review
 from system import get_logger
 
 logger = get_logger(__name__)
+
+
+_slots: asyncio.Semaphore | None = None
+
+
+def _pipeline_slots() -> asyncio.Semaphore:
+    """Process-wide cap on concurrent pipeline runs (created lazily inside the running event loop)."""
+    global _slots
+    if _slots is None:
+        _slots = asyncio.Semaphore(settings.MAX_CONCURRENT_PIPELINES)
+    return _slots
 
 
 async def run_pipeline_background(state: PipelineState, review_report_id: UUID) -> None:
@@ -33,7 +46,10 @@ async def run_pipeline_background(state: PipelineState, review_report_id: UUID) 
     PENDING/RUNNING forever with no record of why.
     """
     try:
-        await pipeline_graph.ainvoke(state)
+        # A review holds up to DEEP_REVIEW_MAX_CONCURRENCY agents, a clone and the static tools;
+        # unbounded parallel runs exhaust the model quota, CPU and memory together.
+        async with _pipeline_slots():
+            await pipeline_graph.ainvoke(state)
     except Exception as exc:
         logger.exception("pipeline_background_run_failed", review_report_id=str(review_report_id))
         async with db_manager.session() as db_session:

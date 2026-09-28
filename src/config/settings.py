@@ -85,6 +85,15 @@ class Settings(BaseSettings):
     )
     GIT_CLONE_TIMEOUT_SECONDS: int = Field(300, gt=0, description="Hard timeout for git clone operations, in seconds")
     GITLAB_API_TIMEOUT_SECONDS: int = Field(15, gt=0, description="Timeout for GitLab API requests, in seconds")
+    GITLAB_ALLOWED_HOSTS: str = Field(
+        "",
+        description="Comma-separated GitLab hosts reviews may clone from (e.g. 'gitlab.com,gitlab.corp.local'). "
+        "Empty = any public host. Listed hosts may be private and use http.",
+    )
+    GITLAB_ALLOW_PRIVATE_HOSTS: bool = Field(
+        False, description="Allow unlisted hosts that resolve to private/loopback/link-local addresses (SSRF guard)"
+    )
+    GITLAB_ALLOW_HTTP: bool = Field(False, description="Allow plain-http GitLab URLs for unlisted hosts (token sent unencrypted)")
     MIN_FREE_DISK_MB: int = Field(500, gt=0, description="Minimum free disk space (MB) required before starting a clone")
 
     # ===========================
@@ -178,6 +187,9 @@ class Settings(BaseSettings):
     DEEP_REVIEW_AGENT_TIMEOUT_SECONDS: int = Field(
         900, gt=0, description="Wall-clock cap per agent; findings recorded before the cap are kept"
     )
+    MAX_CONCURRENT_PIPELINES: int = Field(
+        2, gt=0, description="Reviews running at once in this process; further submissions wait in the queue (PENDING)"
+    )
     PIPELINE_STALE_AFTER_SECONDS: int = Field(
         7200,
         gt=0,
@@ -245,6 +257,13 @@ class Settings(BaseSettings):
             self.LOG_LEVEL = defaults.get("LOG_LEVEL", LogLevel.INFO)
         if self.LOG_RENDERER is None:
             self.LOG_RENDERER = defaults.get("LOG_RENDERER", LogRenderer.JSON)
+        return self
+
+    @model_validator(mode="after")
+    def validate_production_safety(self) -> "Settings":
+        """Refuse to boot production with debug behaviour (auto-reload, API docs, verbose errors)."""
+        if self.APP_ENV == Environment.PRODUCTION and self.DEBUG:
+            raise ValueError("DEBUG must be false when APP_ENV=production")
         return self
 
     @property

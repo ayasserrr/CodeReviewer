@@ -126,3 +126,42 @@ class TestValidateRepoId:
     def test_rejects_non_uuid_string(self):
         with pytest.raises(InvalidInputError, match="valid UUID"):
             validate_repo_id("my-custom-slug")
+
+
+class TestCheckGitlabHost:
+    def test_blocks_metadata_loopback_and_private_addresses(self):
+        import pytest
+
+        from helpers.validators import check_gitlab_host
+        from utils import InvalidInputError
+
+        for url in ("https://169.254.169.254", "https://127.0.0.1:8080", "https://10.0.0.5", "https://localhost"):
+            with pytest.raises(InvalidInputError):
+                check_gitlab_host(url, "", allow_private=False, allow_http=False)
+
+    def test_requires_https_unless_allowed(self):
+        import pytest
+
+        from helpers.validators import check_gitlab_host
+        from utils import InvalidInputError
+
+        with pytest.raises(InvalidInputError):
+            check_gitlab_host("http://gitlab.com", "", allow_private=False, allow_http=False)
+
+    def test_allow_list_admits_internal_hosts_and_rejects_others(self):
+        import pytest
+
+        from helpers.validators import check_gitlab_host
+        from utils import InvalidInputError
+
+        check_gitlab_host("http://10.0.0.5", "10.0.0.5,gitlab.corp", allow_private=False, allow_http=False)
+        with pytest.raises(InvalidInputError):
+            check_gitlab_host("https://gitlab.com", "gitlab.corp", allow_private=False, allow_http=False)
+
+    def test_public_https_host_passes(self, monkeypatch):
+        import socket
+
+        from helpers.validators import check_gitlab_host
+
+        monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("172.65.251.78", 443))])
+        check_gitlab_host("https://gitlab.com", "", allow_private=False, allow_http=False)

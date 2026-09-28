@@ -228,3 +228,25 @@ def test_near_identical_titles_from_two_lanes_fold_without_shared_locations(work
     b = record(ws, "secrets", "Frontend API key exposed in browser bundle", "High", ("app/routers/auth.py", 20, 20))
     assert ws.auto_fold_duplicates() == 1
     assert {a, b} & set(ws.duplicates)
+
+
+def test_dead_module_claims_may_only_cite_unreachable_modules(workspace):
+    ws = workspace
+    ws.maps.unreachable = ["src/utils/extract_docx_txt.py"]
+    cat = ws.config.category("maintainability")
+    bad = ws.record_finding(cat, _RecordFindingArgs(
+        title="Unreachable Python modules (dead code)", severity="Low", confidence="high", description="d",
+        impact="i", evidence=[EvidenceInput(file="src/utils/extract_docx_txt.py", line_start=1, line_end=1),
+                              EvidenceInput(file="app/main.py", line_start=1, line_end=1)]))
+    assert bad.startswith("NOT RECORDED") and "app/main.py" in bad
+    ok = ws.record_finding(cat, _RecordFindingArgs(
+        title="Unreachable Python modules (dead code)", severity="Low", confidence="high", description="d",
+        impact="i", evidence=[EvidenceInput(file="src/utils/extract_docx_txt.py", line_start=1, line_end=1)]))
+    assert ok.startswith("Recorded")
+
+
+def test_generic_words_do_not_make_two_findings_the_same_defect(workspace):
+    ws = workspace
+    record(ws, "maintainability", "Unused API endpoints", "Low", ("app/routers/auth.py", 20, 20))
+    record(ws, "performance", "API endpoints return unpaginated collections", "High", ("app/routers/auth.py", 20, 20))
+    assert ws.auto_fold_duplicates() == 0

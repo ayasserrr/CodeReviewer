@@ -82,6 +82,11 @@ _ZERO_CALLERS_NOTE = (
 _MAX_MERGED_EVIDENCE = 25
 # Lint-rule restatements in a maintainability finding title: ruff/flake8-style codes or the tool names.
 _LINT_TITLE = re.compile(r"\b(?:RUF|SIM|UP|PL[A-Z]?|[FEWBCN])\d{3,4}\b|\b(?:ruff|radon|lizard|vulture)\b|cyclomatic complexity", re.IGNORECASE)
+_DEAD_MODULE_TITLE = re.compile(
+    r"(dead|unreachable|unused|orphan\w*|not imported)\b.*\b(modules?|files?|packages?|director\w*|code)\b"
+    r"|\b(modules?|files?|packages?)\b.*\b(dead|unreachable|unused|orphan\w*|not imported)",
+    re.IGNORECASE,
+)
 SYSTEM_DOC_NAME = "agents.md"
 _SYSTEM_DOC_FILE_CHARS = 40_000
 _SYSTEM_DOC_TOTAL_CHARS = 80_000
@@ -122,6 +127,9 @@ _TITLE_STOPWORDS = {
     "with", "from", "into", "that", "this", "missing", "lack", "lacks", "using", "used", "without", "the", "and",
     "for", "via", "not", "all", "any", "are", "absence", "absent", "leads", "lead", "allows", "allowed", "can",
     "issue", "issues", "potential", "possible", "multiple", "across", "due", "its", "has", "have", "been",
+    # Generic nouns every lane uses: sharing them says nothing about sharing a defect.
+    "api", "endpoint", "endpoints", "route", "routes", "application", "app", "code", "service", "services",
+    "file", "files", "data", "insecure", "unsafe", "vulnerability", "vulnerable",
 }
 
 # Static-analysis rules (bundled semgrep ids and bandit test ids) that are leads for a security KPI.
@@ -397,6 +405,20 @@ class ReviewWorkspace:
         self.rejected: dict[str, ReviewFinding] = {}
         self.duplicates: dict[str, str] = {}
         self.summary: ExecutiveSummary | None = None
+
+    def _check_dead_module_claim(self, title: str, refs: list[EvidenceRef]) -> list[str]:
+        """A finding that calls whole modules dead may only cite modules the import map finds unreachable."""
+        if not self.maps.unreachable or not _DEAD_MODULE_TITLE.search(title):
+            return []
+        unreachable = set(self.maps.unreachable)
+        live = sorted({r.file for r in refs if r.file.endswith(".py") and r.file not in unreachable})
+        if not live:
+            return []
+        return [
+            "these modules ARE imported by the application (reachable), so they are not dead: "
+            + ", ".join(live[:10])
+            + " — cite only modules listed in /_review/context/reachability.md"
+        ]
 
     def _load_system_docs(self) -> tuple[tuple[str, str], ...]:
         """Developer-written system descriptions (``AGENTS.md``, any case, any folder; shallowest first).
@@ -710,6 +732,7 @@ class ReviewWorkspace:
             )
         refs, errors = self.validate_evidence(args.evidence)
         errors += self._check_links(args.kpi_ids, args.static_finding_ids)
+        errors += self._check_dead_module_claim(args.title, refs)
         if errors or not refs:
             with self._lock:
                 self.invalid_evidence_bounces += 1

@@ -1418,7 +1418,9 @@ def render_context_files(maps: ReviewMaps) -> dict[str, str]:
     }
 
 
-def build_inventory(maps: ReviewMaps, limit: int = 80) -> tuple[InventorySection, ...]:
+def build_inventory(
+    maps: ReviewMaps, limit: int = 80, line_counts: dict[str, int] | None = None
+) -> tuple[InventorySection, ...]:
     """Deterministic lists for the report appendix — complete, not sampled by a model."""
 
     def section(title: str, rows: list[str], note: str = "") -> InventorySection | None:
@@ -1430,6 +1432,10 @@ def build_inventory(maps: ReviewMaps, limit: int = 80) -> tuple[InventorySection
     unreachable_dirs: dict[str, list[str]] = defaultdict(list)
     for path in maps.unreachable:
         unreachable_dirs[str(PurePosixPath(path).parent)].append(PurePosixPath(path).name)
+    dir_lines: dict[str, int] = defaultdict(int)
+    for path in maps.unreachable:
+        dir_lines[str(PurePosixPath(path).parent)] += (line_counts or {}).get(path, 0)
+    dead_lines = sum(dir_lines.values())
     divergent = maps.env_divergent_defaults()
     sections = [
         section(
@@ -1453,8 +1459,10 @@ def build_inventory(maps: ReviewMaps, limit: int = 80) -> tuple[InventorySection
                 [f"`{c.path}` ({c.file}:{c.line})" for c in maps.unmatched_client_calls()]),
         section("Backend routes no frontend code calls (dead, or external/integration-only)",
                 [f"`{r.method} {r.path}` -> {r.handler} ({r.file}:{r.line})" for r in maps.routes_without_client()]),
-        section("Python modules no application entry point imports",
-                [f"{d}/ ({len(n)}): {', '.join(sorted(n))}" for d, n in sorted(unreachable_dirs.items())]),
+        section(f"Python modules no application entry point imports (~{dead_lines:,} lines)" if line_counts
+                else "Python modules no application entry point imports",
+                [f"{d}/ ({len(n)}{f', {dir_lines[d]:,} lines' if line_counts else ''}): {', '.join(sorted(n))}"
+                 for d, n in sorted(unreachable_dirs.items(), key=lambda kv: -dir_lines.get(kv[0], 0))]),
         section("Process-local state (single process, lost on restart)",
                 [f"`{x.name}` ({x.file}:{x.line}) — {x.kind}" for x in maps.process_state]),
         section("Background jobs",

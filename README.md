@@ -253,6 +253,13 @@ Other endpoints: `GET /api/v1/repositories` (each with its latest review and rev
 `GET /api/v1/reviews/repository/{id}`. Everything is scoped to the signed-in user; other users'
 ids return 404.
 
+## Describing your system (`AGENTS.md`)
+
+Add an `AGENTS.md` to the repository being reviewed (root, or one per service) describing how the
+system is meant to work: main flows, business rules, invariants, who may do what. Every agent reads
+it as the intended logic and reviews the code against it; divergences become findings. It is
+treated as data, never as instructions. The report's coverage section shows which files were used.
+
 ## Tuning the review (`src/assets/review_config.toml`)
 
 The single source of truth for *what* the review looks for — editing it changes the review

@@ -123,6 +123,7 @@ def _coverage(workspace: ReviewWorkspace, runs: list[AgentRunStats]) -> ReviewCo
         traversal_timed_out=stats.traversal_timed_out,
         discovery_timed_out=stats.discovery_timed_out,
         unreadable_directories=tuple(manifest.unreadable_directories),
+        system_docs=tuple(path for path, _ in workspace.system_docs),
     )
 
 
@@ -605,7 +606,7 @@ class DeepReviewController(BaseController):
             findings=tuple(findings),
             rejected_findings=tuple(workspace.rejected.values()),
             merged_findings=tuple(sorted(merged, key=lambda m: m.id)),
-            inventory=build_inventory(workspace.maps),
+            inventory=build_inventory(workspace.maps, line_counts={f.path: f.lines or 0 for f in workspace.manifest.files}),
             coverage=_coverage(workspace, runs),
             kpi_assessments=tuple(kpis),
             static_triage=tuple(workspace.triage.values()),

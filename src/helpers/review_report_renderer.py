@@ -254,6 +254,8 @@ def render_report(report: DeepReviewReport) -> str:
         graph_gap = cov.python_files - cov.python_files_in_graph
         out.append(f"| Dependency graph | {cov.python_files_in_graph} of {cov.python_files} Python files parsed"
                    f"{f' ({graph_gap} not parsed, listed below)' if graph_gap > 0 and cov.python_not_in_graph else ''} |")
+        docs = ", ".join(f"`{d}`" for d in cov.system_docs)
+        out.append(f"| System description | {'AGENTS.md used as the intended logic: ' + docs if docs else 'no AGENTS.md in the repository'} |")
         pct = round(100 * cov.source_files_opened_by_agents / cov.source_files) if cov.source_files else 0
         out.append(f"| Agents | {cov.source_files_opened_by_agents} of {cov.source_files} source files opened directly "
                    f"({pct}%); the rest were covered through static analysis, the dependency graph, grep and the maps |")

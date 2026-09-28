@@ -178,3 +178,45 @@ def test_formatting_only_lint_is_auto_triaged_low_value(workspace):
     assert {ws.triage[i].verdict for i in (whitespace, long_line, imports)} == {"low_value"}
     assert real_bug not in ws.triage
     assert ws.auto_triage_formatting() == 0  # idempotent
+
+
+def test_agents_md_is_loaded_into_the_brief_context_and_correctness_leads(tmp_path):
+    from helpers.review_context import build_context_files, build_repo_brief
+
+    (tmp_path / "svc").mkdir()
+    (tmp_path / "AGENTS.md").write_text("# System\n## Upload flow\nCVs are deduplicated by email before scoring.\n")
+    (tmp_path / "svc" / "agents.md").write_text("## Worker\nOne job per requisition.\n")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(FileEntry(path=p, language=lang, size_bytes=1, lines=3) for p, lang in
+                    [("AGENTS.md", "Markdown"), ("svc/agents.md", "Markdown"), ("app.py", "Python")]),
+    )
+    graph = DependencyGraph(schema_version="1", engine_version="1", repository_id="r", head_sha="a" * 40,
+                            cache_key="k", generated_at=datetime.now(UTC))
+    ws = ReviewWorkspace(repo_path=tmp_path, manifest=manifest, static_findings=[], tool_results={},
+                         graph=graph, config=load_review_config(settings.DEEP_REVIEW_CONFIG_PATH))
+    assert [p for p, _ in ws.system_docs] == ["AGENTS.md", "svc/agents.md"]  # shallowest first, any case
+    brief = build_repo_brief(ws, "demo")
+    assert "Intended system logic" in brief and "deduplicated by email" in brief
+    assert "/_review/context/agents_md.md" in build_context_files(ws, brief)
+    labels = [label for label, _, _ in ws.lane_leads("correctness")]
+    assert any("AGENTS.md" in label for label in labels)
+
+
+def test_latent_cap_uses_the_defect_location_even_when_a_live_route_is_cited(workspace):
+    ws = workspace
+    ws.maps.unreachable = ["app/services/internal_vacancy_service.py"]
+    ws.maps.absent_baselines = []
+    fid = record(ws, "security", "SQL injection in text-to-SQL helper", "Critical",
+                 ("app/services/internal_vacancy_service.py", 10, 12), ("app/main.py", 50, 50))
+    assert ws.apply_severity_caps() >= 1
+    assert ws.findings[fid].severity == "High" and "latent" in ws.findings[fid].verification.note
+
+
+def test_maintainability_rejects_lint_restatements(workspace):
+    out = workspace.record_finding(workspace.config.category("maintainability"), _RecordFindingArgs(
+        title="Widespread unused imports (F401)", severity="Low", confidence="high", description="d", impact="i",
+        evidence=[EvidenceInput(file="app/main.py", line_start=1, line_end=1)]))
+    assert out.startswith("NOT RECORDED") and not workspace.findings

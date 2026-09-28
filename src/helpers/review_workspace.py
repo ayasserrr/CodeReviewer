@@ -80,6 +80,11 @@ _ZERO_CALLERS_NOTE = (
 
 
 _MAX_MERGED_EVIDENCE = 25
+# Lint-rule restatements in a maintainability finding title: ruff/flake8-style codes or the tool names.
+_LINT_TITLE = re.compile(r"\b(?:RUF|SIM|UP|PL[A-Z]?|[FEWBCN])\d{3,4}\b|\b(?:ruff|radon|lizard|vulture)\b|cyclomatic complexity", re.IGNORECASE)
+SYSTEM_DOC_NAME = "agents.md"
+_SYSTEM_DOC_FILE_CHARS = 40_000
+_SYSTEM_DOC_TOTAL_CHARS = 80_000
 # ruff codes that only describe layout: pycodestyle whitespace/indent/blank-line/line-length and isort.
 _FORMATTING_RULE = re.compile(r"^(W29\d|W391|E1\d\d|E2\d\d|E3\d\d|E501|I00\d)$")
 # Hardening and hygiene classes: real, but a missing layer of defence rather than an exploit on its own.
@@ -378,6 +383,7 @@ class ReviewWorkspace:
 
         self._line_counts: dict[str, int | None] = {}
         self._text_cache: dict[str, list[str]] = {}
+        self.system_docs = self._load_system_docs()
 
         # Collector state.
         self._lock = threading.Lock()
@@ -391,6 +397,29 @@ class ReviewWorkspace:
         self.rejected: dict[str, ReviewFinding] = {}
         self.duplicates: dict[str, str] = {}
         self.summary: ExecutiveSummary | None = None
+
+    def _load_system_docs(self) -> tuple[tuple[str, str], ...]:
+        """Developer-written system descriptions (``AGENTS.md``, any case, any folder; shallowest first).
+
+        The repository's own account of its intended logic: agents review the code against it.
+        """
+        paths = sorted(
+            (f.path for f in self.manifest.files if PurePosixPath(f.path).name.lower() == SYSTEM_DOC_NAME),
+            key=lambda path: (path.count("/"), path),
+        )
+        docs: list[tuple[str, str]] = []
+        budget = _SYSTEM_DOC_TOTAL_CHARS
+        for path in paths:
+            if budget <= 0:
+                break
+            try:
+                text = (self.repo_path / path).read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
+                continue
+            text = text[: min(_SYSTEM_DOC_FILE_CHARS, budget)]
+            budget -= len(text)
+            docs.append((path, text))
+        return tuple(docs)
 
     # ------------------------------------------------------------------
     # Evidence validation
@@ -673,6 +702,12 @@ class ReviewWorkspace:
         return errors
 
     def record_finding(self, category: ReviewCategory, args: _RecordFindingArgs) -> str:
+        if category.id == "maintainability" and _LINT_TITLE.search(args.title):
+            return (
+                "NOT RECORDED — this restates lint output. Lint rule groups belong in the static-analysis triage "
+                "(triage_static_rule), not in findings. Record the underlying defect only if it has a real cost here "
+                "(e.g. dead code sized in lines, a duplicated implementation that diverged)."
+            )
         refs, errors = self.validate_evidence(args.evidence)
         errors += self._check_links(args.kpi_ids, args.static_finding_ids)
         if errors or not refs:
@@ -918,6 +953,21 @@ class ReviewWorkspace:
                     frozenset(files),
                     [row for _, _, row in entry_points],
                 ))
+            if self.system_docs:
+                headings = [
+                    f"{path}:{n} {line.lstrip('#').strip()}"
+                    for path, text in self.system_docs
+                    for n, line in enumerate(text.splitlines(), start=1)
+                    if line.startswith("#") and line.lstrip("#").strip()
+                ]
+                groups.append((
+                    (
+                        "Flows the developers documented in AGENTS.md — trace each against the code; "
+                        "every divergence is a finding (cite the AGENTS.md line and the code)"
+                    ),
+                    frozenset(path for path, _ in self.system_docs),
+                    headings[:25] or [path for path, _ in self.system_docs],
+                ))
             add("Values rewritten during extraction (semgrep)", static_rows("python-silent-value-substitution"))
             add("Random identifiers (semgrep)", static_rows("python-random-identifier"))
             add("Work claims / locks / in-progress flags (semgrep)", static_rows("python-claim-flag-or-lock"))
@@ -937,11 +987,28 @@ class ReviewWorkspace:
                 [(r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
                  for r in self.maps.routes_without_client()])
             if by_dir:
+                lines = {f.path: f.lines or 0 for f in self.manifest.files}
+                sized = sorted(
+                    ((d, len(paths), sum(lines.get(x, 0) for x in paths)) for d, paths in by_dir.items()),
+                    key=lambda row: -row[2],
+                )
+                total = sum(n for _, _, n in sized)
                 groups.append((
-                    "Modules no application root imports (dead-code candidates, by directory)",
+                    (
+                        f"Modules no application root imports — {len(self.maps.unreachable)} modules, ~{total:,} "
+                        "lines of dead-code candidates. Confirm, then record ONE grouped dead-code finding sized "
+                        "in lines (not one per folder)"
+                    ),
                     frozenset(self.maps.unreachable),
-                    [f"{d}/ ({len(paths)} modules)" for d, paths in sorted(by_dir.items(), key=lambda kv: -len(kv[1]))],
+                    [f"{d}/ ({n} modules, {loc:,} lines)" for d, n, loc in sized],
                 ))
+            clones: Counter[str] = Counter()
+            for f in self.static_by_id.values():
+                if f.tool == "jscpd":
+                    match = re.search(r"\((\d+) lines", f.message)
+                    clones[f.file] += int(match.group(1)) if match else 0
+            add("Largest duplicated code (jscpd): parallel implementations to name, e.g. near-identical orchestrators",
+                [(path, f"{path}: {n:,} duplicated lines") for path, n in clones.most_common(12) if n >= 30])
         elif category_id == "secrets":
             add(".env files with flagged keys (weak/short/localhost/browser-exposed/duplicates)",
                 [(f.file, f"{f.file}: " + "; ".join(f"{k} {flag}" for k, flag in f.flags[:6])
@@ -1155,7 +1222,8 @@ class ReviewWorkspace:
     def apply_severity_caps(self) -> int:
         """Deterministic severity ceilings the model is not trusted to apply on its own.
 
-        - every cited Python file is unreachable from the application roots -> latent, at most High;
+        - every cited Python file, or the first-cited (defect) location, is unreachable from the
+          application roots -> latent, at most High;
         - every cited file is a standalone script or a test -> at most Medium;
         - the finding reports an absent production baseline (rate limiting, metrics, ...) -> at most High.
         The cap and its reason are appended to the verification note, so the report shows why.
@@ -1167,12 +1235,18 @@ class ReviewWorkspace:
         with self._lock:
             for fid, finding in list(self.findings.items()):
                 files = {ref.file for ref in finding.evidence}
+                primary = finding.evidence[0].file if finding.evidence else None
                 py_files = {f for f in files if f.endswith(".py")}
                 ceiling, reason = None, ""
                 if py_files and py_files == files and all(_is_script_or_test(f, scripts, unreachable) for f in files):
                     ceiling, reason = "Medium", "only standalone scripts/tests are affected, not the running service"
                 elif py_files and py_files <= unreachable and py_files == files:
                     ceiling, reason = "High", "latent — the cited code is not imported by any application entry point"
+                elif primary and primary in unreachable:
+                    # The defect's own location is dead code; citing the live route it *would* sit
+                    # behind does not make it reachable (observed: a dead text-to-SQL module rated
+                    # Critical because the finding also cited the live chat router).
+                    ceiling, reason = "High", f"latent — {primary} (the defect's location) is not imported by any application entry point"
                 elif any(re.search(b.mention, finding.title) for b in baselines):
                     ceiling, reason = "High", "missing production baseline"
                 elif _HARDENING_TITLE.search(finding.title) and not _EXPLOIT_TITLE.search(finding.title):

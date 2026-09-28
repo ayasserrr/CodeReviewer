@@ -312,6 +312,7 @@ class ReviewCoverage(BaseModel):
     traversal_timed_out: bool = False
     discovery_timed_out: bool = False
     unreadable_directories: tuple[str, ...] = ()
+    system_docs: tuple[str, ...] = ()
 
 
 class ReviewStatistics(BaseModel):

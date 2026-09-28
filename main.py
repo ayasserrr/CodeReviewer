@@ -26,7 +26,9 @@ from config import settings  # noqa: E402
 from data import db_manager  # noqa: E402
 from data.repositories import ReviewReportRepository  # noqa: E402
 from helpers import fail_orphaned_reviews, limiter  # noqa: E402
+from enums import Environment  # noqa: E402
 from system import get_logger  # noqa: E402
+from system.http_middleware import RequestContextMiddleware, SecurityHeadersMiddleware  # noqa: E402
 from utils import (  # noqa: E402
     AuthenticationError,
     DiskError,
@@ -62,18 +64,23 @@ async def lifespan(app: FastAPI):
         logger.info("application_shutdown")
 
 
+# Interactive API docs only while debugging: in staging/production they map the whole
+# attack surface for anyone who can reach the host.
+_docs = bool(settings.DEBUG)
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.VERSION,
-    openapi_url=f"{settings.API_VERSION}/openapi.json",
-    docs_url=f"{settings.API_VERSION}/docs",
-    redoc_url=f"{settings.API_VERSION}/redoc",
+    openapi_url=f"{settings.API_VERSION}/openapi.json" if _docs else None,
+    docs_url=f"{settings.API_VERSION}/docs" if _docs else None,
+    redoc_url=f"{settings.API_VERSION}/redoc" if _docs else None,
     lifespan=lifespan,
 )
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(SecurityHeadersMiddleware, hsts=settings.APP_ENV == Environment.PRODUCTION)
+app.add_middleware(RequestContextMiddleware)
 
 app.include_router(router, prefix=settings.API_VERSION)
 

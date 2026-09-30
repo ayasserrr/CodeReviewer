@@ -391,6 +391,7 @@ class DeepReviewReport(BaseModel):
     findings: tuple[ReviewFinding, ...] = Field(default_factory=tuple)
     rejected_findings: tuple[ReviewFinding, ...] = Field(default_factory=tuple)
     dismissed_leads: tuple[str, ...] = Field(default_factory=tuple)  # "lane — lead row — cited reason"
+    open_leads: tuple[str, ...] = Field(default_factory=tuple)  # "lane — lead: rows" left neither recorded nor dismissed
     merged_findings: tuple[MergedFinding, ...] = Field(default_factory=tuple)
     inventory: tuple[InventorySection, ...] = Field(default_factory=tuple)
     coverage: ReviewCoverage | None = None

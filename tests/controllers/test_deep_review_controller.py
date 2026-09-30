@@ -197,6 +197,10 @@ async def test_full_review_with_scripted_agents(repo: Path, scripted_models, mon
     assert report.coverage.files_discovered == len(manifest.files)
     assert report.coverage.static_tools_run == ("ruff",)
     assert "## Review coverage" in markdown
+    # Leads nobody recorded or dismissed are surfaced, not dropped.
+    assert all(" — " in row for row in report.open_leads)
+    if report.open_leads:
+        assert "mandatory lead group(s) were left open" in markdown
     assert agents["synthesizer"] == "completed"
     assert all(status == "completed" for status in agents.values())
 

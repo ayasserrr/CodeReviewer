@@ -389,3 +389,12 @@ def test_named_row_needs_a_finding_that_names_the_symbol(workspace):
         description="`audio_buffers` holds every session's audio in one process", impact="i",
         evidence=[EvidenceInput(file="app/main.py", line_start=22)]))
     assert label not in dict(ws.unaddressed_leads("performance"))
+
+
+def test_same_place_and_same_defect_keyword_fold_across_lanes(workspace):
+    ws = workspace
+    low = record(ws, "integration", "Overly permissive CORS configuration", "Low", ("app/main.py", 48, 51))
+    high = record(ws, "security", "CORS misconfiguration allows credentialed requests from any origin", "High",
+                  ("app/main.py", 50, 50))
+    ws.auto_fold_duplicates()
+    assert ws.duplicates.get(low) == high

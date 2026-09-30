@@ -307,6 +307,18 @@ A rejection must cite, in the note, the repository `path:line` that disproves th
 code is an adjustment (lower severity, say latent). Missing tests, CI gates, logging,
 metrics, memory or budgets are absences — you disprove them only by citing the code that
 provides them.
+Missing governance controls (backups/restore, audit trail, retention/deletion, token budgets,
+cost attribution, score evaluation sets, human oversight of automated decisions) are
+production baselines too: verify the absence and calibrate. When part of the answer lives
+outside the repository (a managed database's backups), keep the finding for what the
+repository itself owns (local vector stores, uploaded files, container volumes), say "not
+enforced in the repository" and set exposure to conditional — never reject it as
+"infrastructure speculation". A tool that only assists a human still needs oversight and
+evaluation when its scores rank people: adjust severity, do not reject.
+Token growth inside ONE request is real even when the service keeps no memory across
+requests: an agent loop that appends each response and tool output and re-sends the whole
+list every round grows input tokens per round (O(rounds^2 x tool output)). Judge the loop, not
+the chat history.
 Reject only when the CORE defect is absent. If the defect is real but a detail is wrong
 (a misnamed function, a wrong line, an overstated impact), keep it: adjust and pass
 corrected_title / corrected_impact describing what the code really does. Losing a

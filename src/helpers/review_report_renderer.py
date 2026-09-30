@@ -306,6 +306,12 @@ def render_report(report: DeepReviewReport) -> str:
         if cov.python_not_in_graph:
             out.append("*Python files not in the dependency graph:* " + "; ".join(f"`{f}`" for f in cov.python_not_in_graph))
             out.append("")
+        if report.open_leads:
+            out.append(f"> **Coverage warning:** {len(report.open_leads)} mandatory lead group(s) were left open — the "
+                       "specialist neither recorded nor dismissed them. Review these by hand:")
+            out.append("")
+            out.extend(f"- {row[:400]}" for row in report.open_leads)
+            out.append("")
         if cov.unopened_source_dirs:
             out.append("*Least-opened areas (reviewed via tools only):* " + "; ".join(cov.unopened_source_dirs))
             out.append("")

@@ -118,6 +118,10 @@ _NON_REASON = re.compile(
     r"did not (check|trace|review)|covered (by|in|under) (finding|another)|see finding|already (recorded|reported|covered)|"
     r"will (check|review) later|skipp?ed)\b"
 )
+_ANCHOR_TERMS = frozenset({
+    "cors", "csrf", "xss", "jwt", "ssrf", "xxe", "idor", "csp", "hsts", "otp", "sqli", "injection", "traversal",
+    "deserialization", "clickjacking", "openapi", "swagger", "mktemp", "pickle", "yaml", "iframe", "sandbox",
+})
 _EACH_ROW_MAX_KEYS = 25
 _ROW_SYMBOL = re.compile(r"^`?([A-Za-z_][A-Za-z0-9_]{3,})`?\s*\(")
 """Lead groups up to this many distinct locations are tracked row by row, not as a whole."""
@@ -1658,7 +1662,9 @@ class ReviewWorkspace:
             # (e.g. the bundled API key seen in session.ts and in .env.example).
             return True
         if self._locations_overlap(a, b):
-            return overlap >= 0.15
+            # Same place + the same specific defect keyword (cors, csrf, xss, jwt, ...) is one defect even
+            # when the titles are worded apart ("Overly permissive CORS" vs "CORS allows credentialed ...").
+            return overlap >= 0.15 or bool(terms_a & terms_b & _ANCHOR_TERMS)
         shares_file = bool({e.file for e in a.evidence} & {e.file for e in b.evidence})
         return shares_file and overlap >= 0.34
 

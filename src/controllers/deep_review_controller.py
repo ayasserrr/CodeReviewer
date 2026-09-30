@@ -694,7 +694,7 @@ class DeepReviewController(BaseController):
             open_leads=tuple(
                 f"{category.id} — {label}: " + "; ".join(rows[:6]) + (f" (+{len(rows) - 6} more)" if len(rows) > 6 else "")
                 for category in config.enabled_categories
-                for label, rows in workspace.unaddressed_leads(category.id)
+                for label, rows in workspace.unaddressed_leads(category.id, any_lane=True)
             ),
             dismissed_leads=tuple(
                 f"{lane} — {row} — {reason}" for (lane, row), reason in sorted(workspace.dismissed_leads.items())

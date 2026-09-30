@@ -398,3 +398,12 @@ def test_same_place_and_same_defect_keyword_fold_across_lanes(workspace):
                   ("app/main.py", 50, 50))
     ws.auto_fold_duplicates()
     assert ws.duplicates.get(low) == high
+
+
+def test_report_counts_a_lead_covered_by_another_lane(workspace):
+    ws = workspace
+    label = _subprocess_leads(ws)
+    record(ws, "security", "antiword and ffmpeg run without timeouts", "Medium",
+           ("app/main.py", 10, 10), ("app/services/cv_operations_service.py", 300, 300))
+    assert label in dict(ws.unaddressed_leads("inputs"))  # the owning lane still has to act on it
+    assert label not in dict(ws.unaddressed_leads("inputs", any_lane=True))  # but the report shows it covered

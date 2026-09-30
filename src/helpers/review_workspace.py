@@ -1287,8 +1287,10 @@ class ReviewWorkspace:
         groups = Counter((f.tool, f.category) for f in pending)
         return [(tool, rule, count) for (tool, rule), count in groups.most_common()]
 
-    def unaddressed_leads(self, category_id: str) -> list[tuple[str, list[str]]]:
-        mine = [f for f in self.findings.values() if f.category_id == category_id]
+    def unaddressed_leads(self, category_id: str, *, any_lane: bool = False) -> list[tuple[str, list[str]]]:
+        """Lead groups (or rows) no finding cites. ``any_lane``: a finding from ANY lane counts
+        (used for the report — a lead another lane recorded is covered, just not by its owner)."""
+        mine = [f for f in self.findings.values() if any_lane or f.category_id == category_id]
         spans: dict[str, list[tuple[int, int]]] = defaultdict(list)
         for f in mine:
             for ref in f.evidence:

@@ -35,6 +35,7 @@ from .models import RepositoryContext, RepositoryIngestionResult
 from .review import (
     AgentRunStats,
     DeepReviewReport,
+    EXPOSURE_LABELS,
     EvidenceRef,
     InventorySection,
     MergedFinding,
@@ -55,6 +56,7 @@ from .review import (
 )
 
 __all__ = [
+    "EXPOSURE_LABELS",
     "AgentRunStats",
     "AuthenticationError",
     "BootstrapError",

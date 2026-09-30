@@ -11,7 +11,7 @@ can always be regenerated from the stored ``report_data``.
 
 from collections import Counter, defaultdict
 
-from utils import DeepReviewReport, ReviewFinding
+from utils import EXPOSURE_LABELS, DeepReviewReport, ReviewFinding
 from utils.review import SEVERITY_ORDER
 
 _KPI_STATUS_LABEL = {
@@ -58,6 +58,12 @@ def _evidence_line(finding: ReviewFinding) -> str:
     return f"*Evidence:* {labels}{more}"
 
 
+def _exposure_line(finding: ReviewFinding) -> str | None:
+    if finding.exposure == "live":
+        return None
+    return f"*Exposure:* {EXPOSURE_LABELS.get(finding.exposure, finding.exposure)}."
+
+
 def _verification_line(finding: ReviewFinding) -> str:
     if finding.verification is None:
         return "*Verification:* not independently verified."
@@ -92,6 +98,12 @@ def render_report(report: DeepReviewReport) -> str:
     )
     out.append("")
     out.append(f"**Severity levels used below:** {', '.join(SEVERITY_ORDER)}.")
+    out.append("")
+    out.append(
+        "**Exposure** (stated on every finding that is not live): live — reachable today; conditional — only "
+        "under specific conditions; latent — in the code but no entry point reaches it; dead — unused code; "
+        "theoretical — needs a future architectural change. Severity is calibrated to exposure."
+    )
     out.append("")
     counts = Counter(f.severity for f in report.findings)
     out.append(
@@ -178,6 +190,10 @@ def render_report(report: DeepReviewReport) -> str:
                 out.append(f"**Remediation:** {finding.remediation}")
                 out.append("")
             out.append(_evidence_line(finding))
+            exposure = _exposure_line(finding)
+            if exposure:
+                out.append("")
+                out.append(exposure)
             out.append("")
             out.append(_verification_line(finding))
             out.append("")

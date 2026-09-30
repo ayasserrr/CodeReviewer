@@ -122,6 +122,7 @@ export interface Finding {
   kpi_ids: string[];
   static_finding_ids: string[];
   verification: Verification | null;
+  exposure?: "live" | "conditional" | "latent" | "dead" | "theoretical";
 }
 
 export interface ReviewCategory {

@@ -21,6 +21,15 @@ Confidence = Literal["low", "medium", "high"]
 TriageVerdict = Literal["true_positive", "false_positive", "low_value"]
 KpiStatus = Literal["open", "partially_open", "closed", "not_applicable", "not_verified"]
 VerificationVerdict = Literal["confirmed", "rejected", "adjusted"]
+# How reachable the defect is today — severity is calibrated against it.
+Exposure = Literal["live", "conditional", "latent", "dead", "theoretical"]
+EXPOSURE_LABELS: dict[str, str] = {
+    "live": "live — reachable through the running system today",
+    "conditional": "reachable, but only under specific conditions",
+    "latent": "latent — present in the code, not reachable from any entry point today (one import/route away)",
+    "dead": "dead — unused code nothing calls or plans to call",
+    "theoretical": "theoretical — needs a future change to the architecture before it can happen",
+}
 
 SEVERITY_ORDER: tuple[str, ...] = ("Critical", "High", "Medium", "Low")
 CONFIDENCE_ORDER: tuple[str, ...] = ("low", "medium", "high")
@@ -179,6 +188,7 @@ class ReviewFinding(BaseModel):
         static_finding_ids: ``StaticFinding.id``s this finding confirms/aggregates.
         verification: The verifier's judgment, or ``None`` if not verified.
         duplicate_of: Set by the synthesizer when merged into another finding.
+        exposure: How reachable the defect is today (live / conditional / latent / dead / theoretical).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -196,6 +206,7 @@ class ReviewFinding(BaseModel):
     static_finding_ids: tuple[str, ...] = Field(default_factory=tuple)
     verification: Verification | None = None
     duplicate_of: str | None = None
+    exposure: Exposure = "live"
 
 
 class KpiAssessment(BaseModel):

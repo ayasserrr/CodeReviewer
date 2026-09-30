@@ -60,7 +60,13 @@ read the real code, trace the real data flow, and report only what is actually w
 - Before recording, try to disprove it: is there a middleware, dependency, decorator,
   wrapper, proxy config or caller that already handles this? Is the code dead
   (no callers, not wired to a route)? If dead, say so explicitly and lower severity.
-- Distinguish "confirmed open" from "latent" (present but not reachable today).
+- Classify every finding's exposure (record_finding `exposure`) and calibrate severity to it:
+  live (reachable through the running system today) | conditional (reachable only under a
+  specific config, role, race or input) | latent (the code exists but no entry point reaches
+  it — one import or route away) | dead (unused code nothing calls) | theoretical (needs a
+  future architectural change). Latent is at most High, dead and theoretical at most
+  Medium; the tools enforce this and re-label anything located in unreachable code latent.
+  Missing controls (tests, logging, budgets, quotas) in the running service are live.
 - "Unused"/"dead" claims need proof: find_references must show no use beyond the
   definition (and check string-based use: route tables, registries, entry points,
   __all__, config files). A call graph with zero callers is NOT proof.
@@ -255,6 +261,8 @@ callers, config, dead-code status, tests proving otherwise). Check three things:
    application root. A chain "live route -> ... -> that module" is only live if you can
    show the import/call that connects them (find_references / get_module_imports); if
    you cannot, the issue is latent: at most High for a severe latent flaw, and say so.
+   Check the recorded exposure too (live/conditional/latent/dead/theoretical); pass
+   corrected_exposure when it is wrong.
 4. Is the severity right per the rubric above? If not -> adjusted.
 Then call submit_verification exactly once per finding:
 - confirmed — the claim holds as stated and the severity is fair;

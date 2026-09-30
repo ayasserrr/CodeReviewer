@@ -267,6 +267,7 @@ function FindingCard({ finding, number, defaultOpen }: { finding: Finding; numbe
         <span className="row finding-meta" style={{ gap: 8 }}>
           {v?.verdict === "confirmed" && <Badge color="var(--ok)"><Icon name="check" size={12} style={{ color: "var(--ok)" }} />Verified</Badge>}
           {v?.verdict === "adjusted" && <Badge color="var(--warn)"><span className="dot" style={{ color: "var(--warn)" }} />Re-rated from {v.original_severity}</Badge>}
+          {finding.exposure && finding.exposure !== "live" && <Badge color="var(--muted)">{finding.exposure[0].toUpperCase() + finding.exposure.slice(1)}</Badge>}
           {finding.kpi_ids.map((k) => <Badge key={k}><Icon name="shield" size={12} />{k}</Badge>)}
           <Icon name="chevron" size={16} style={{ color: "var(--muted)", transform: open ? "rotate(90deg)" : undefined, transition: "transform .15s" }} />
         </span>

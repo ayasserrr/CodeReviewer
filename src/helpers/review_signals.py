@@ -65,6 +65,32 @@ _CI_TEST_STEP = re.compile(
     r"(?i)\b(pytest|unittest|tox|nox|(npm|yarn|pnpm)( run)? test|vitest|jest|go test|mvn (test|verify)|gradle\w* test|"
     r"ruff|flake8|pylint|eslint|mypy|pyright|bandit|semgrep|trivy|snyk|pip-audit|npm audit|sonar\w*)\b"
 )
+_CI_SCAN_STEP = re.compile(
+    r"(?i)\b(bandit|semgrep|trivy|snyk|pip-audit|safety check|npm audit|yarn audit|gitleaks|trufflehog|grype|"
+    r"dependency-check|sonar\w*|codeql|owasp)\b"
+)
+_CREDENTIAL_NAME = re.compile(r"(?i)(api[_-]?key|apikey|token|secret|password|access[_-]?key|auth)")
+_PROGRESS_SEGMENT = re.compile(r"(?i)^(progress|status|events|stream|sse|updates|poll)$")
+_EXECUTORS = frozenset({"ThreadPoolExecutor", "ProcessPoolExecutor", "run_in_executor", "to_thread"})
+# Controls a production system needs; absent everywhere = a lead for the owning lane.
+# (lane, label, evidence regex, mention regex, applies-when)
+_CONTROLS = (
+    ("llm", "a per-user / per-session / per-request token or cost budget for model calls",
+     (
+         r"(?i)token_?budget|cost_?(limit|budget)|max_?input_?tokens|trim_messages|max_context|usage_?(limit|quota)|"
+         r"tokens_?per_?(user|session|day)"
+     ),
+     r"(?i)budget|quota|cost limit|token limit|per[- ]user|per[- ]session", "llm"),
+    ("inputs", "per-user / per-IP upload or job quotas",
+     r"(?i)quota|max_?uploads|upload_?limit|max_?files_?per|max_?jobs|jobs_?per_?user|daily_?limit",
+     r"(?i)quota|per[- ]user|job[- ]creation|limit on (jobs|uploads)", "uploads"),
+    ("inputs", "cancellation of a running processing job",
+     r"(?i)\bcancel(led|lation|_job|_task|_screening)?\b|abort_?(job|task)|\.revoke\(",
+     r"(?i)cancel", "jobs"),
+    ("inputs", "retry with backoff around external / model calls",
+     r"(?i)\btenacity\b|\bbackoff\b|exponential|Retry\(|retry_?(policy|with|delay)|stop_after_attempt",
+     r"(?i)retr(y|ies)|backoff", "jobs"),
+)
 _CI_FILE_NAMES = frozenset({".gitlab-ci.yml", "azure-pipelines.yml", "bitbucket-pipelines.yml", ".drone.yml",
                             "cloudbuild.yaml", "cloudbuild.yml"})
 _JENKINS_STAGE = re.compile(r"""stage\s*\(\s*['"]([^'"]+)['"]""")
@@ -130,6 +156,7 @@ class CiPipeline:
     file: str
     stages: tuple[str, ...]
     runs_checks: bool  # any test / lint / type-check / security-scan step
+    runs_scans: bool = False  # a dependency / security scan step
 
 
 @dataclass
@@ -150,6 +177,11 @@ class RuntimeSignals:
     unused_dependencies: list[Signal] = field(default_factory=list)
     parallel_implementations: list[tuple[str, tuple[Signal, ...]]] = field(default_factory=list)
     subprocess_no_timeout: list[Signal] = field(default_factory=list)
+    query_credentials: list[Signal] = field(default_factory=list)  # API keys/tokens read from the query string
+    id_shape_checks: list[Signal] = field(default_factory=list)  # len(some_id) == N used as meaning
+    progress_channels: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)  # resource, routes
+    executor_nesting: list[Signal] = field(default_factory=list)
+    absent_controls: list[tuple[str, str, str]] = field(default_factory=list)  # (lane, label, mention regex)
 
     @property
     def ci_without_checks(self) -> list[CiPipeline]:
@@ -410,6 +442,84 @@ def _observability_signals(files, live: set[str], routes, signals: RuntimeSignal
                 signals.subprocess_no_timeout.append(Signal(py.path, node.lineno, f"{name}{tool} with no timeout"))
 
 
+def _structure_signals(files, live: set[str], routes, signals: RuntimeSignals) -> None:
+    started_on_executor: set[str] = set()
+    for py in files:
+        for node in ast.walk(py.tree):
+            if isinstance(node, ast.Call) and _dotted(node.func).split(".")[-1] in ("to_thread", "run_in_executor", "submit"):
+                args = node.args[1:] if _dotted(node.func).endswith("run_in_executor") else node.args[:1]
+                for arg in args:
+                    name = _dotted(arg).split(".")[-1]
+                    if name:
+                        started_on_executor.add(name)
+    for py in files:
+        if py.path not in live:
+            continue
+        for node in ast.walk(py.tree):
+            if isinstance(node, ast.Call):
+                callee = _dotted(node.func)
+                last = callee.split(".")[-1]
+                # credentials read from the query string
+                if last == "get" and callee.endswith("query_params.get") and node.args and isinstance(node.args[0], ast.Constant) \
+                        and _CREDENTIAL_NAME.search(str(node.args[0].value)):
+                    signals.query_credentials.append(Signal(py.path, node.lineno, f"reads `{node.args[0].value}` from the query string"))
+                if last == "ThreadPoolExecutor" and any(
+                    k.arg == "max_workers" and isinstance(k.value, ast.Constant) and k.value.value == 1 for k in node.keywords
+                ):
+                    signals.executor_nesting.append(Signal(py.path, node.lineno, "ThreadPoolExecutor(max_workers=1) — a thread pool of one"))
+            elif isinstance(node, ast.Subscript) and _dotted(node.value).endswith("query_params") \
+                    and isinstance(node.slice, ast.Constant) and _CREDENTIAL_NAME.search(str(node.slice.value)):
+                signals.query_credentials.append(Signal(py.path, node.lineno, f"reads `{node.slice.value}` from the query string"))
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                args = node.args.args + node.args.kwonlyargs
+                defaults = [None] * (len(node.args.args) - len(node.args.defaults)) + list(node.args.defaults) + list(node.args.kw_defaults)
+                for arg, default in zip(args, defaults, strict=False):
+                    if isinstance(default, ast.Call) and _dotted(default.func).split(".")[-1] == "Query" and (
+                        _CREDENTIAL_NAME.search(arg.arg)
+                        or any(k.arg == "alias" and isinstance(k.value, ast.Constant) and _CREDENTIAL_NAME.search(str(k.value.value))
+                               for k in default.keywords)
+                    ):
+                        signals.query_credentials.append(
+                            Signal(py.path, arg.lineno, f"{node.name}() accepts `{arg.arg}` as a query parameter")
+                        )
+                if node.name in started_on_executor:
+                    for sub in _own_nodes(node):
+                        if isinstance(sub, ast.Call) and _dotted(sub.func).split(".")[-1] in _EXECUTORS:
+                            signals.executor_nesting.append(Signal(
+                                py.path, sub.lineno,
+                                f"{node.name}() already runs on an executor and starts another one "
+                                f"({_dotted(sub.func).split('.')[-1]})",
+                            ))
+                            break
+            elif isinstance(node, ast.Compare) and isinstance(node.left, ast.Call) \
+                    and _dotted(node.left.func) == "len" and node.left.args \
+                    and re.search(r"(?i)(^|_)id$|_id\b|^id_", _dotted(node.left.args[0]).split(".")[-1] or "") \
+                    and any(isinstance(c, ast.Constant) and isinstance(c.value, int) for c in node.comparators):
+                signals.id_shape_checks.append(Signal(
+                    py.path, node.lineno,
+                    f"len({_dotted(node.left.args[0])}) compared to a constant — the id's length is treated as meaning",
+                ))
+    groups: dict[str, list[str]] = defaultdict(list)
+    for route in routes:
+        parts = route.path.strip("/").split("/")
+        if any(_PROGRESS_SEGMENT.match(p) for p in parts):
+            key = "/".join("{}" if p.startswith("{") else p for p in parts if not _PROGRESS_SEGMENT.match(p))
+            groups[key].append(f"{route.method} {route.path} ({route.file}:{route.line})")
+    signals.progress_channels = [(key, tuple(rows)) for key, rows in sorted(groups.items()) if len(rows) > 1]
+
+
+def _absent_controls(files, live: set[str], routes, signals: RuntimeSignals) -> None:
+    corpus = [py.text for py in files if not live or py.path in live]
+    applies = {
+        "llm": signals.model_call_files > 0 or bool(signals.model_clients_at_import),
+        "uploads": any(getattr(r, "accepts_upload", False) for r in routes),
+        "jobs": any(getattr(r, "accepts_upload", False) for r in routes) or signals.model_call_files > 0,
+    }
+    for lane, label, evidence, mention, when in _CONTROLS:
+        if applies.get(when) and not any(re.search(evidence, text) for text in corpus):
+            signals.absent_controls.append((lane, label, mention))
+
+
 # ----------------------------------------------------------------------
 # testing & CI
 # ----------------------------------------------------------------------
@@ -447,7 +557,9 @@ def _testing_signals(repo_path: Path, manifest: RepositoryManifest, deps, signal
             continue
         stages = _JENKINS_STAGE.findall(text) or [s.strip() for s in _YAML_STAGE.findall(text)]
         stages = [st.strip() for st in stages if st.strip()]
-        signals.ci_pipelines.append(CiPipeline(path, tuple(dict.fromkeys(stages))[:15], bool(_CI_TEST_STEP.search(text))))
+        signals.ci_pipelines.append(CiPipeline(
+            path, tuple(dict.fromkeys(stages))[:15], bool(_CI_TEST_STEP.search(text)), bool(_CI_SCAN_STEP.search(text))
+        ))
 
 
 # ----------------------------------------------------------------------
@@ -595,6 +707,8 @@ def build_runtime_signals(files, repo_path: Path, manifest: RepositoryManifest, 
         ("testing", lambda: _testing_signals(repo_path, manifest, deps, signals)),
         ("dependencies", lambda: _dependency_signals(files, live if dead else set(), deps, signals)),
         ("parallel_implementations", lambda: _parallel_implementations(files, live, signals)),
+        ("structure", lambda: _structure_signals(files, live, routes, signals)),
+        ("controls", lambda: _absent_controls(files, live, routes, signals)),
     ):
         try:
             step()
@@ -639,9 +753,19 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
     ]
     lines += block("CI / deploy pipelines",
                    [f"{p.file}: stages {', '.join(p.stages) or '?'} — "
-                    + ("runs tests/lint/scans" if p.runs_checks else "NO test, lint or scan step") for p in signals.ci_pipelines])
+                    + ("runs tests/lint" if p.runs_checks else "NO test, lint or scan step")
+                    + ("" if not p.runs_checks else "; security scan" if p.runs_scans else "; NO security/dependency scan")
+                    for p in signals.ci_pipelines])
     lines += block("Libraries doing the same job", [f"{fam}: {', '.join(pkgs)} ({src})" for fam, pkgs, src in signals.duplicate_libraries])
     lines += block("Declared dependencies nothing live imports", [f"{s.text} ({s.file})" for s in signals.unused_dependencies])
+    lines += block("Credentials accepted in the query string (they land in server/proxy logs and browser history)",
+                   [s.row for s in signals.query_credentials])
+    lines += block("Several routes delivering one progress/status stream",
+                   [f"{key}: " + "; ".join(rows) for key, rows in signals.progress_channels])
+    lines += block("Executor nesting / single-worker pools", [s.row for s in signals.executor_nesting])
+    lines += block("Identifier shape used as meaning", [s.row for s in signals.id_shape_checks])
+    lines += block("Production controls with no trace anywhere in the live code",
+                   [f"{label} (lane: {lane})" for lane, label, _ in signals.absent_controls])
     lines += block("Parallel implementations (same operation, names differ by a modifier; bodies differ)",
                    [f"{name}: " + "; ".join(s.row for s in sites) for name, sites in signals.parallel_implementations], 20)
     return "\n".join(lines)

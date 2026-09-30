@@ -236,6 +236,13 @@ class _RecordFindingArgs(BaseModel):
         default_factory=list, description="Ids of static-analysis findings this finding confirms or aggregates."
     )
     remediation: str | None = Field(None, description="Only if remediation is requested in your instructions.")
+    exposure: Literal["live", "conditional", "latent", "dead", "theoretical"] = Field(
+        "live",
+        description="How reachable the defect is TODAY: live = reachable through the running system; "
+        "conditional = reachable only under specific conditions (a config, a role, a race); latent = the code "
+        "exists but no entry point reaches it (one import/route away); dead = unused code nothing calls; "
+        "theoretical = needs a future architectural change. Calibrate severity to it.",
+    )
     violates_documented_rule: str | None = Field(
         None,
         description="When the repository's AGENTS.md documents the behaviour this finding contradicts: that "
@@ -253,6 +260,7 @@ class _UpdateFindingArgs(BaseModel):
     evidence: list[EvidenceInput] | None = Field(None, description="Replaces the evidence list when given.")
     kpi_ids: list[str] | None = None
     static_finding_ids: list[str] | None = None
+    exposure: Literal["live", "conditional", "latent", "dead", "theoretical"] | None = None
 
 
 class _WithdrawArgs(BaseModel):
@@ -301,6 +309,9 @@ class _VerifyArgs(BaseModel):
     adjusted_severity: Literal["Critical", "High", "Medium", "Low"] | None = None
     corrected_title: str | None = Field(
         None, description="Only when the title overstates or misnames the defect: the accurate one-line title."
+    )
+    corrected_exposure: Literal["live", "conditional", "latent", "dead", "theoretical"] | None = Field(
+        None, description="Only when the recorded exposure (live/conditional/latent/dead/theoretical) is wrong."
     )
     corrected_impact: str | None = Field(
         None,
@@ -784,6 +795,7 @@ class ReviewWorkspace:
                 evidence=tuple(refs),
                 kpi_ids=tuple(dict.fromkeys(args.kpi_ids)),
                 static_finding_ids=tuple(dict.fromkeys(args.static_finding_ids)),
+                exposure=args.exposure,
             )
         note = ""
         if args.severity in ("Critical", "High") and self._all_unreachable(refs):
@@ -812,7 +824,7 @@ class ReviewWorkspace:
         errors += self._check_links(args.kpi_ids or [], args.static_finding_ids or [])
         if errors:
             return "NOT UPDATED — fix and retry: " + "; ".join(errors)
-        for field in ("severity", "confidence"):
+        for field in ("severity", "confidence", "exposure"):
             if getattr(args, field) is not None:
                 changes[field] = getattr(args, field)
         for field in ("title", "description", "impact"):
@@ -1082,6 +1094,12 @@ class ReviewWorkspace:
         def rows(signals) -> list[tuple[str, str]]:
             return [(f"{x.file}:{x.line}" if x.line else x.file, x.row if x.line else f"{x.text} ({x.file})") for x in signals]
 
+        if category_id in ("integration", "auth"):
+            add("Credentials accepted in the query string (proxy/server logs, browser history, referrers)",
+                rows(sig.query_credentials))
+        if category_id == "integration":
+            add("Keys set to contradictory targets in different .env files (dev vs prod, local vs remote)",
+                [(f, f"{key} — {f}: {flags}") for key, per_file in self.maps.env_contradictions() for f, flags in per_file])
         if category_id == "llm":
             add("Chat / agent routes — trace what ONE request sends to the model: is history persisted or resent, "
                 "is there a per-user/session token or cost budget, are model and tool errors caught",
@@ -1102,15 +1120,28 @@ class ReviewWorkspace:
                     "not scripts", [(f, f"{f}: {n} print() calls") for f, n in sig.print_live[:15]])
             add("Health endpoints that check no dependency (report healthy while the database/model is down)",
                 rows(sig.static_health))
+            add("Background jobs — where does a failure end up (log line only, in-memory/TTL state, or a durable "
+                "record that survives a restart)?",
+                [(f"{j.file}:{j.line}", f"{j.function} ({j.file}:{j.line}) started at {j.started_at}")
+                 for j in self.maps.background_jobs if j.file and j.file not in set(self.maps.unreachable)])
         elif category_id == "testing":
             add("CI / deploy pipelines with no test, lint or scan step (build -> deploy with no gate)",
                 [(p.file, f"{p.file}: stages {', '.join(p.stages) or 'unnamed'}") for p in sig.ci_without_checks])
+            add("Frontend calls with no backend route — broken contracts a contract/integration test would have caught",
+                [(c.file, f"{c.path} ({c.file}:{c.line})") for c in self.maps.unmatched_client_calls()])
         elif category_id == "dependencies":
             add("Libraries doing the same job", [(src, f"{fam}: {', '.join(pkgs)} ({src})") for fam, pkgs, src in sig.duplicate_libraries])
             add("Declared dependencies nothing live imports (dead weight / attack surface)",
                 [(x.file, f"{x.text} ({x.file})") for x in sig.unused_dependencies])
         elif category_id == "inputs":
             add("External commands run with no timeout (a hostile document hangs the worker)", rows(sig.subprocess_no_timeout))
+        elif category_id == "maintainability":
+            add("Several routes delivering one progress/status stream (duplicate progress systems)",
+                [(r.split(" (", 1)[1].rsplit(":", 1)[0], f"{key}: {r}") for key, routes in sig.progress_channels for r in routes])
+            add("Executor nesting / single-worker thread pools (concurrency that is hard to reason about)",
+                rows(sig.executor_nesting))
+        if category_id == "correctness":
+            add("Identifier shape used as meaning (e.g. len(candidate_id) == 6 means 'manual upload')", rows(sig.id_shape_checks))
         if category_id in ("maintainability", "correctness") and sig.parallel_implementations:
             label = (
                 "Parallel implementations of one operation — name which one production uses and how the copies differ"
@@ -1142,6 +1173,15 @@ class ReviewWorkspace:
             if b.lane == category_id
         ]
         sig = self.maps.signals
+        leads += [
+            (f"Control with no trace anywhere in the live code: {label}", mention)
+            for lane, label, mention in sig.absent_controls if lane == category_id
+        ]
+        if category_id == "testing" and sig.ci_pipelines and not any(p.runs_scans for p in sig.ci_pipelines):
+            leads.append((
+                "No CI/deploy pipeline runs a security or dependency scan (bandit/semgrep/pip-audit/npm audit/trivy/...)",
+                r"(?i)scan|security (test|check)|dependency (audit|check)|sast",
+            ))
         if category_id == "testing" and self.maps.routes and not sig.route_tests:
             leads.append((
                 (
@@ -1291,6 +1331,8 @@ class ReviewWorkspace:
                 }
                 if args.corrected_title and args.corrected_title.strip():
                     update["title"] = args.corrected_title.strip()[:300]
+                if args.corrected_exposure:
+                    update["exposure"] = args.corrected_exposure
                 if args.corrected_impact and args.corrected_impact.strip():
                     update["impact"] = args.corrected_impact.strip()[:3000]
                 self.findings[finding.id] = finding.model_copy(update=update)
@@ -1354,7 +1396,9 @@ class ReviewWorkspace:
         - every cited Python file, or the first-cited (defect) location, is unreachable from the
           application roots -> latent, at most High;
         - every cited file is a standalone script or a test -> at most Medium;
-        - the finding reports an absent production baseline (rate limiting, metrics, ...) -> at most High.
+        - the finding reports an absent production baseline (rate limiting, metrics, ...) -> at most High;
+        - exposure dead / theoretical -> at most Medium (and a finding located in unreachable code is
+          re-labelled latent whatever exposure the agent gave it).
         The cap and its reason are appended to the verification note, so the report shows why.
         """
         unreachable = set(self.maps.unreachable)
@@ -1366,8 +1410,18 @@ class ReviewWorkspace:
                 files = {ref.file for ref in finding.evidence}
                 primary = finding.evidence[0].file if finding.evidence else None
                 py_files = {f for f in files if f.endswith(".py")}
+                in_dead_code = bool(py_files and py_files <= unreachable and py_files == files) or (
+                    primary is not None and primary in unreachable
+                )
+                if in_dead_code and finding.exposure in ("live", "conditional"):
+                    # The defect's location is not reachable from any entry point: whatever the
+                    # agent wrote, it is not live today.
+                    finding = finding.model_copy(update={"exposure": "latent"})
+                    self.findings[fid] = finding
                 ceiling, reason = None, ""
-                if (finding.category_id != "testing" and py_files and py_files == files
+                if finding.exposure in ("dead", "theoretical"):
+                    ceiling, reason = "Medium", f"exposure is {finding.exposure} — nothing reaches it today"
+                elif (finding.category_id != "testing" and py_files and py_files == files
                         and all(_is_script_or_test(f, scripts, unreachable) for f in files)):
                     # Testing findings cite the test files BECAUSE the service lacks tests: the
                     # affected thing is the running service, not the scripts it cites.

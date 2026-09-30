@@ -379,6 +379,12 @@ focus = """
 - Parallel implementations (runtime_signals.md): two functions doing one job (two PDF
   parsers, several screening orchestrators) usually already disagree — different casing,
   cleaning, fields or error handling for the same data. Diff them and record the divergence.
+- The same content processed twice or in two shapes: a document embedded both whole and per
+  page (every page counted twice in similarity), text lowercased for one consumer but not for
+  another (embedding vs LLM vs external system), extraction that silently rewrites values
+  (years, emails, phone numbers) instead of flagging them.
+- Identifiers: random ids that can collide, and code that reads meaning from an id's shape
+  (runtime_signals.md lists every len(<id>) == N check).
 - Stuck state: a flag/lock set in the request and cleared only in a background task's
   finally is stuck forever after a crash, OOM or deploy (no TTL/reaper) — that is High.
 - Scripts and entry points that cannot work as written (e.g. an async main() called

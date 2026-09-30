@@ -300,6 +300,25 @@ class ReviewMaps:
                 out.append(route)
         return out
 
+    def env_contradictions(self) -> list[tuple[str, list[tuple[str, str]]]]:
+        """Keys present in several .env files whose values point at different kinds of targets.
+
+        Compares value *flags* only (localhost, dev host, private IP, weak secret, ...) — values
+        never leave this module. ``[(key, [(file, flags-or-'-'), ...])]``.
+        """
+        by_key: dict[str, dict[str, set[str]]] = defaultdict(dict)
+        for env in self.env_files:
+            flags: dict[str, set[str]] = defaultdict(set)
+            for key, flag in env.flags:
+                flags[key].add(flag)
+            for key in env.keys:
+                by_key[key][env.file] = flags.get(key, set()) - {"placeholder", "empty"}
+        out = []
+        for key, per_file in sorted(by_key.items()):
+            if len(per_file) > 1 and len({frozenset(v) for v in per_file.values()}) > 1:
+                out.append((key, [(f, "; ".join(sorted(v)) or "no flag (a real, non-local value)") for f, v in per_file.items()]))
+        return out
+
     def env_divergent_defaults(self) -> dict[str, list[EnvRead]]:
         by_key: dict[str, list[EnvRead]] = defaultdict(list)
         for read in self.env_reads:
@@ -1305,6 +1324,10 @@ def render_env_map(maps: ReviewMaps) -> str:
                     f"{k} at lines {', '.join(map(str, nums))}" for k, nums in f.duplicates))
             for key, flag in f.flags:
                 lines.append(f"- {key}: {flag}")
+        contradictions = maps.env_contradictions()
+        if contradictions:
+            lines.append("- CONTRADICTORY ACROSS FILES (same key, different kind of target — dev vs prod, local vs remote):")
+            lines += [f"  - {key}: " + "; ".join(f"{f}: {flags}" for f, flags in rows) for key, rows in contradictions]
         undocumented = sorted(k for k in by_key if k not in documented)
         stale = sorted(k for f in maps.env_files if f.is_template for k in f.keys if k not in by_key)
         if undocumented:
@@ -1520,5 +1543,14 @@ def build_inventory(
         section("Parallel implementations of one operation",
                 [f"{name}: " + "; ".join(x.row for x in sites) for name, sites in maps.signals.parallel_implementations]),
         section("External commands run with no timeout", [s.row for s in maps.signals.subprocess_no_timeout]),
+        section("Credentials accepted in the query string", [s.row for s in maps.signals.query_credentials]),
+        section("Keys set to contradictory targets in different .env files",
+                [f"`{key}` — " + "; ".join(f"{f}: {flags}" for f, flags in rows) for key, rows in maps.env_contradictions()]),
+        section("Several routes delivering one progress/status stream",
+                [f"{key}: " + "; ".join(rows) for key, rows in maps.signals.progress_channels]),
+        section("Identifier shape used as meaning", [s.row for s in maps.signals.id_shape_checks]),
+        section("Executor nesting / single-worker thread pools", [s.row for s in maps.signals.executor_nesting]),
+        section("Production controls with no trace anywhere in the live code",
+                [label for _, label, _ in maps.signals.absent_controls]),
     ]
     return tuple(s for s in sections if s is not None)

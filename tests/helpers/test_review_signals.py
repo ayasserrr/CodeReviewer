@@ -193,3 +193,86 @@ def test_client_calls_ignore_query_templates_and_proxy_prefix(tmp_path: Path):
                       ClientCall("/api/v1/missing", "c.ts", 3)],
     )
     assert [c.path for c in maps.unmatched_client_calls()] == ["/api/v1/missing"]
+
+
+STRUCTURE = {
+    "svc/app/main.py": '''
+from fastapi import FastAPI, Query, UploadFile
+app = FastAPI()
+
+def verify_api_key(api_key: str = Query(None)):
+    return api_key
+
+@app.get("/jobs/progress/{job_id}")
+async def progress(job_id: str):
+    return {}
+
+@app.get("/jobs/status/{job_id}")
+async def status(job_id: str):
+    return {}
+
+@app.post("/upload")
+async def upload(file: UploadFile, request=None):
+    token = request.query_params.get("token")
+    return {"t": token}
+''',
+    "svc/app/work.py": '''
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from app.llm import llm
+
+def extract(doc):
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(llm.invoke, doc).result()
+
+async def start(doc):
+    return await asyncio.to_thread(extract, doc)
+
+def is_manual(candidate_id):
+    return len(candidate_id) == 6
+''',
+    "svc/app/llm.py": "from langchain_ibm import ChatWatsonx\nllm = ChatWatsonx(model_id='x')\n",
+    "svc/app/__init__.py": "from app import work\n",
+}
+
+
+@pytest.fixture
+def structure(tmp_path: Path):
+    entries = []
+    for rel, text in STRUCTURE.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+    )
+    return build_review_maps(tmp_path, manifest)
+
+
+def test_structure_signals(structure):
+    sig = structure.signals
+    creds = [s.text for s in sig.query_credentials]
+    assert "verify_api_key() accepts `api_key` as a query parameter" in creds
+    assert "reads `token` from the query string" in creds
+    assert [key for key, _ in sig.progress_channels] == ["jobs/{}"]
+    nesting = " | ".join(s.text for s in sig.executor_nesting)
+    assert "ThreadPoolExecutor(max_workers=1)" in nesting and "extract() already runs on an executor" in nesting
+    assert [s.file for s in sig.id_shape_checks] == ["svc/app/work.py"]
+    labels = {label for _, label, _ in sig.absent_controls}
+    assert "a per-user / per-session / per-request token or cost budget for model calls" in labels
+    assert "cancellation of a running processing job" in labels
+
+
+def test_env_contradictions_compare_flags_only(tmp_path: Path):
+    from helpers.review_maps import EnvFileReport, ReviewMaps
+
+    maps = ReviewMaps(env_files=[
+        EnvFileReport(".env.example", True, ("API_URL", "NAME"), (), (("API_URL", "points at localhost/loopback"),)),
+        EnvFileReport("deploy/.env.prod.example", True, ("API_URL", "NAME"), (), ()),
+    ])
+    assert maps.env_contradictions() == [
+        ("API_URL", [(".env.example", "points at localhost/loopback"),
+                     ("deploy/.env.prod.example", "no flag (a real, non-local value)")]),
+    ]

@@ -544,12 +544,56 @@ def _build_import_graph(files: list[_PyFile]) -> tuple[dict[str, set[str]], tupl
     return edges, tuple(sorted(resolver.used_roots))
 
 
+_LAUNCH_CMD = re.compile(r"\b(?:uvicorn|gunicorn|hypercorn|daphne|granian)\b[^\n]*?\b([A-Za-z_][\w.]*):([A-Za-z_]\w*)")
+_PY_SCRIPT_CMD = re.compile(r"\bpython[0-9.]*\s+(?:-\w\s+)*([\w./-]+\.py)\b")
+_PY_MODULE_CMD = re.compile(r"\bpython[0-9.]*\s+-m\s+([A-Za-z_][\w.]*)")
+_APP_FACTORY_ASSIGN = re.compile(r"(?m)^(app|application|api|server)\s*(?::[^=]+)?=\s*[A-Za-z_][\w.]*\(")
+
+
+def _launched_modules(files: list[_PyFile], launch_texts: Iterable[str]) -> set[str]:
+    """Python files named by a server launch command (``uvicorn main:app`` in Dockerfile/compose/scripts/code)."""
+    return _launched(files, launch_texts)[0]
+
+
+def _launched(files: list[_PyFile], launch_texts: Iterable[str]) -> tuple[set[str], set[str]]:
+    """``(server modules, scripts)`` named by launch commands: ``uvicorn main:app`` starts the
+    service; ``python app/initial_data.py`` / ``python -m pkg.tool`` runs a script (reachable, but
+    still a standalone script for severity)."""
+    paths = [py.path for py in files]
+    servers: set[str] = set()
+    scripts: set[str] = set()
+
+    def match(rel: str) -> set[str]:
+        rel = rel.lstrip("./")
+        return {p for p in paths if p == rel or p.endswith("/" + rel)}
+
+    for text in launch_texts:
+        for module, _attr in _LAUNCH_CMD.findall(text):
+            servers |= match(module.replace(".", "/") + ".py")
+        for script in _PY_SCRIPT_CMD.findall(text):  # python app/initial_data.py
+            scripts |= match(script)
+        for module in _PY_MODULE_CMD.findall(text):  # python -m app.worker
+            scripts |= match(module.replace(".", "/") + ".py") | match(module.replace(".", "/") + "/__main__.py")
+    return servers, scripts - servers
+
+
 def _reachability(
-    files: list[_PyFile], edges: dict[str, set[str]]
+    files: list[_PyFile], edges: dict[str, set[str]], launch_texts: Iterable[str] = ()
 ) -> tuple[tuple[str, ...], list[str], list[str]]:
-    """``(app roots, unreachable modules, orphan scripts)``."""
+    """``(app roots, unreachable modules, orphan scripts)``.
+
+    App roots are the files that construct the web/worker app, the files a launch command
+    names (``uvicorn main:app``), and modules that build the app through a factory at import
+    time (``app = create_app()``) — the entry point is what gets started, not only where
+    ``FastAPI(...)`` is written.
+    """
+    launch_texts = list(launch_texts)
+    servers, launched_scripts = _launched(files, [*launch_texts, *(py.text for py in files)])
     app_roots = sorted(
-        py.path for py in files if _ENTRY_APP.search(py.text) and not _is_test_path(py.path)
+        {py.path for py in files if _ENTRY_APP.search(py.text) and not _is_test_path(py.path)}
+        | {py.path for py in files if _APP_FACTORY_ASSIGN.search(py.text) and not _is_test_path(py.path)
+           and edges.get(py.path)}
+        | servers
     )
     reverse: dict[str, set[str]] = defaultdict(set)
     for src, targets in edges.items():
@@ -558,7 +602,7 @@ def _reachability(
     has_main = {py.path for py in files if "__name__" in py.text and "__main__" in py.text}
 
     reachable: set[str] = set()
-    stack = list(app_roots)
+    stack = list(app_roots) + sorted(launched_scripts)
     while stack:
         current = stack.pop()
         if current in reachable:
@@ -583,7 +627,8 @@ def _reachability(
                 continue
             unreachable.append(path)
     for py in files:
-        if py.path in has_main and not reverse.get(py.path) and not _is_test_path(py.path) and py.path not in app_roots:
+        standalone = py.path in has_main or py.path in launched_scripts
+        if standalone and not reverse.get(py.path) and not _is_test_path(py.path) and py.path not in app_roots:
             orphan_scripts.append(py.path)
     return tuple(app_roots), sorted(unreachable), sorted(orphan_scripts)
 
@@ -1037,7 +1082,7 @@ def build_review_maps(repo_path: Path, manifest: RepositoryManifest, *, inspect_
     js_sources = _js_sources(repo_path, manifest)
     for name, step in (
         ("routes", lambda: _fill_routes(maps, files)),
-        ("imports", lambda: _fill_imports(maps, files)),
+        ("imports", lambda: _fill_imports(maps, files, repo_path, manifest)),
         ("env", lambda: _fill_env(maps, files, js_sources, repo_path, inspect_env_files)),
         ("client_calls", lambda: _fill_client_calls(maps, js_sources)),
         ("signals", lambda: _fill_signals(maps, files, repo_path, manifest)),
@@ -1048,6 +1093,22 @@ def build_review_maps(repo_path: Path, manifest: RepositoryManifest, *, inspect_
         except Exception:  # one map failing must not cost the others
             logger.exception("review_map_failed", map=name)
     return maps
+
+
+def _launch_texts(repo_path: Path | None, manifest: RepositoryManifest | None) -> list[str]:
+    """Deployment and start-up files that may name the module a server launches."""
+    if repo_path is None or manifest is None:
+        return []
+    texts = []
+    for entry in manifest.files:
+        name = PurePosixPath(entry.path).name.lower()
+        if (name.startswith(("dockerfile", "docker-compose", "compose", "procfile", "makefile")) or name.endswith(
+                (".sh", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".nomad", ".hcl", ".service"))) and "node_modules" not in entry.path:
+            try:
+                texts.append((repo_path / entry.path).read_text(encoding="utf-8", errors="replace")[:200_000])
+            except OSError:
+                continue
+    return texts
 
 
 def _fill_documented_routes(maps: ReviewMaps, repo_path: Path, manifest: RepositoryManifest) -> None:
@@ -1079,9 +1140,12 @@ def _fill_routes(maps: ReviewMaps, files: list[_PyFile]) -> None:
     maps.routes, maps.mounts = _build_routes(files)
 
 
-def _fill_imports(maps: ReviewMaps, files: list[_PyFile]) -> None:
+def _fill_imports(maps: ReviewMaps, files: list[_PyFile], repo_path: Path | None = None,
+                  manifest: RepositoryManifest | None = None) -> None:
     maps.import_edges, maps.import_roots = _build_import_graph(files)
-    maps.app_roots, maps.unreachable, maps.orphan_scripts = _reachability(files, maps.import_edges)
+    maps.app_roots, maps.unreachable, maps.orphan_scripts = _reachability(
+        files, maps.import_edges, _launch_texts(repo_path, manifest)
+    )
     maps.background_jobs = _background_jobs(files)
     maps.process_state = _process_state(files)
     maps.identity_unused = _identity_unused(files)

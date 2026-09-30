@@ -407,3 +407,75 @@ def test_report_counts_a_lead_covered_by_another_lane(workspace):
            ("app/main.py", 10, 10), ("app/services/cv_operations_service.py", 300, 300))
     assert label in dict(ws.unaddressed_leads("inputs"))  # the owning lane still has to act on it
     assert label not in dict(ws.unaddressed_leads("inputs", any_lane=True))  # but the report shows it covered
+
+
+def test_hypotheses_need_a_system_model_real_files_and_a_cited_resolution(workspace):
+    from helpers.review_workspace import (
+        _HypothesesArgs,
+        _HypothesisInput,
+        _ResolveHypothesisArgs,
+    )
+
+    ws = workspace
+    security = ws.config.category("security")
+    model = ("The API in app/main.py serves routers under app/routers; services in app/services hold the data "
+             "access. Identity arrives from request headers and file uploads are stored on local disk.")
+    few = ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=[
+        _HypothesisInput(statement="Upload service joins client filenames into disk paths", files=["app/main.py"])]))
+    assert few.startswith("NOT RECORDED") and "at least 4" in few
+    hyps = [_HypothesisInput(statement=f"Suspected defect number {i} in the routing and service layer", files=[f])
+            for i, f in enumerate(["app/main.py", "app/routers/auth.py", "app/services/cv_operations_service.py",
+                                   "app/routers/candidate_actions.py"], start=1)]
+    out = ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=hyps))
+    assert out.startswith("Recorded H-SEC-1, H-SEC-2, H-SEC-3, H-SEC-4")
+    assert len(ws.open_hypotheses("security")) == 4
+    lazy = ws.resolve_hypothesis(security, _ResolveHypothesisArgs(hypothesis_id="H-SEC-1", outcome="ruled_out",
+                                                                  note="looks fine"))
+    assert lazy.startswith("NOT RECORDED")
+    ws.resolve_hypothesis(security, _ResolveHypothesisArgs(hypothesis_id="H-SEC-1", outcome="ruled_out",
+                                                           note="the dependency at app/main.py:3 rejects it"))
+    fid = record(ws, "security", "Header identity is trusted by the routers", "High", ("app/routers/auth.py", 5, 6))
+    assert ws.resolve_hypothesis(security, _ResolveHypothesisArgs(hypothesis_id="H-SEC-2", outcome="confirmed",
+                                                                  finding_id=fid)) == "H-SEC-2: confirmed."
+    rows = ws.hypothesis_rows()
+    assert any("[ruled out — the dependency at app/main.py:3" in r for r in rows)
+    assert any(f"[confirmed → {fid}]" in r for r in rows)
+    assert not ws.lead_backed(ws.findings[fid])  # found by the agent's own investigation
+
+
+def test_verdict_about_different_code_is_refused(workspace):
+    from helpers.review_workspace import _VerifyArgs
+
+    ws = workspace
+    coupons = record(ws, "performance", "Unpaginated retrieval of discount coupons", "Medium", ("app/main.py", 20, 22))
+    hashing = record(ws, "performance", "Password hashing blocks the event loop", "Medium",
+                     ("app/routers/auth.py", 19, 19))
+    crossed = ws.submit_verification("performance", _VerifyArgs(
+        finding_id=coupons, verdict="rejected", note="bcrypt runs in a thread pool at app/routers/auth.py:19"))
+    assert crossed.startswith("NOT RECORDED") and hashing in crossed
+    assert ws.submit_verification("performance", _VerifyArgs(
+        finding_id=hashing, verdict="rejected", note="bcrypt runs in a thread pool at app/routers/auth.py:19"
+    )) == f"{hashing}: rejected."
+
+
+def test_uncited_note_about_another_finding_is_refused(workspace):
+    from helpers.review_workspace import _VerifyArgs
+
+    ws = workspace
+    fid = record(ws, "correctness", "Syntax error in exception handler prevents startup", "Critical",
+                 ("app/routers/auth.py", 36, 37))
+    crossed = ws.submit_verification("correctness", _VerifyArgs(
+        finding_id=fid, verdict="confirmed",
+        note="Confirmed based on client_calls that 20 backend routes are never called by the frontend client."))
+    assert crossed.startswith("NOT RECORDED")
+    ok = ws.submit_verification("correctness", _VerifyArgs(
+        finding_id=fid, verdict="confirmed", note="The exception handler in auth.py fails to parse on 3.12."))
+    assert ok == f"{fid}: confirmed."
+
+
+def test_declared_runtimes_are_reported(workspace, tmp_path):
+    (workspace.repo_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.14,<4.0"\n')
+    workspace.manifest = workspace.manifest.model_copy(update={"files": workspace.manifest.files + (
+        FileEntry(path="pyproject.toml", language="TOML", size_bytes=40),)})
+    assert workspace.declared_runtimes() == ["pyproject.toml: requires-python >=3.14,<4.0"]
+    assert "requires-python >=3.14" in workspace.render_system_overview()

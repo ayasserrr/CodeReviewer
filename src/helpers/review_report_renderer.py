@@ -290,6 +290,12 @@ def render_report(report: DeepReviewReport) -> str:
                    f"({pct}%); the rest were covered through static analysis, the dependency graph, grep and the maps |")
         if cov.lane_scopes:
             out.append("| Lane file scopes | " + "; ".join(cov.lane_scopes) + " |")
+        if report.hypotheses:
+            resolved = sum(1 for h in report.hypotheses if not h.endswith("[not resolved]"))
+            out.append(f"| Agent reasoning | {len(report.hypotheses)} repository-specific hypotheses formed by the "
+                       f"specialists ({resolved} resolved, Appendix D); {report.own_investigation} of "
+                       f"{len(report.findings)} findings came from the agents' own investigation, not from a "
+                       "static lead or tool hit |")
         out.append("")
         warnings = []
         if cov.traversal_timed_out:
@@ -358,6 +364,17 @@ def render_report(report: DeepReviewReport) -> str:
         out.append("Statically detected leads a specialist judged not to be defects, each with the code it cited.")
         out.append("")
         out.extend(f"- {row[:500]}" for row in report.dismissed_leads)
+        out.append("")
+        out.append("---")
+        out.append("")
+
+    if report.hypotheses:
+        out.append("## Appendix D. Hypotheses the specialists formed and tested")
+        out.append("")
+        out.append("Each specialist first modelled the system and listed what could be wrong in THIS repository; "
+                   "every hypothesis was then confirmed (linked finding) or ruled out with the code that makes it safe.")
+        out.append("")
+        out.extend(f"- {row[:500]}" for row in report.hypotheses)
         out.append("")
         out.append("---")
         out.append("")

@@ -122,6 +122,7 @@ _ANCHOR_TERMS = frozenset({
     "cors", "csrf", "xss", "jwt", "ssrf", "xxe", "idor", "csp", "hsts", "otp", "sqli", "injection", "traversal",
     "deserialization", "clickjacking", "openapi", "swagger", "mktemp", "pickle", "yaml", "iframe", "sandbox",
 })
+_MIN_HYPOTHESES = 4
 _EACH_ROW_MAX_KEYS = 25
 _ROW_SYMBOL = re.compile(r"^`?([A-Za-z_][A-Za-z0-9_]{3,})`?\s*\(")
 """Lead groups up to this many distinct locations are tracked row by row, not as a whole."""
@@ -160,6 +161,7 @@ _KPI_RULES: dict[str, tuple[str, ...]] = {
     "python-markupsafe-markup-non-literal": ("KPI-05",),
     "python-jinja2-autoescape-disabled": ("KPI-05",),
     "python-static-files-mount": ("KPI-06",),
+    "python-technology-disclosure-header": ("KPI-03", "KPI-10"),
     "python-exception-text-returned-to-client": ("KPI-07",),
     "python-content-disposition-header": ("KPI-08",),
     "python-upload-filename-path-traversal": ("KPI-11",),
@@ -308,6 +310,29 @@ class _KpiArgs(BaseModel):
     finding_ids: list[str] = Field(default_factory=list, description="Your recorded findings that detail this KPI.")
 
 
+class _HypothesisInput(BaseModel):
+    statement: str = Field(..., description="A concrete suspected defect in THIS repository (what, where, why it would fail).")
+    files: list[str] = Field(..., min_length=1, description="Repository files the hypothesis is about.")
+
+
+class _HypothesesArgs(BaseModel):
+    system_model: str = Field(
+        ...,
+        description="3-8 sentences: how this system works from your lane's point of view (components, data flow, "
+        "trust boundaries, what could hurt most) — learned from the code and AGENTS.md, not from the leads.",
+    )
+    hypotheses: list[_HypothesisInput] = Field(
+        ..., min_length=1, description="Repository-specific suspicions to investigate (at least 4)."
+    )
+
+
+class _ResolveHypothesisArgs(BaseModel):
+    hypothesis_id: str
+    outcome: Literal["confirmed", "ruled_out"]
+    finding_id: str | None = Field(None, description="For confirmed: the finding you recorded for it.")
+    note: str = Field("", description="For ruled_out: what makes it safe, citing the repository path:line.")
+
+
 class _DismissLeadArgs(BaseModel):
     lead: str = Field(
         ...,
@@ -454,6 +479,9 @@ class ReviewWorkspace:
         self.dismissed_leads: dict[tuple[str, str], str] = {}
         self._lead_rows: dict[tuple[str, str], list[tuple[str, str]]] = {}
         self._scopes: dict[str, list[str]] | None = None
+        # Per lane: the agent's own system model and repo-specific hypotheses (id -> record).
+        self.system_models: dict[str, str] = {}
+        self.hypotheses: dict[str, dict[str, Any]] = {}
         self.invalid_evidence_bounces = 0
         self._counters: Counter[str] = Counter()
         self.triage: dict[str, StaticTriage] = {}
@@ -1215,7 +1243,8 @@ class ReviewWorkspace:
         if category_id == "correctness":
             add("Naive datetimes outside auth code (date math against aware values, wrong 'now' across timezones)",
                 rows([x for x in sig.naive_datetimes if not _AUTHISH_PATH.search(x.file)][:15]))
-            add("Identifier shape used as meaning (e.g. len(candidate_id) == 6 means 'manual upload')", rows(sig.id_shape_checks))
+            add("Identifier shape used as meaning (e.g. len(some_id) == 6 decides where the record came from)",
+                rows(sig.id_shape_checks))
         if category_id in ("maintainability", "correctness") and sig.parallel_implementations:
             label = (
                 "Parallel implementations of one operation — name which one production uses and how the copies differ"
@@ -1311,13 +1340,13 @@ class ReviewWorkspace:
             pairs = self._lead_rows.get((category_id, label)) or [(k, r) for k, r in zip(sorted(keys), rows, strict=False)]
             if len(keys) <= _EACH_ROW_MAX_KEYS:
                 # Small groups are checked row by row: citing one row no longer hides the others
-                # (observed: `antiword` cited, `ffmpeg` in the same group silently dropped).
+                # (observed: one subprocess cited, another in the same group silently dropped).
                 texts = " ".join(
                     f"{f.title} {f.description} " + " ".join(e.note or "" for e in f.evidence) for f in mine
                 )
 
                 def named(row: str, texts: str = texts) -> bool:
-                    # A row about a named symbol ("audio_buffers (file:22): ...") is covered only when a
+                    # A row about a named symbol ("session_cache (file:22): ...") is covered only when a
                     # finding names it — a citation near it in a big grouped finding is not enough.
                     ident = _ROW_SYMBOL.match(row)
                     return ident is None or ident.group(1) in texts
@@ -1404,6 +1433,174 @@ class ReviewWorkspace:
             self.findings[finding.id] = finding.model_copy(update={"evidence": finding.evidence + added})
         return f"Attached {len(added)} lead location(s) to {finding.id} as evidence."
 
+    def record_hypotheses(self, category: ReviewCategory, args: _HypothesesArgs) -> str:
+        if len(args.system_model.strip()) < 120:
+            return "NOT RECORDED — describe the system model in 3-8 sentences (components, data flow, trust boundaries)."
+        known = {f.path for f in self.manifest.files}
+        errors, accepted = [], []
+        for n, item in enumerate(args.hypotheses, start=1):
+            files = [self._normalize_path(f) for f in item.files]
+            missing = [f for f in files if f not in known]
+            if len(item.statement.strip()) < 30:
+                errors.append(f"hypothesis {n}: state the suspected defect concretely")
+            elif missing:
+                errors.append(f"hypothesis {n}: not repository files: {', '.join(missing)}")
+            else:
+                accepted.append((item.statement.strip()[:500], tuple(files)))
+        existing = [h for h in self.hypotheses.values() if h["lane"] == category.id]
+        if len(existing) + len(accepted) < _MIN_HYPOTHESES and not errors:
+            return (
+                f"NOT RECORDED — at least {_MIN_HYPOTHESES} repository-specific hypotheses are needed "
+                f"(you have {len(existing) + len(accepted)}). Derive them from the code you read, not from the leads."
+            )
+        with self._lock:
+            self.system_models[category.id] = args.system_model.strip()[:2000]
+            ids = []
+            for statement, files in accepted:
+                hid = f"H-{category.code}-{len([h for h in self.hypotheses.values() if h['lane'] == category.id]) + 1}"
+                self.hypotheses[hid] = {"lane": category.id, "statement": statement, "files": files,
+                                        "outcome": None, "finding_id": None, "note": ""}
+                ids.append(hid)
+        suffix = f" Not recorded: {'; '.join(errors)}." if errors else ""
+        return f"Recorded {', '.join(ids) or 'no'} hypotheses.{suffix} Investigate each and resolve it with resolve_hypothesis."
+
+    def resolve_hypothesis(self, category: ReviewCategory, args: _ResolveHypothesisArgs) -> str:
+        with self._lock:
+            record = self.hypotheses.get(args.hypothesis_id)
+        if record is None or record["lane"] != category.id:
+            return f"Unknown hypothesis '{args.hypothesis_id}' in your lane."
+        if args.outcome == "confirmed":
+            finding = self.findings.get(args.finding_id or "")
+            if finding is None or finding.category_id != category.id:
+                return "NOT RECORDED — confirmed needs the id of the finding you recorded for it."
+        elif not self._cites_repository(args.note) or _NON_REASON.search(args.note):
+            return "NOT RECORDED — ruled_out needs the code that shows it is safe (a repository path:line in the note)."
+        with self._lock:
+            record.update(outcome=args.outcome, finding_id=args.finding_id, note=args.note.strip()[:600])
+        return f"{args.hypothesis_id}: {args.outcome}."
+
+    def open_hypotheses(self, category_id: str) -> list[str]:
+        return [f"{hid}: {h['statement'][:160]}" for hid, h in self.hypotheses.items()
+                if h["lane"] == category_id and h["outcome"] is None]
+
+    def hypothesis_rows(self) -> list[str]:
+        rows = []
+        for hid, h in self.hypotheses.items():
+            if h["outcome"] == "confirmed":
+                result = f"confirmed → {h['finding_id']}"
+            elif h["outcome"] == "ruled_out":
+                result = f"ruled out — {h['note']}"
+            else:
+                result = "not resolved"
+            rows.append(f"{h['lane']} — {hid}: {h['statement']} [{result}]")
+        return rows
+
+    def lead_backed(self, finding: ReviewFinding) -> bool:
+        """True when the finding sits on a static lead or a static-tool hit (vs. the agent's own investigation)."""
+        if finding.static_finding_ids:
+            return True
+        cited = {(e.file, e.line_start) for e in finding.evidence}
+        cited_files = {e.file for e in finding.evidence}
+        for pairs in self._lead_rows.values():
+            for key, _row in pairs:
+                file, sep, line = key.rpartition(":")
+                if sep and line.isdigit():
+                    if any(f == file and abs(n - int(line)) <= _LEAD_LINE_TOLERANCE for f, n in cited):
+                        return True
+                elif key in cited_files:
+                    return True
+        for sf in self.static_by_id.values():
+            if any(sf.file == f and sf.line and abs(sf.line - n) <= 2 for f, n in cited):
+                return True
+        return False
+
+    def render_system_overview(self) -> str:
+        """A factual map of THIS system for the agents' first step (building their own system model)."""
+        maps, sig = self.maps, self.maps.signals
+        files = self.manifest.files
+        comps: dict[str, Counter] = defaultdict(Counter)
+        for f in files:
+            parts = PurePosixPath(f.path).parts
+            top = "/".join(parts[:2]) if len(parts) > 2 else parts[0] if len(parts) > 1 else "."
+            comps[top][f.language or "other"] += 1
+        lines = ["# System overview (static facts — build your own model of the system from these and the code)", ""]
+        lines.append("## Components (folder: files by language)")
+        for top, langs in sorted(comps.items(), key=lambda kv: -sum(kv[1].values()))[:20]:
+            lines.append(f"- {top}: " + ", ".join(f"{n} {lang}" for lang, n in langs.most_common(4)))
+        runtimes = self.declared_runtimes()
+        lines += ["", "## Declared runtime versions (judge syntax and semantics against THESE, not older releases): "
+                  + ("; ".join(runtimes) or "none declared")]
+        lines += ["", f"## Application entry points: {', '.join(maps.app_roots) or 'none detected'}"]
+        groups: dict[str, list] = defaultdict(list)
+        for r in maps.routes:
+            segs = [x for x in r.path.strip("/").split("/") if x and not x.startswith("{")]
+            groups["/" + "/".join(segs[:3])].append(r)
+        if groups:
+            lines += ["", f"## API surface ({len(maps.routes)} routes, grouped; auth = strongest check applied)"]
+            for prefix, routes in sorted(groups.items()):
+                auth = Counter(r.auth_label for r in routes)
+                flags = Counter(f for r in routes for f in r.flags)
+                lines.append(f"- {prefix}: {len(routes)} routes; auth " + ", ".join(f"{k} x{v}" for k, v in auth.items())
+                             + ("; flags " + ", ".join(f"{k} x{v}" for k, v in flags.items()) if flags else ""))
+        stores = sorted({pkg.lower() for pkg in re.findall(
+            r"(?i)\b(sqlalchemy|psycopg2?|asyncpg|sqlite3|redis|pymongo|motor|chromadb|qdrant|faiss|elasticsearch|"
+            r"boto3|minio|celery|kafka|pika)\b", " ".join(py for py in self._python_sources()))})
+        lines += ["", f"## Data stores and infrastructure libraries in live code: {', '.join(stores) or 'none detected'}"]
+        lines.append("## External services that receive data: "
+                     + ("; ".join(x.text.split(' —')[0] for x in sig.data_processors) or "none detected"))
+        lines.append(f"## Background work ({len(maps.background_jobs)}): "
+                     + "; ".join(f"{j.function} ({j.file}:{j.line})" for j in maps.background_jobs if j.file)[:1500])
+        lines.append(f"## Process-local state: {len(maps.process_state)} items (architecture.md)")
+        web = [f.path for f in files if f.path.endswith((".tsx", ".jsx", ".vue", ".svelte"))]
+        lines.append(f"## Browser client: {len(web)} component files; {len(maps.client_calls)} API call paths "
+                     f"({len(maps.unmatched_client_calls())} with no backend route)")
+        lines.append(f"## Tests: {len(sig.test_files)} files ({len(sig.route_tests)} drive the API); CI/deploy pipelines: "
+                     + (", ".join(p.file for p in sig.ci_pipelines) or "none"))
+        docs = ", ".join(path for path, _ in self.system_docs)
+        lines.append(f"## Developer-written system description (AGENTS.md): {docs or 'none — infer the intent from the code'}")
+        lines.append(f"## Dead-code candidates: {len(maps.unreachable)} modules no entry point imports (reachability.md)")
+        return "\n".join(lines)
+
+    def declared_runtimes(self) -> list[str]:
+        """Interpreter / runtime versions the project declares (pyproject, .python-version, Dockerfiles, package.json)."""
+        found: list[str] = []
+        patterns = (
+            (r"(?im)^\s*requires-python\s*=\s*[\"']([^\"']+)", "requires-python {}"),
+            (r"(?im)^\s*python_requires\s*=\s*[\"']([^\"']+)", "python_requires {}"),
+            (r"(?im)^\s*FROM\s+(?:[\w./-]+/)?python:([\w.${}:-]+)", "Docker python:{}"),
+            (r"(?im)^\s*ARG\s+PYTHON_VERSION\s*=\s*([\w.]+)", "Docker PYTHON_VERSION={}"),
+            (r'"node"\s*:\s*"([^"]+)"', "node {}"),
+            (r"(?im)^\s*FROM\s+(?:[\w./-]+/)?node:([\w.-]+)", "Docker node:{}"),
+        )
+        for entry in self.manifest.files:
+            name = PurePosixPath(entry.path).name.lower()
+            if name in (".python-version", ".nvmrc", ".tool-versions"):
+                try:
+                    text = (self.repo_path / entry.path).read_text(encoding="utf-8", errors="replace").strip()
+                    found.append(f"{entry.path}: {text.splitlines()[0][:40] if text else '?'}")
+                except OSError:
+                    pass
+                continue
+            if not (name in ("pyproject.toml", "setup.cfg", "setup.py", "package.json") or name.startswith("dockerfile")):
+                continue
+            try:
+                text = (self.repo_path / entry.path).read_text(encoding="utf-8", errors="replace")[:100_000]
+            except OSError:
+                continue
+            for rx, fmt in patterns:
+                for value in re.findall(rx, text)[:2]:
+                    found.append(f"{entry.path}: " + fmt.format(value.strip()))
+        return list(dict.fromkeys(found))[:12]
+
+    def _python_sources(self):
+        dead = set(self.maps.unreachable)
+        for f in self.manifest.files:
+            if f.language == "Python" and f.path not in dead and not is_test_file(f.path):
+                try:
+                    yield (self.repo_path / f.path).read_text(encoding="utf-8", errors="replace")[:50_000]
+                except OSError:
+                    continue
+
     def lane_scopes(self) -> dict[str, list[str]]:
         """Which repository files each lane must open itself (directly or through its code-explorers).
 
@@ -1477,8 +1674,8 @@ class ReviewWorkspace:
             "performance": {x.file for x in maps.process_state} | {x.file for x in sig.blocking_in_async} | job_files
             | {x.file for x in sig.unbounded_reads} | {x.file for x in sig.startup_fragility}
             | {r.file for r in maps.routes if r.is_unpaginated_listing},
-            "llm": model_files | match(r"(llm|agent|prompt|chat|rag|embed|vector|transcri|whisper)"),
-            "inputs": upload_files | match(r"(upload|extract|pars|ocr|pdf|docx|audio|transcri|whisper|file|vacanc)"),
+            "llm": model_files | match(r"(llm|agent|prompt|chat|rag|embed|vector|model|inference|transcri)"),
+            "inputs": upload_files | match(r"(upload|import|extract|pars|ocr|pdf|docx|media|audio|image|file|webhook)"),
             "correctness": upload_files | job_files | match(r"(service|screen|scor|pipeline|extract|process|crud|repositor)",
                                                              backend),
             "maintainability": {x.file for _, sites in sig.parallel_implementations for x in sites}
@@ -1584,6 +1781,39 @@ class ReviewWorkspace:
                 return True
         return False
 
+    def _verdict_mismatch(self, finding: ReviewFinding, note: str) -> str | None:
+        """Refuse a verdict whose note is about different code than the finding (ids mixed up in a batch).
+
+        Observed: a verifier checking several findings recorded "rejected — password hashing is
+        fine (utils.py:19)" on the finding about unpaginated coupon lists.
+        """
+        cited = {m.lstrip("/") for m in re.findall(r"([\w./\-]+\.[A-Za-z0-9]+):\d+", note or "")}
+        own = {e.file for e in finding.evidence}
+        note_words = set(re.findall(r"[a-z][a-z0-9_]{2,}", (note or "").lower()))
+        if not cited:
+            # No citation to compare: the note must at least talk about this finding (its title or files).
+            finding_words = self._title_terms(finding.title) | {
+                w for e in finding.evidence for w in re.findall(r"[a-z][a-z0-9_]{2,}", PurePosixPath(e.file).stem.lower())
+            } | set(re.findall(r"[a-z][a-z0-9_]{3,}", finding.description.lower())[:80])
+            if len((note or "").split()) >= 8 and not (finding_words & note_words):
+                return (
+                    f"NOT RECORDED — this note does not mention anything from {finding.id} "
+                    f"('{finding.title[:100]}'). Re-check which finding you are judging and cite its code."
+                )
+            return None
+        if any(c == f or f.endswith("/" + c) or c.endswith("/" + f) for c in cited for f in own):
+            return None
+        terms = self._title_terms(finding.title)
+        if terms & set(re.findall(r"[a-z][a-z0-9_]{2,}", (note or "").lower())):
+            return None
+        other = next((f for f in self.findings.values() if f.id != finding.id and f.category_id == finding.category_id
+                      and any(c == e.file or e.file.endswith("/" + c) for c in cited for e in f.evidence)), None)
+        hint = f" It matches {other.id} ('{other.title[:80]}') — did you mean that id?" if other else ""
+        return (
+            f"NOT RECORDED — this note cites {', '.join(sorted(cited))}, but {finding.id} is about "
+            f"'{finding.title[:100]}' ({', '.join(sorted(own)) or 'no files'}).{hint} Re-check which finding you are judging."
+        )
+
     def submit_verification(self, category_id: str, args: _VerifyArgs) -> str:
         with self._lock:
             finding = self.findings.get(args.finding_id)
@@ -1591,6 +1821,9 @@ class ReviewWorkspace:
                 return f"Unknown finding '{args.finding_id}' for this verification batch."
             if args.verdict == "adjusted" and not args.adjusted_severity:
                 return "NOT RECORDED — 'adjusted' requires adjusted_severity."
+            mismatch = self._verdict_mismatch(finding, args.note)
+            if mismatch:
+                return mismatch
             if args.verdict == "rejected" and not self._cites_repository(args.note):
                 return (
                     "NOT RECORDED — a rejection must cite the code that disproves the claim (a repository "
@@ -1943,6 +2176,13 @@ class ReviewWorkspace:
                   "Withdraw one of your findings that turned out to be wrong.", _WithdrawArgs),
             _tool(lambda: self.list_my_findings(category), "list_my_findings",
                   "Recap of what you have recorded so far (findings, triage progress, KPI coverage)."),
+            _tool(lambda **kw: self.record_hypotheses(category, _HypothesesArgs(**kw)), "record_hypotheses",
+                  "FIRST STEP: record your model of this system and at least 4 repository-specific hypotheses "
+                  "(suspected defects with the files involved), derived from reading the code.", _HypothesesArgs),
+            _tool(lambda **kw: self.resolve_hypothesis(category, _ResolveHypothesisArgs(**kw)), "resolve_hypothesis",
+                  "Close one hypothesis: confirmed (with the finding id) or ruled_out (citing the code that makes "
+                  "it safe). Every hypothesis ends one of these two ways; the report lists them.",
+                  _ResolveHypothesisArgs),
             _tool(lambda **kw: self.dismiss_lead(category, _DismissLeadArgs(**kw)), "dismiss_lead",
                   "Close a mandatory lead row (or a whole group). With finding_id: the row is covered by that finding "
                   "and its location is added to the finding's evidence. Without: the row is NOT a defect, and the "

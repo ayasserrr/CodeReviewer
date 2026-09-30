@@ -222,6 +222,7 @@ class DeepReviewController(BaseController):
         brief = build_repo_brief(workspace, repository_name)
         files = build_context_files(workspace, brief)
         files[f"{CONTEXT_MOUNT}scopes.md"] = create_file_data(workspace.render_scopes())
+        files[f"{CONTEXT_MOUNT}system_overview.md"] = create_file_data(workspace.render_system_overview())
         # Report order stays the config's; launch order is longest-first.
         categories = sorted(config.enabled_categories, key=lambda c: -c.effort)
 
@@ -306,8 +307,18 @@ class DeepReviewController(BaseController):
         doesn't make security the long pole of the whole review.
         """
         kickoff = (
-            f"Begin the {category.title} review of this repository. The repository brief is in your instructions; "
-            "/_review/context/ holds the full lists. Plan with write_plan, then work through it."
+            f"Begin the {category.title} review of this repository. Work in this order:\n"
+            "1. UNDERSTAND: read /_review/context/system_overview.md, agents_md.md if present, and the entry points "
+            "and core modules that matter for your lane. Work out how THIS system works: its purpose, main flows, data, "
+            "trust boundaries and where failure would hurt most.\n"
+            "2. HYPOTHESIZE: call record_hypotheses with your system model and at least 4 suspicions specific to this "
+            "repository — things an expert would check here because of how this system is built, not generic "
+            "categories and not copies of the leads below.\n"
+            "3. INVESTIGATE: prove or disprove each hypothesis in the code (resolve_hypothesis), sweep your file "
+            "scope, and follow anything else you notice — your own findings beyond the leads are the most valuable "
+            "part of the review.\n"
+            "4. CLOSE THE LEADS: the static leads below are a safety net; each ends as a finding, attached to one, "
+            "or dismissed with the code that proves it safe."
         )
         scope = workspace.lane_scopes().get(category.id, [])
         if scope:
@@ -335,6 +346,20 @@ class DeepReviewController(BaseController):
                     "record_finding now. If it truly does not apply, reply with one sentence saying why."
                 )
             parts = []
+            scope_files = workspace.lane_scopes().get(category.id, [])
+            if scope_files and not any(h["lane"] == category.id for h in workspace.hypotheses.values()):
+                parts.append(
+                    "You have not recorded your system model and hypotheses. Call record_hypotheses now: how this "
+                    "system works for your lane, and at least 4 repository-specific suspicions with their files. Then "
+                    "investigate each."
+                )
+            open_h = workspace.open_hypotheses(category.id)
+            if open_h:
+                parts.append(
+                    "These hypotheses are not resolved yet — prove or disprove each in the code and call "
+                    "resolve_hypothesis (confirmed with the finding id, or ruled_out citing the code):\n"
+                    + "\n".join(f"- {h}" for h in open_h)
+                )
             missing = workspace.unaddressed_leads(category.id)
             if missing:
                 parts.append(
@@ -691,6 +716,9 @@ class DeepReviewController(BaseController):
             categories=config.enabled_categories,
             findings=tuple(findings),
             rejected_findings=tuple(workspace.rejected.values()),
+            hypotheses=tuple(workspace.hypothesis_rows()),
+            system_models=tuple(f"{lane}: {text}" for lane, text in workspace.system_models.items()),
+            own_investigation=sum(1 for f in findings if not workspace.lead_backed(f)),
             open_leads=tuple(
                 f"{category.id} — {label}: " + "; ".join(rows[:6]) + (f" (+{len(rows) - 6} more)" if len(rows) > 6 else "")
                 for category in config.enabled_categories

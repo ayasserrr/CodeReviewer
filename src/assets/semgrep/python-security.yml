@@ -366,6 +366,23 @@ rules:
           - pattern: subprocess.check_output(...)
           - pattern: subprocess.call(...)
 
+  - id: python-technology-disclosure-header
+    languages: [python]
+    severity: INFO
+    message: >-
+      A response header announces the server technology or version (X-Powered-By, Server,
+      X-AspNet-Version, X-Runtime). It tells an attacker which exploits to try; remove it or keep
+      it generic.
+    metadata: {category: security, cwe: "CWE-200: Exposure of Sensitive Information", confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern: $R.headers["$H"] = $V
+          - pattern: $R.headers.__setitem__("$H", $V)
+          - pattern: '$F(..., headers={..., "$H": $V, ...}, ...)'
+      - metavariable-regex:
+          metavariable: $H
+          regex: (?i)^(x-powered-by|server|x-aspnet-version|x-aspnetmvc-version|x-runtime|x-version)$
+
   - id: python-static-files-mount
     languages: [python]
     severity: WARNING

@@ -38,7 +38,7 @@ async def chat(body: dict):
 
 @router.post("/screen")
 async def screen(body: dict):
-    print("screening", body)
+    print("processing", body)
     print("done")
     entities = llmjd.generate([body["jd"]])
     ranked = rescore_pool(body["pool"])
@@ -52,8 +52,8 @@ llmjd = WatsonxLLM(model_id="x")
     "svc/app/scoring.py": '''
 from app.llm import llmjd
 
-def _score_one(candidate):
-    return llmjd.invoke(candidate)
+def _score_one(order):
+    return llmjd.invoke(order)
 
 def rescore_pool(pool):
     return [_score_one(c) for c in pool]
@@ -228,8 +228,8 @@ def extract(doc):
 async def start(doc):
     return await asyncio.to_thread(extract, doc)
 
-def is_manual(candidate_id):
-    return len(candidate_id) == 6
+def is_manual(order_id):
+    return len(order_id) == 6
 ''',
     "svc/app/llm.py": "from langchain_ibm import ChatWatsonx\nllm = ChatWatsonx(model_id='x')\n",
     "svc/app/__init__.py": "from app import work\n",
@@ -256,10 +256,8 @@ def test_structure_signals(structure):
     creds = [s.text for s in sig.query_credentials]
     assert "verify_api_key() accepts `api_key` as a query parameter" in creds
     assert "reads `token` from the query string" in creds
-    assert [key for key, _ in sig.progress_channels] == ["jobs/{}"]
     nesting = " | ".join(s.text for s in sig.executor_nesting)
     assert "ThreadPoolExecutor(max_workers=1)" in nesting and "extract() already runs on an executor" in nesting
-    assert [s.file for s in sig.id_shape_checks] == ["svc/app/work.py"]
     labels = {label for _, label, _ in sig.absent_controls}
     assert "a per-user / per-session / per-request token or cost budget for model calls" in labels
     assert "cancellation of a running processing job" in labels
@@ -282,7 +280,7 @@ PRODUCTION = {
     "svc/app/main.py": '''
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from app.store import preload_vector_index, get_all_candidates
+from app.store import preload_vector_index, get_all_orders
 from core.engine import score
 import os
 SECRET = os.getenv("SECRET_KEY", "secret")
@@ -294,20 +292,20 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan)
 
-@app.get("/candidates")
-async def candidates():
-    return get_all_candidates()
+@app.get("/orders")
+async def orders():
+    return get_all_orders()
 ''',
     "svc/app/store.py": '''
 import json, os
 from datetime import datetime
-from app.models import Candidate
+from app.models import Order
 
 def preload_vector_index():
     return None
 
-def get_all_candidates(session=None):
-    return session.execute(select(Candidate)).scalars().all()
+def get_all_orders(session=None):
+    return session.execute(select(Order)).scalars().all()
 
 def publish(path, event):
     snapshot = _read_snapshot(path)
@@ -326,13 +324,13 @@ def scan(folder):
 def token_expiry():
     return datetime.utcnow()
 ''',
-    "svc/app/models.py": "class Candidate: ...\n",
-    "svc/core/engine.py": "from app.models import Candidate\n\ndef score(c: Candidate):\n    return 1\n",
+    "svc/app/models.py": "class Order: ...\n",
+    "svc/core/engine.py": "from app.models import Order\n\ndef score(c: Order):\n    return 1\n",
     "svc/test.py": "from selenium import webdriver\nPASSWORD = 'recruiter123'\ndriver = webdriver.Chrome()\n",
     "svc/requirements.txt": "fastapi\nuvicorn==0.30\n",
     "svc/Dockerfile": "FROM python\nWORKDIR /app\nCOPY . .\n",
-    "svc/src/assets/cvs/req_1/123_jane.pdf": "%PDF-1.4",
-    "svc/src/assets/cvs/req_1/124_john.pdf": "%PDF-1.4",
+    "svc/src/assets/uploads/batch_1/123_jane.pdf": "%PDF-1.4",
+    "svc/src/assets/uploads/batch_1/124_john.pdf": "%PDF-1.4",
     "svc/deploy/nomad/dev/app.nomad": (
         'job "x" {\n  group "g" {\n    count = 1\n    task "t" {\n      config {\n        privileged = true\n'
         '      }\n      env {\n        BASE_URL = "http://localhost:8000"\n        API_KEY = "abc"\n'
@@ -379,7 +377,7 @@ def test_deploy_manifest_env_never_shows_values(production):
 def test_reads_startup_rewrites_and_datetimes(production):
     sig = production.signals
     unbounded = " | ".join(s.text for s in sig.unbounded_reads)
-    assert "get_all_candidates() returns a whole collection" in unbounded and "os.listdir()" in unbounded
+    assert "get_all_orders() returns a whole collection" in unbounded and "os.listdir()" in unbounded
     assert any("preload_vector_index() with no error handling" in s.text for s in sig.startup_fragility)
     assert [s.text.split("(")[0] for s in sig.whole_file_rewrites] == ["publish"]
     assert [s.text for s in sig.naive_datetimes] == ["datetime.utcnow() returns a naive datetime"]
@@ -402,8 +400,8 @@ def test_processors_pipeline_hygiene_and_governance_controls(tmp_path: Path):
         "svc/app/main.py": (
             "from fastapi import FastAPI\nfrom openai import OpenAI\nfrom langchain_ibm import ChatWatsonx\n"
             "import sqlalchemy\napp = FastAPI()\nllm = ChatWatsonx(model_id='x')\n"
-            "def score_candidate(candidate, email, phone, resume):\n    return llm.invoke(candidate)\n"
-            "def rank(candidate, email, phone):\n    return 1\n"
+            "def score_order(order, email, phone, address):\n    return llm.invoke(order)\n"
+            "def rank(order, email, phone):\n    return 1\n"
         ),
         "svc/deploy/jenkins/jenkins-dev": "pipeline { stages { stage('Deploy') { steps { sh 'sudo docker pull app:latest' } } } }\n",
         "svc/README.md": "Call GET /api/v1/items to list items.\n",
@@ -441,7 +439,7 @@ def test_documented_routes_are_marked_as_contracts(tmp_path: Path):
     )
     maps = ReviewMaps(routes=[
         RouteInfo("GET", "/api/v1/auth/me", "me", "a.py", 1, (), (), False, False),
-        RouteInfo("POST", "/api/v1/requisitions/update", "update", "a.py", 9, (), (), False, False),
+        RouteInfo("POST", "/api/v1/projects/update", "update", "a.py", 9, (), (), False, False),
     ])
     _fill_documented_routes(maps, tmp_path, manifest)
     assert maps.documented_routes == {"/api/v1/auth/me": "API_DOCUMENTATION.md"}

@@ -70,7 +70,6 @@ _CI_SCAN_STEP = re.compile(
     r"dependency-check|sonar\w*|codeql|owasp)\b"
 )
 _CREDENTIAL_NAME = re.compile(r"(?i)(api[_-]?key|apikey|token|secret|password|access[_-]?key|auth)")
-_PROGRESS_SEGMENT = re.compile(r"(?i)^(progress|status|events|stream|sse|updates|poll)$")
 _EXECUTORS = frozenset({"ThreadPoolExecutor", "ProcessPoolExecutor", "run_in_executor", "to_thread"})
 # Controls a production system needs; absent everywhere = a lead for the owning lane.
 # (lane, label, evidence regex, mention regex, applies-when)
@@ -110,7 +109,7 @@ _CONTROLS = (
      r"(?i)quota|max_?uploads|upload_?limit|max_?files_?per|max_?jobs|jobs_?per_?user|daily_?limit",
      r"(?i)quota|per[- ]user|job[- ]creation|limit on (jobs|uploads)", "uploads"),
     ("inputs", "cancellation of a running processing job",
-     r"(?i)\bcancel(led|lation|_job|_task|_screening)?\b|abort_?(job|task)|\.revoke\(",
+     r"(?i)\bcancel(led|lation|_job|_task|_run)?\b|abort_?(job|task)|\.revoke\(",
      r"(?i)cancel", "jobs"),
     ("inputs", "retry with backoff around external / model calls",
      r"(?i)\btenacity\b|\bbackoff\b|exponential|Retry\(|retry_?(policy|with|delay)|stop_after_attempt",
@@ -203,8 +202,6 @@ class RuntimeSignals:
     parallel_implementations: list[tuple[str, tuple[Signal, ...]]] = field(default_factory=list)
     subprocess_no_timeout: list[Signal] = field(default_factory=list)
     query_credentials: list[Signal] = field(default_factory=list)  # API keys/tokens read from the query string
-    id_shape_checks: list[Signal] = field(default_factory=list)  # len(some_id) == N used as meaning
-    progress_channels: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)  # resource, routes
     executor_nesting: list[Signal] = field(default_factory=list)
     absent_controls: list[tuple[str, str, str]] = field(default_factory=list)  # (lane, label, mention regex)
     packaged_artifacts: list[Signal] = field(default_factory=list)  # secrets / personal data shipped in the image or tree
@@ -532,21 +529,6 @@ def _structure_signals(files, live: set[str], routes, signals: RuntimeSignals) -
                                 f"({_dotted(sub.func).split('.')[-1]})",
                             ))
                             break
-            elif isinstance(node, ast.Compare) and isinstance(node.left, ast.Call) \
-                    and _dotted(node.left.func) == "len" and node.left.args \
-                    and re.search(r"(?i)(^|_)id$|_id\b|^id_", _dotted(node.left.args[0]).split(".")[-1] or "") \
-                    and any(isinstance(c, ast.Constant) and isinstance(c.value, int) for c in node.comparators):
-                signals.id_shape_checks.append(Signal(
-                    py.path, node.lineno,
-                    f"len({_dotted(node.left.args[0])}) compared to a constant — the id's length is treated as meaning",
-                ))
-    groups: dict[str, list[str]] = defaultdict(list)
-    for route in routes:
-        parts = route.path.strip("/").split("/")
-        if any(_PROGRESS_SEGMENT.match(p) for p in parts):
-            key = "/".join("{}" if p.startswith("{") else p for p in parts if not _PROGRESS_SEGMENT.match(p))
-            groups[key].append(f"{route.method} {route.path} ({route.file}:{route.line})")
-    signals.progress_channels = [(key, tuple(rows)) for key, rows in sorted(groups.items()) if len(rows) > 1]
 
 
 _PII_WORDS = re.compile(
@@ -1106,10 +1088,7 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
     lines += block("Declared dependencies nothing live imports", [f"{s.text} ({s.file})" for s in signals.unused_dependencies])
     lines += block("Credentials accepted in the query string (they land in server/proxy logs and browser history)",
                    [s.row for s in signals.query_credentials])
-    lines += block("Several routes delivering one progress/status stream",
-                   [f"{key}: " + "; ".join(rows) for key, rows in signals.progress_channels])
     lines += block("Executor nesting / single-worker pools", [s.row for s in signals.executor_nesting])
-    lines += block("Identifier shape used as meaning", [s.row for s in signals.id_shape_checks])
     lines += block("Production controls with no trace anywhere in the live code",
                    [f"{label} (lane: {lane})" for lane, label, _ in signals.absent_controls])
     lines += block("Secrets / personal data shipped with the code or baked into the image",

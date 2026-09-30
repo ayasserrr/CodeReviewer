@@ -1100,16 +1100,12 @@ class ReviewWorkspace:
                     frozenset(path for path, _ in self.system_docs),
                     headings[:40] or [path for path, _ in self.system_docs],
                 ))
-            add("Values rewritten during extraction (semgrep)", static_rows("python-silent-value-substitution"))
             add("Random identifiers (semgrep)", static_rows("python-random-identifier"))
             add("Work claims / locks / in-progress flags (semgrep)", static_rows("python-claim-flag-or-lock"))
-            add("Document text lowercased at extraction (semgrep)", static_rows("python-lowercased-extracted-text"))
         elif category_id == "llm":
             add("LangGraph graphs compiled without a checkpointer (semgrep)",
                 static_rows("python-langgraph-compile-without-checkpointer"))
             add("Model calls inside loops (semgrep)", static_rows("python-model-call-in-loop"))
-            add("Document text lowercased before embedding / prompting (semgrep)",
-                static_rows("python-lowercased-extracted-text"))
         elif category_id == "maintainability":
             by_dir: dict[str, list[str]] = defaultdict(list)
             for path in self.maps.unreachable:
@@ -1234,8 +1230,6 @@ class ReviewWorkspace:
         elif category_id == "inputs":
             add("External commands run with no timeout (a hostile document hangs the worker)", rows(sig.subprocess_no_timeout))
         elif category_id == "maintainability":
-            add("Several routes delivering one progress/status stream (duplicate progress systems)",
-                [(r.split(" (", 1)[1].rsplit(":", 1)[0], f"{key}: {r}") for key, routes in sig.progress_channels for r in routes])
             add("Executor nesting / single-worker thread pools (concurrency that is hard to reason about)",
                 rows(sig.executor_nesting))
             add("Layers that import each other both ways (layering violation: core logic depends on the app layer)",
@@ -1243,8 +1237,6 @@ class ReviewWorkspace:
         if category_id == "correctness":
             add("Naive datetimes outside auth code (date math against aware values, wrong 'now' across timezones)",
                 rows([x for x in sig.naive_datetimes if not _AUTHISH_PATH.search(x.file)][:15]))
-            add("Identifier shape used as meaning (e.g. len(some_id) == 6 decides where the record came from)",
-                rows(sig.id_shape_checks))
         if category_id in ("maintainability", "correctness") and sig.parallel_implementations:
             label = (
                 "Parallel implementations of one operation — name which one production uses and how the copies differ"
@@ -1629,7 +1621,7 @@ class ReviewWorkspace:
         backend = [p for p in live if p not in set(web)]
 
         # A top-level folder holding several code packages is a project container
-        # ("talent-acquisition-agent/{app,src}"): its name says nothing about each file.
+        # ("my-service/{app,src}"): its name says nothing about each file.
         children: dict[str, set[str]] = defaultdict(set)
         for p in live:
             parts = PurePosixPath(p).parts

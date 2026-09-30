@@ -97,7 +97,7 @@ They are mounted at `/_review/context/` and summarized in every agent's brief:
 - **`route_map.md`** — every FastAPI route with its full path (router/include prefixes resolved),
   the dependencies that actually apply (app, include, router, route, handler — transitively),
   whether any of them verifies a user token, the request inputs used as an identity
-  (`x-user-email` headers, `user_email` body fields, ...), flags (`CLIENT-ASSERTED IDENTITY`,
+  (`x-user-id` headers, `owner_email` body fields, ...), flags (`CLIENT-ASSERTED IDENTITY`,
   `AUTH ENTRY POINT`, `NO AUTH DEPENDENCY`) and `app.mount` sub-apps, which FastAPI
   dependencies never reach.
 - **`env_map.md`** — every environment read (Python and JS/TS) with its inline default, keys whose

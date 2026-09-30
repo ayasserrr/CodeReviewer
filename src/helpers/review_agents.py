@@ -113,7 +113,7 @@ def _gemini_class(function_calling_mode: str) -> type:
     Root cause of the ``MALFORMED_FUNCTION_CALL`` turns: in the default AUTO
     mode Gemini decodes tool calls freely, and batches of parallel calls
     (typically 3-6 ``grep``/``glob``/``read_file`` at once) regularly come back
-    unparseable — measured on the talent repository at ~27% of all turns in one
+    unparseable — measured on a real repository at ~27% of all turns in one
     lane, each costing a retry (and often a fallback to the judge model).
     ``VALIDATED`` constrains the output to the declared tool schemas (or plain
     text): 0 malformed turns in 82 calls across three lanes and both models.

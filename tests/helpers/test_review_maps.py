@@ -281,9 +281,9 @@ def test_architecture_detectors(tmp_path):
     _write(tmp_path, "web/App.tsx", (
         "<Routes>\n"
         "  <Route path=\"/login\" element={<LoginPage />} />\n"
-        "  <Route path=\"/candidates\" element={<CandidatesPage />} />\n"
+        "  <Route path=\"/orders\" element={<OrdersPage />} />\n"
         "  <Route path=\"/admin\" element={<AdminRoute><AdminPage /></AdminRoute>} />\n"
-        "  <Route path=\"/\" element={<Navigate to=\"/candidates\" />} />\n"
+        "  <Route path=\"/\" element={<Navigate to=\"/orders\" />} />\n"
         "</Routes>\n"
     ))
     files = []
@@ -298,7 +298,7 @@ def test_architecture_detectors(tmp_path):
     maps = build_review_maps(tmp_path, manifest)
     assert {x.name for x in maps.process_state} == {"_SEM", "_CACHE", "_MODEL"}
     assert [x.function for x in maps.identity_unused] == ["DirectoryService.list"]
-    assert [(x.path, x.component) for x in maps.unguarded_routes] == [("/candidates", "CandidatesPage")]
+    assert [(x.path, x.component) for x in maps.unguarded_routes] == [("/orders", "OrdersPage")]
     from helpers.review_maps import build_inventory
 
     titles = [s.title for s in build_inventory(maps)]
@@ -312,8 +312,8 @@ def test_unpaginated_listing_detection():
     def route(method, path, handler, paginated=False):
         return RouteInfo(method, path, handler, "a.py", 1, (), (), False, False, paginated=paginated)
 
-    assert route("GET", "/api/candidates", "list_candidates").is_unpaginated_listing
-    assert not route("GET", "/api/candidates", "list_candidates", paginated=True).is_unpaginated_listing
-    assert not route("GET", "/api/candidates/{candidate_id}", "get_candidate").is_unpaginated_listing
-    assert not route("POST", "/api/candidates", "create_candidates").is_unpaginated_listing
+    assert route("GET", "/api/orders", "list_orders").is_unpaginated_listing
+    assert not route("GET", "/api/orders", "list_orders", paginated=True).is_unpaginated_listing
+    assert not route("GET", "/api/orders/{order_id}", "get_order").is_unpaginated_listing
+    assert not route("POST", "/api/orders", "create_orders").is_unpaginated_listing
     assert not route("GET", "/health", "health").is_unpaginated_listing

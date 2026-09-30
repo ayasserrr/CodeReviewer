@@ -10,7 +10,7 @@ agents tables to walk row by row:
   resolved), the dependencies that actually apply to it (app, include,
   router, decorator, handler parameters — transitively), whether any of
   them verifies a user token, and every input the route uses as an
-  *identity* (``x-user-email`` headers, ``user_email`` body fields, ...).
+  *identity* (``x-user-id`` headers, ``owner_email`` body fields, ...).
   Plus ``app.mount`` sub-apps, which FastAPI dependencies never reach.
 - **Env map**: every environment variable the code reads (Python and
   JS/TS), its inline default, where the same key has divergent defaults,
@@ -1636,9 +1636,6 @@ def build_inventory(
         section("Credentials accepted in the query string", [s.row for s in maps.signals.query_credentials]),
         section("Keys set to contradictory targets in different .env files",
                 [f"`{key}` — " + "; ".join(f"{f}: {flags}" for f, flags in rows) for key, rows in maps.env_contradictions()]),
-        section("Several routes delivering one progress/status stream",
-                [f"{key}: " + "; ".join(rows) for key, rows in maps.signals.progress_channels]),
-        section("Identifier shape used as meaning", [s.row for s in maps.signals.id_shape_checks]),
         section("Executor nesting / single-worker thread pools", [s.row for s in maps.signals.executor_nesting]),
         section("Production controls with no trace anywhere in the live code",
                 [label for _, label, _ in maps.signals.absent_controls]),

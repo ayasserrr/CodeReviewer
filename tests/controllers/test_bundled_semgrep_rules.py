@@ -28,7 +28,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
-app.mount("/static/cvs", StaticFiles(directory="cvs"), name="cvs")
+app.mount("/static/uploads", StaticFiles(directory="uploads"), name="uploads")
 SECRET_KEY = os.getenv("SECRET_KEY", "secret")
 
 
@@ -55,11 +55,11 @@ def _generate_random_id():
 
 
 async def upload_endpoint(db, thread_id):
-    if not await try_mark_screening_in_progress(db, thread_id):
+    if not await try_mark_job_in_progress(db, thread_id):
         return None
 
 
-def _rerank_all_candidates(pool):
+def _rerank_all_orders(pool):
     return pool
 
 
@@ -86,7 +86,7 @@ export function Frame({ html }: { html: string }) {
 
 export async function exportRows(rows: string[][]) {
   const workbook = new ExcelJS.Workbook()
-  const sheet = workbook.addWorksheet('Candidates')
+  const sheet = workbook.addWorksheet('Orders')
   rows.forEach((r) => sheet.addRow(r))
   return workbook.xlsx.writeBuffer()
 }
@@ -129,11 +129,9 @@ def test_rulesets_load_without_config_errors(results):
         ("python-upload-filename-path-traversal", 16),
         ("python-content-disposition-header", 24),
         ("python-spreadsheet-export", 25),
-        ("python-silent-value-substitution", 30),
         ("python-random-identifier", 34),
         ("python-claim-flag-or-lock", 38),
         ("python-whole-collection-recompute", 42),
-        ("python-lowercased-extracted-text", 48),
         ("python-http-request-without-timeout", 53),
         ("python-exception-text-returned-to-client", 55),
         ("web-secret-in-client-env", 3),

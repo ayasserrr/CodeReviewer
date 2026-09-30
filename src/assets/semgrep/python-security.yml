@@ -450,30 +450,6 @@ rules:
 
   # ------------------------------------------------------ data-integrity leads
   # Leads for the correctness lane (not verdicts): shapes behind real pipeline bugs.
-  - id: python-silent-value-substitution
-    languages: [python]
-    severity: INFO
-    message: >-
-      Extracted text is rewritten with the current date/year inside a regex substitution —
-      check that real data (e.g. a graduation year) is not silently "corrected" into a
-      different value that downstream scoring then trusts.
-    metadata: {category: correctness, cwe: "CWE-1284: Improper Validation of Specified Quantity in Input", confidence: LOW}
-    patterns:
-      - pattern-inside: |
-          def $F(...):
-              ...
-      - pattern-either:
-          - pattern-inside: |
-              $Y = datetime.now().year
-              ...
-          - pattern-inside: |
-              $Y = datetime.datetime.now().year
-              ...
-          - pattern-inside: |
-              $Y = date.today().year
-              ...
-      - pattern: re.sub(...)
-
   - id: python-random-identifier
     languages: [python]
     severity: INFO
@@ -538,7 +514,7 @@ rules:
     severity: INFO
     message: >-
       A model / embedding call inside a loop — latency and cost scale with the collection size.
-      Check whether the loop runs over a growing pool (every candidate, every document) on each request
+      Check whether the loop runs over a growing pool (every record, every document) on each request
       or upload, whether results could be batched or cached, and whether it blocks the event loop.
     metadata: {category: performance, confidence: LOW}
     patterns:
@@ -594,23 +570,3 @@ rules:
           regex: (?i)^_?(\w*_)?(re_?(rank|score|index|embed|build|compute|calculate)\w*|all_\w*|all)$
       - focus-metavariable: $F
 
-  - id: python-lowercased-extracted-text
-    languages: [python]
-    severity: INFO
-    message: >-
-      Document text is lowercased where it is extracted or cleaned. Everything downstream (embeddings, LLM
-      prompts, stored text, name / acronym / code matching) sees the degraded text; case carries meaning
-      (acronyms, proper nouns, identifiers) and cased embedding models lose signal.
-    metadata: {category: correctness, confidence: LOW}
-    patterns:
-      - pattern-inside: |
-          def $F(...):
-              ...
-      - metavariable-regex:
-          metavariable: $F
-          regex: (?i).*(extract|parse|load|read|text|content|clean|normali[sz]e|preprocess).*
-      - pattern-either:
-          - pattern: return $X.lower()
-          - pattern: return $X.lower().strip()
-          - pattern: return $X.strip().lower()
-          - pattern: return $X.casefold()

@@ -19,9 +19,9 @@ from utils import (
 FILES = {
     "app/main.py": 120,
     "app/routers/auth.py": 60,
-    "app/routers/candidate_actions.py": 60,
-    "app/services/internal_vacancy_service.py": 160,
-    "app/services/cv_operations_service.py": 800,
+    "app/routers/item_actions.py": 60,
+    "app/services/documents_service.py": 160,
+    "app/services/orders_service.py": 800,
     "src/utils/extract_docx_txt.py": 30,
 }
 
@@ -64,17 +64,17 @@ def test_real_duplicate_pairs_fold_and_distinct_baselines_do_not(workspace):
     cors_sec2 = record(ws, "security", "Insecure CORS configuration: wildcard origin with credentials allowed", "High",
                        ("app/main.py", 50, 50))
     pt_sec = record(ws, "security", "Path Traversal vulnerability in file upload handlers", "High",
-                    ("app/services/cv_operations_service.py", 779, 782),
-                    ("app/services/internal_vacancy_service.py", 140, 142))
+                    ("app/services/orders_service.py", 779, 782),
+                    ("app/services/documents_service.py", 140, 142))
     pt_bug = record(ws, "correctness", "Unsanitized filename in file upload leads to path traversal vulnerability",
-                    "High", ("app/services/internal_vacancy_service.py", 141, 141))
+                    "High", ("app/services/documents_service.py", 141, 141))
     rl_sec = record(ws, "security", "No rate limiting on authentication endpoints", "High",
                     ("app/routers/auth.py", 30, 30), ("app/main.py", 40, 60))
     rl_auth = record(ws, "auth", "Absence of rate limiting on any route", "High", ("app/main.py", 1, 1))
     ex_sec = record(ws, "security", "Raw exception messages exposed in API responses", "Medium",
-                    ("app/routers/candidate_actions.py", 29, 32))
+                    ("app/routers/item_actions.py", 29, 32))
     ex_obs = record(ws, "observability", "Insufficient Error Handling and Information Disclosure via Raw Exception Text",
-                    "High", ("app/routers/candidate_actions.py", 30, 30))
+                    "High", ("app/routers/item_actions.py", 30, 30))
     metrics = record(ws, "observability", "Absence of Application Metrics", "High", ("app/main.py", 1, 1))
     logs = record(ws, "observability", "Absence of Structured (JSON) Logging Configuration", "Medium", ("app/main.py", 1, 1))
     ids = record(ws, "observability", "Absence of Request/Correlation ID Propagation", "Medium", ("app/main.py", 1, 1))
@@ -108,14 +108,14 @@ def test_static_lead_is_addressed_only_by_a_citation_near_its_line(workspace):
 
     ws = workspace
     lock = StaticFinding.from_normalized("semgrep", {
-        "file": "app/services/cv_operations_service.py", "line": 700, "severity": "info",
+        "file": "app/services/orders_service.py", "line": 700, "severity": "info",
         "category": "src.assets.semgrep.python-claim-flag-or-lock", "message": "claim"})
     ws.static_by_id[lock.id] = lock
     label = "Work claims / locks / in-progress flags (semgrep)"
-    record(ws, "correctness", "Random IDs collide", "High", ("app/services/cv_operations_service.py", 100, 105))
+    record(ws, "correctness", "Random IDs collide", "High", ("app/services/orders_service.py", 100, 105))
     assert label in [name for name, _ in ws.unaddressed_leads("correctness")]
-    record(ws, "correctness", "Screening lock is never released on failure", "High",
-           ("app/services/cv_operations_service.py", 690, 695))
+    record(ws, "correctness", "Processing lock is never released on failure", "High",
+           ("app/services/orders_service.py", 690, 695))
     assert label not in [name for name, _ in ws.unaddressed_leads("correctness")]
 
 
@@ -123,11 +123,11 @@ def test_severity_caps_for_latent_script_and_baseline_findings(workspace):
     from helpers.review_maps import BASELINES
 
     ws = workspace
-    ws.maps.unreachable = ["app/services/internal_vacancy_service.py", "src/utils/extract_docx_txt.py"]
+    ws.maps.unreachable = ["app/services/documents_service.py", "src/utils/extract_docx_txt.py"]
     ws.maps.orphan_scripts = ["src/utils/extract_docx_txt.py"]
     ws.maps.absent_baselines = [b for b in BASELINES if b.id == "rate_limiting"]
     latent = record(ws, "security", "SQL injection via LLM-generated SQL", "Critical",
-                    ("app/services/internal_vacancy_service.py", 10, 12))
+                    ("app/services/documents_service.py", 10, 12))
     script = record(ws, "observability", "Seed script prints admin passwords", "High",
                     ("src/utils/extract_docx_txt.py", 5, 5))
     baseline = record(ws, "auth", "No rate limiting on any route", "Critical", ("app/main.py", 1, 1))
@@ -185,7 +185,7 @@ def test_agents_md_is_loaded_into_the_brief_context_and_correctness_leads(tmp_pa
 
     (tmp_path / "svc").mkdir()
     (tmp_path / "AGENTS.md").write_text("# System\n## Upload flow\nCVs are deduplicated by email before scoring.\n")
-    (tmp_path / "svc" / "agents.md").write_text("## Worker\nOne job per requisition.\n")
+    (tmp_path / "svc" / "agents.md").write_text("## Worker\nOne job per project.\n")
     (tmp_path / "app.py").write_text("x = 1\n")
     manifest = RepositoryManifest(
         schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
@@ -207,10 +207,10 @@ def test_agents_md_is_loaded_into_the_brief_context_and_correctness_leads(tmp_pa
 
 def test_latent_cap_uses_the_defect_location_even_when_a_live_route_is_cited(workspace):
     ws = workspace
-    ws.maps.unreachable = ["app/services/internal_vacancy_service.py"]
+    ws.maps.unreachable = ["app/services/documents_service.py"]
     ws.maps.absent_baselines = []
     fid = record(ws, "security", "SQL injection in text-to-SQL helper", "Critical",
-                 ("app/services/internal_vacancy_service.py", 10, 12), ("app/main.py", 50, 50))
+                 ("app/services/documents_service.py", 10, 12), ("app/main.py", 50, 50))
     assert ws.apply_severity_caps() >= 1
     assert ws.findings[fid].severity == "High" and "latent" in ws.findings[fid].verification.note
 
@@ -253,7 +253,7 @@ def test_generic_words_do_not_make_two_findings_the_same_defect(workspace):
 
 
 def test_documented_rule_is_attached_as_evidence(tmp_path):
-    (tmp_path / "AGENTS.md").write_text("# Flow\n1. The screening lock is always released.\n")
+    (tmp_path / "AGENTS.md").write_text("# Flow\n1. The processing lock is always released.\n")
     (tmp_path / "app.py").write_text("x = 1\n" * 5)
     manifest = RepositoryManifest(
         schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
@@ -267,7 +267,7 @@ def test_documented_rule_is_attached_as_evidence(tmp_path):
                          graph=graph, config=load_review_config(settings.DEEP_REVIEW_CONFIG_PATH))
     cat = ws.config.category("correctness")
     out = ws.record_finding(cat, _RecordFindingArgs(
-        title="Screening lock is never released on failure", severity="High", confidence="high", description="d",
+        title="Processing lock is never released on failure", severity="High", confidence="high", description="d",
         impact="i", evidence=[EvidenceInput(file="app.py", line_start=3, line_end=3)],
         violates_documented_rule="AGENTS.md:2"))
     finding = next(iter(ws.findings.values()))
@@ -284,7 +284,7 @@ def _subprocess_leads(ws):
 
     ws.maps.signals.subprocess_no_timeout = [
         Signal("app/main.py", 10, "subprocess.run `antiword` with no timeout"),
-        Signal("app/services/cv_operations_service.py", 300, "subprocess.Popen `ffmpeg` with no timeout"),
+        Signal("app/services/orders_service.py", 300, "subprocess.Popen `ffmpeg` with no timeout"),
     ]
     return "External commands run with no timeout (a hostile document hangs the worker)"
 
@@ -295,7 +295,7 @@ def test_small_lead_groups_are_tracked_row_by_row(workspace):
     record(ws, "inputs", "antiword runs without a timeout", "Medium", ("app/main.py", 10, 10))
     open_rows = dict(ws.unaddressed_leads("inputs"))[label]
     # citing antiword no longer closes the group: ffmpeg is still open
-    assert open_rows == ["subprocess.Popen `ffmpeg` with no timeout (app/services/cv_operations_service.py:300)"]
+    assert open_rows == ["subprocess.Popen `ffmpeg` with no timeout (app/services/orders_service.py:300)"]
 
 
 def test_dismiss_lead_needs_a_citation_and_closes_the_row(workspace):
@@ -307,11 +307,11 @@ def test_dismiss_lead_needs_a_citation_and_closes_the_row(workspace):
     refused = ws.dismiss_lead(inputs, _DismissLeadArgs(lead="ffmpeg", reason="not a problem"))
     assert refused.startswith("NOT RECORDED")
     ok = ws.dismiss_lead(inputs, _DismissLeadArgs(
-        lead="cv_operations_service.py:300", reason="wrapped by the watchdog at app/main.py:12"))
+        lead="orders_service.py:300", reason="wrapped by the watchdog at app/main.py:12"))
     assert ok == "Dismissed 1 lead row(s)."
     open_rows = dict(ws.unaddressed_leads("inputs")).get(label, [])
     assert all("ffmpeg" not in row for row in open_rows)
-    assert ("inputs", "subprocess.Popen `ffmpeg` with no timeout (app/services/cv_operations_service.py:300)") \
+    assert ("inputs", "subprocess.Popen `ffmpeg` with no timeout (app/services/orders_service.py:300)") \
         in ws.dismissed_leads
 
 
@@ -341,7 +341,7 @@ def test_verifier_batch_check_only_covers_its_own_findings(workspace):
 
     ws = workspace
     first = record(ws, "security", "Header identity is trusted", "High", ("app/main.py", 1, 2))
-    second = record(ws, "security", "Static CV mount is public", "High", ("app/main.py", 30, 31))
+    second = record(ws, "security", "Static upload mount is public", "High", ("app/main.py", 30, 31))
     nudge = _unverified_nudge(ws, "security", {first})
     assert first in nudge and second not in nudge
     assert _unverified_nudge(ws, "security", {"SEC-99"}) is None
@@ -359,7 +359,7 @@ def test_budget_is_not_a_dismissal_reason_and_covered_rows_attach_to_the_finding
     fid = record(ws, "inputs", "External binaries run without timeouts", "High", ("app/main.py", 10, 10))
     attached = ws.dismiss_lead(inputs, _DismissLeadArgs(lead="ffmpeg", finding_id=fid))
     assert attached == f"Attached 1 lead location(s) to {fid} as evidence."
-    assert ("app/services/cv_operations_service.py", 300) in {(e.file, e.line_start) for e in ws.findings[fid].evidence}
+    assert ("app/services/orders_service.py", 300) in {(e.file, e.line_start) for e in ws.findings[fid].evidence}
     assert not any("ffmpeg" in row for _, rows in ws.unaddressed_leads("inputs") for row in rows)
     assert not ws.dismissed_leads  # attached, not dismissed: nothing for the report's dismissal appendix
 
@@ -404,7 +404,7 @@ def test_report_counts_a_lead_covered_by_another_lane(workspace):
     ws = workspace
     label = _subprocess_leads(ws)
     record(ws, "security", "antiword and ffmpeg run without timeouts", "Medium",
-           ("app/main.py", 10, 10), ("app/services/cv_operations_service.py", 300, 300))
+           ("app/main.py", 10, 10), ("app/services/orders_service.py", 300, 300))
     assert label in dict(ws.unaddressed_leads("inputs"))  # the owning lane still has to act on it
     assert label not in dict(ws.unaddressed_leads("inputs", any_lane=True))  # but the report shows it covered
 
@@ -424,8 +424,8 @@ def test_hypotheses_need_a_system_model_real_files_and_a_cited_resolution(worksp
         _HypothesisInput(statement="Upload service joins client filenames into disk paths", files=["app/main.py"])]))
     assert few.startswith("NOT RECORDED") and "at least 4" in few
     hyps = [_HypothesisInput(statement=f"Suspected defect number {i} in the routing and service layer", files=[f])
-            for i, f in enumerate(["app/main.py", "app/routers/auth.py", "app/services/cv_operations_service.py",
-                                   "app/routers/candidate_actions.py"], start=1)]
+            for i, f in enumerate(["app/main.py", "app/routers/auth.py", "app/services/orders_service.py",
+                                   "app/routers/item_actions.py"], start=1)]
     out = ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=hyps))
     assert out.startswith("Recorded H-SEC-1, H-SEC-2, H-SEC-3, H-SEC-4")
     assert len(ws.open_hypotheses("security")) == 4

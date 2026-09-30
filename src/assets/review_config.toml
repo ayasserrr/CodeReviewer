@@ -76,6 +76,14 @@ focus = """
   retries of non-idempotent requests, missing timeouts on outbound calls.
 - Anything that would make this service fail when deployed on a different
   host than the developer's machine.
+- For every key with divergent defaults, follow the value to where it is USED: a URL key
+  that mints links returned to clients or put in emails (download links, booking links,
+  callbacks) with one default on localhost/dev is a broken-integration finding in THIS lane
+  (links that only work on the server) — record it here even if security reports the
+  internal-host leak.
+- Frontend runtime configuration: how the SPA finds the backend (build-time base URL, dev
+  proxy, fallbacks), whether .env.example and the code agree, credentials in VITE_ vars and
+  API keys accepted in query strings (they land in proxy/server logs and browser history).
 - Start from /_review/context/env_map.md (keys with divergent defaults, defaults
   pointing at localhost/dev hosts, keys missing from templates, duplicate keys) and
   client_calls.md (frontend calls with no backend route = broken contract).
@@ -186,6 +194,9 @@ focus = """
   token/cost accounting — present or absent?
 - Durability of failure information across restarts; background task errors
   that vanish silently.
+- runtime_signals.md lists print() calls per LIVE module and health routes that check
+  nothing: cite live service modules (not scripts) for the logging finding, and state the
+  total count. A finding that only cites scripts understates a service that logs by print().
 """
 
 [[categories]]
@@ -204,6 +215,14 @@ focus = """
   scans, or only build and deploy?
 - Frontend <-> backend contract checks, migration tests, fixture hygiene.
 - Report missing coverage as findings with the specific untested modules.
+- runtime_signals.md lists every test file, which of them drive the HTTP API, the declared
+  test frameworks and every CI/deploy pipeline with its stages. Separate findings: (1) no
+  automated route/integration/contract tests for the service (name the untested critical
+  paths: auth, authorization, uploads, pipelines, the frontend calls in client_calls.md
+  with no backend route — a contract test would have caught them); (2) CI/deploy pipelines
+  that build and deploy with no test/lint/scan gate (cite the pipeline file and its stages);
+  (3) tests that cannot fail or hit live services. These affect the deployed service even
+  though the evidence is test and pipeline files.
 """
 
 [[categories]]
@@ -249,6 +268,9 @@ focus = """
 - Work that grows with the data instead of with the request: re-processing a whole
   pool per upload, re-embedding or re-parsing the same content per item, reloading
   the same rows several times in one job.
+- runtime_signals.md lists sync model/embedding work reached from async code (directly or
+  through repo functions): each is a blocked event loop while the model answers — check the
+  caller is really on the request/job path and report them as one grouped finding.
 - Use the dependency graph's fan-in (most-called functions) to find hot paths.
 - architecture.md lists every piece of process-local state (singletons, caches,
   semaphores, flags): together they decide whether the service can run more than
@@ -281,6 +303,17 @@ it does not, record nothing and say "not applicable" in your final message.
   timeouts/retries around model calls, no structured-output validation.
 - Prompt construction from untrusted input (hand off exploitable injection
   to the security narrative, but record cost/robustness impact here).
+- runtime_signals.md is your map: agent loops re-sending their message list, tool outputs
+  passed whole, files that call a model and never read usage, clients built at import time,
+  and sync model calls reached from async code. The four questions below each end as a
+  finding or a cited dismissal — never silently: (1) memory: what does one chat request
+  send (does the frontend send history? does the server load any? is a checkpointer or
+  session store used — a session id that is generated but never read is dead plumbing);
+  (2) token growth: per round and per turn, with the bound (max rounds, tool-output size);
+  (3) budget: any per-user/session/request token or cost limit, any input length cap;
+  (4) accounting: is usage_metadata / token usage recorded with a user or job key.
+- Duplicated model work: the same document embedded or sent to a model twice, the whole
+  pool re-scored per upload, the same prompt recomputed per item.
 """
 
 [[categories]]
@@ -293,8 +326,12 @@ focus = """
 - File uploads: size limits enforced before reading the body, type validation
   by magic bytes vs trusting client Content-Type/extension, filename
   normalization, storage location, deduplication, quotas, cleanup of orphans.
-- Parser abuse: decompression bombs, XML entity expansion, huge PDFs/images,
-  external binaries invoked without timeouts.
+- Parser abuse: decompression bombs, XML entity expansion, huge PDFs/images (page
+  count and OCR work, not only bytes), external binaries invoked without timeouts
+  (runtime_signals.md lists every subprocess call with no timeout).
+- Lifecycle governance across ALL input paths (CVs, JDs, vacancy files, audio, chat text):
+  per-user quotas, job-creation caps, cancellation of running jobs, retry/backoff on the
+  pipeline, cleanup of orphaned files after failures — summarize them in the table.
 - Request validation: unbounded string/list fields, missing length limits on
   chat/free-text inputs, missing pagination limits, trusting client-supplied
   IDs.
@@ -339,6 +376,11 @@ focus = """
   the same data differently, work done twice, values silently rewritten, IDs that
   can collide or whose shape is used as meaning, and flags/locks set in one place but
   released only on the happy path. These are the highest-value bugs in this lane.
+- Parallel implementations (runtime_signals.md): two functions doing one job (two PDF
+  parsers, several screening orchestrators) usually already disagree — different casing,
+  cleaning, fields or error handling for the same data. Diff them and record the divergence.
+- Stuck state: a flag/lock set in the request and cleared only in a background task's
+  finally is stuck forever after a crash, OOM or deploy (no TTL/reaper) — that is High.
 - Scripts and entry points that cannot work as written (e.g. an async main() called
   without asyncio.run, a coroutine used without await).
 - Triage pyright in bulk FIRST (triage_static_rule per rule group, a few samples
@@ -371,6 +413,9 @@ focus = """
   diverged (two copies now behave differently) or doubles real work/maintenance
   of a core path is a finding; repeated boilerplate (queries, schemas, DI params,
   API-client wrappers) is not — triage those jscpd groups as low_value in bulk.
+- Parallel implementations (runtime_signals.md): name each set of functions doing one
+  job, which one production calls, and the duplicated lines — report the biggest sets as
+  one grouped finding.
 - Complexity hot spots (triage radon / lizard): only report the ones that
   genuinely hurt comprehension or hide bugs, grouped, not one per function.
 - Layering violations, circular imports (use the import graph), god modules.
@@ -391,6 +436,9 @@ focus = """
   libraries doing the same job (several PDF libs, several DB drivers, several
   HTTP clients), heavyweight packages used only by dead code.
 - Dependencies declared but never imported, imported but never declared.
+  runtime_signals.md lists library families declared together (several PDF parsers,
+  several Postgres drivers, several HTTP clients) and packages nothing live imports —
+  confirm with grep and record grouped findings.
 - Build/deploy artifacts pulling from unverified sources.
 """
 

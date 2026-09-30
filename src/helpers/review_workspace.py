@@ -293,7 +293,11 @@ class _VerifyArgs(BaseModel):
         description="confirmed = true as stated; rejected = not a real issue / evidence doesn't support it; "
         "adjusted = real but the severity is wrong (give adjusted_severity).",
     )
-    note: str = Field(..., description="The decisive fact you checked, citing file:line.")
+    note: str = Field(
+        ...,
+        description="The decisive fact you checked, citing file:line. A rejection must cite the repository code "
+        "that disproves the claim.",
+    )
     adjusted_severity: Literal["Critical", "High", "Medium", "Low"] | None = None
     corrected_title: str | None = Field(
         None, description="Only when the title overstates or misnames the defect: the accurate one-line title."
@@ -1066,9 +1070,55 @@ class ReviewWorkspace:
                   + (f"; duplicates: {', '.join(k for k, _ in f.duplicates)}" if f.duplicates else ""))
                  for f in self.maps.env_files if f.flags or f.duplicates])
             add("Insecure secret defaults (semgrep)", static_rows("python-insecure-secret-default"))
+        self._signal_leads(category_id, add)
         for label, _ in self._absence_leads(category_id):
             groups.append((label, frozenset(), ["confirm the absence (the static search found nothing) and record it"]))
         return groups
+
+    def _signal_leads(self, category_id: str, add) -> None:
+        """Leads from runtime_signals.md: behaviour of the running system no linter reports."""
+        sig = self.maps.signals
+
+        def rows(signals) -> list[tuple[str, str]]:
+            return [(f"{x.file}:{x.line}" if x.line else x.file, x.row if x.line else f"{x.text} ({x.file})") for x in signals]
+
+        if category_id == "llm":
+            add("Chat / agent routes — trace what ONE request sends to the model: is history persisted or resent, "
+                "is there a per-user/session token or cost budget, are model and tool errors caught",
+                [(r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
+                 for r in self.maps.routes if re.search(r"(?i)chat|agent|assistant|ask|conversation", r.path)])
+            add("Agent loops re-sending a growing message list (input tokens grow with every round)", rows(sig.agent_loops))
+            add("Tool outputs handed to the model whole (no size bound)", rows(sig.unbounded_tool_output))
+            add("Files that call a model but never read token usage (cost is invisible)", rows(sig.usage_never_read))
+            add("Model / embedding clients built at import time (network at import, per-worker copies)",
+                rows(sig.model_clients_at_import))
+        elif category_id == "performance":
+            add("Sync model / embedding work reached from async code — each call freezes every request on the worker",
+                rows(sig.blocking_in_async))
+        elif category_id == "observability":
+            if sig.print_live:
+                total = sum(n for _, n in sig.print_live)
+                add(f"print() used as logging in LIVE modules ({total} calls in {len(sig.print_live)} files) — cite these, "
+                    "not scripts", [(f, f"{f}: {n} print() calls") for f, n in sig.print_live[:15]])
+            add("Health endpoints that check no dependency (report healthy while the database/model is down)",
+                rows(sig.static_health))
+        elif category_id == "testing":
+            add("CI / deploy pipelines with no test, lint or scan step (build -> deploy with no gate)",
+                [(p.file, f"{p.file}: stages {', '.join(p.stages) or 'unnamed'}") for p in sig.ci_without_checks])
+        elif category_id == "dependencies":
+            add("Libraries doing the same job", [(src, f"{fam}: {', '.join(pkgs)} ({src})") for fam, pkgs, src in sig.duplicate_libraries])
+            add("Declared dependencies nothing live imports (dead weight / attack surface)",
+                [(x.file, f"{x.text} ({x.file})") for x in sig.unused_dependencies])
+        elif category_id == "inputs":
+            add("External commands run with no timeout (a hostile document hangs the worker)", rows(sig.subprocess_no_timeout))
+        if category_id in ("maintainability", "correctness") and sig.parallel_implementations:
+            label = (
+                "Parallel implementations of one operation — name which one production uses and how the copies differ"
+                if category_id == "maintainability"
+                else "Parallel implementations of one operation — check whether the copies now process the same data "
+                "differently (a correctness bug)"
+            )
+            add(label, [(x.file, f"{name}: {x.row}") for name, sites in sig.parallel_implementations[:12] for x in sites])
 
     def _reachable_files(self, file: str, function: str, depth: int) -> set[str]:
         """``file`` plus the files of functions reachable from ``function`` within ``depth`` calls."""
@@ -1086,11 +1136,21 @@ class ReviewWorkspace:
         return files
 
     def _absence_leads(self, category_id: str) -> list[tuple[str, str]]:
-        return [
+        leads = [
             (f"Baseline with no trace anywhere in the code: {b.label}", b.mention)
             for b in self.maps.absent_baselines
             if b.lane == category_id
         ]
+        sig = self.maps.signals
+        if category_id == "testing" and self.maps.routes and not sig.route_tests:
+            leads.append((
+                (
+                    f"No test drives the HTTP API ({len(sig.test_files)} test files, none uses TestClient/httpx/supertest): "
+                    "auth, authorization, uploads and the frontend/backend contract are untested"
+                ),
+                r"(?i)(integration|route|api|endpoint|contract|auth).{0,60}test|test.{0,60}(integration|route|api|endpoint|contract)",
+            ))
+        return leads
 
     def untriaged_groups(self, category_id: str, threshold: float = 0.25) -> list[tuple[str, str, int]]:
         """``(tool, rule, count)`` of untriaged static findings this category owns — empty when coverage is fine."""
@@ -1198,6 +1258,14 @@ class ReviewWorkspace:
             + (f"{'; '.join(extras)}\n" if extras else "")
         )
 
+    def _cites_repository(self, text: str) -> bool:
+        known = {f.path for f in self.manifest.files}
+        for path in re.findall(r"([\w./\-]+\.[A-Za-z0-9]+):\d+", text or ""):
+            path = path.lstrip("/")
+            if path in known or any(k.endswith("/" + path) for k in known):
+                return True
+        return False
+
     def submit_verification(self, category_id: str, args: _VerifyArgs) -> str:
         with self._lock:
             finding = self.findings.get(args.finding_id)
@@ -1205,6 +1273,12 @@ class ReviewWorkspace:
                 return f"Unknown finding '{args.finding_id}' for this verification batch."
             if args.verdict == "adjusted" and not args.adjusted_severity:
                 return "NOT RECORDED — 'adjusted' requires adjusted_severity."
+            if args.verdict == "rejected" and not self._cites_repository(args.note):
+                return (
+                    "NOT RECORDED — a rejection must cite the code that disproves the claim (a repository "
+                    "`path:line` in the note, e.g. the guard, caller or config you found). If you could not find "
+                    "such code, the claim stands: confirm it, or adjust its severity/title/impact."
+                )
             verification = Verification(verdict=args.verdict, original_severity=finding.severity, note=args.note.strip()[:1500])
             self.verifications[finding.id] = verification
             if args.verdict == "rejected":
@@ -1293,7 +1367,10 @@ class ReviewWorkspace:
                 primary = finding.evidence[0].file if finding.evidence else None
                 py_files = {f for f in files if f.endswith(".py")}
                 ceiling, reason = None, ""
-                if py_files and py_files == files and all(_is_script_or_test(f, scripts, unreachable) for f in files):
+                if (finding.category_id != "testing" and py_files and py_files == files
+                        and all(_is_script_or_test(f, scripts, unreachable) for f in files)):
+                    # Testing findings cite the test files BECAUSE the service lacks tests: the
+                    # affected thing is the running service, not the scripts it cites.
                     ceiling, reason = "Medium", "only standalone scripts/tests are affected, not the running service"
                 elif py_files and py_files <= unreachable and py_files == files:
                     ceiling, reason = "High", "latent — the cited code is not imported by any application entry point"

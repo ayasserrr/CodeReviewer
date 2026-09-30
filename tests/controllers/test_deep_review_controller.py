@@ -102,7 +102,7 @@ def _script(system: str, turn: int) -> AIMessage:
                 content="",
                 tool_calls=[
                     _call("submit_verification", finding_id="SEC-1", verdict="confirmed", note="Read app/main.py:4."),
-                    _call("submit_verification", finding_id="SEC-2", verdict="rejected", note="Guarded upstream."),
+                    _call("submit_verification", finding_id="SEC-2", verdict="rejected", note="Guarded upstream at app/main.py:2."),
                 ],
             )
         return done

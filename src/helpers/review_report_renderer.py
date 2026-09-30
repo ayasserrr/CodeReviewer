@@ -301,6 +301,20 @@ def render_report(report: DeepReviewReport) -> str:
         out.append("---")
         out.append("")
 
+    # ---- rejected claims (auditable) ----------------------------------------
+    if report.rejected_findings:
+        out.append("## Appendix B. Claims rejected by independent verification")
+        out.append("")
+        out.append("Recorded by a specialist, then disproved against the code by a second agent. Listed so the "
+                   "rejection itself can be audited.")
+        out.append("")
+        for finding in sorted(report.rejected_findings, key=lambda f: (f.category_id, f.id)):
+            reason = finding.verification.note if finding.verification else ""
+            out.append(f"- **{finding.title}** ({finding.category_id}, {finding.severity}) — {reason[:400]}")
+        out.append("")
+        out.append("---")
+        out.append("")
+
     # ---- coverage & verification note -------------------------------------
     stats = report.statistics
     out.append(

@@ -29,6 +29,10 @@ read the real code, trace the real data flow, and report only what is actually w
   * reachability.md — Python modules no application entry point imports;
   * architecture.md — process-local state, background jobs, queries that ignore the
     caller's identity, frontend pages without an auth guard.
+  * runtime_signals.md — how the running system behaves beyond the linters: sync model
+    work reached from async code, agent loops re-sending their history, token usage
+    never read, print() in live modules, static health checks, tests that drive the API,
+    CI stages, duplicate libraries, parallel implementations, commands without timeout.
   * agents_md.md — the developers' AGENTS.md system description, when the repo has one.
   Walk the tables relevant to your assignment row by row instead of rediscovering them
   with greps; then open the code to confirm each row you report (they are heuristics).
@@ -71,7 +75,15 @@ read the real code, trace the real data flow, and report only what is actually w
   CI test stage for a deployed service -> High; no request/correlation IDs together with
   print()-as-logging in a system with several components (frontend, API, jobs) -> High
   (a failure cannot be traced end to end); a static health check an orchestrator relies
-  on -> High; missing metrics / error boundary alone -> Medium; lint output (unused
+  on -> High; the same externally-facing URL (download/email/callback links) built from
+  different defaults, one of them localhost or a dev host -> High (links break for every
+  user not on the server); a chat/agent feature with no memory across turns, or with input
+  tokens that grow every round and no per-user/session budget -> High; token usage never
+  recorded -> Medium; sync model/LLM work run inside async request or job code (blocks the
+  event loop) -> High; one upload/event re-processing the whole existing pool (O(n) per
+  event, O(n^2) overall) with model calls -> High; print() as the logging of live service
+  modules -> High together with no request IDs, else Medium; missing metrics / error
+  boundary alone -> Medium; lint output (unused
   imports/variables, zip() without strict, complexity scores) is NOT a finding — it lives
   in the static-analysis triage; dead code -> ONE grouped finding sized in lines (Medium
   when it buries the real code path: thousands of lines or whole parallel
@@ -251,6 +263,12 @@ Then call submit_verification exactly once per finding:
 - rejected — false, not a defect, or the evidence does not support it.
 When AGENTS.md documents the intended behaviour, use it to judge intent: a divergence
 from the documented flow is a defect; the code is still the only evidence of what happens.
+A rejection must cite, in the note, the repository `path:line` that disproves the claim
+(the guard, caller, config or test you found) — the tool refuses a rejection without one.
+"I could not find it" or "the file is dead/a script" is not a rejection: dead or script-only
+code is an adjustment (lower severity, say latent). Missing tests, CI gates, logging,
+metrics, memory or budgets are absences — you disprove them only by citing the code that
+provides them.
 Reject only when the CORE defect is absent. If the defect is real but a detail is wrong
 (a misnamed function, a wrong line, an overstated impact), keep it: adjust and pass
 corrected_title / corrected_impact describing what the code really does. Losing a

@@ -196,7 +196,11 @@ class TestVerificationAndSynthesis:
     def test_reject_moves_finding_out(self, workspace):
         security = workspace.config.category("security")
         workspace.record_finding(security, _finding())
-        workspace.submit_verification("security", _VerifyArgs(finding_id="SEC-1", verdict="rejected", note="guarded"))
+        refused = workspace.submit_verification("security", _VerifyArgs(finding_id="SEC-1", verdict="rejected", note="guarded"))
+        assert refused.startswith("NOT RECORDED") and "SEC-1" in workspace.findings
+        workspace.submit_verification(
+            "security", _VerifyArgs(finding_id="SEC-1", verdict="rejected", note="guarded by the dependency at app/main.py:3")
+        )
         assert "SEC-1" not in workspace.findings
         assert workspace.rejected["SEC-1"].verification.verdict == "rejected"
 

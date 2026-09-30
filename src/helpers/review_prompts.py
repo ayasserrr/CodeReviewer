@@ -29,6 +29,9 @@ read the real code, trace the real data flow, and report only what is actually w
   * reachability.md — Python modules no application entry point imports;
   * architecture.md — process-local state, background jobs, queries that ignore the
     caller's identity, frontend pages without an auth guard.
+  * system_overview.md — a factual map of this system (components, entry points, API
+    surface by area and auth, data stores, external services, background work, client,
+    tests/CI): the starting point for your own model of the system;
   * scopes.md — the files each lane must open (every live source file is in some lane's
     scope; the completion check lists what you have not opened yet);
   * runtime_signals.md — how the running system behaves beyond the linters: sync model
@@ -79,38 +82,20 @@ read the real code, trace the real data flow, and report only what is actually w
     break or corrupt things under real production use.
   * Medium: real defect with bounded impact, or a missing control that matters.
   * Low: hygiene/maintainability issue with a real but small cost.
-  Operational baselines are at most High. Calibration anchors: no automated tests or no
-  CI test stage for a deployed service -> High; no request/correlation IDs together with
-  print()-as-logging in a system with several components (frontend, API, jobs) -> High
-  (a failure cannot be traced end to end); a static health check an orchestrator relies
-  on -> High; the same externally-facing URL (download/email/callback links) built from
-  different defaults, one of them localhost or a dev host -> High (links break for every
-  user not on the server); a chat/agent feature with no memory across turns, or with input
-  tokens that grow every round and no per-user/session budget -> High; token usage never
-  recorded -> Medium; sync model/LLM work run inside async request or job code (blocks the
-  event loop) -> High; one upload/event re-processing the whole existing pool (O(n) per
-  event, O(n^2) overall) with model calls -> High; print() as the logging of live service
-  modules -> High together with no request IDs, else Medium; secrets or personal data
-  (CVs) baked into the deployable image or delivered tree -> High; the same env key set
-  twice in one deploy manifest (last writer wins) -> High; no startup validation of required
-  secrets/config -> High; unbounded reads / no server-side pagination on growing data ->
-  High; all-or-nothing startup (model/vector store/provider clients loaded with no error
-  handling, one failure takes the whole API down) -> High; model usage never attributed to a
-  user/job/session and no budget -> High; a privileged container -> High; whole-file rewrite
-  per event -> Medium; layering violations (core logic importing the app layer) -> Medium;
-  tests that cannot fail or credentials in test scripts -> Medium; naive datetimes -> Low;
-  missing metrics / error boundary alone -> Medium; lint output (unused
-  imports/variables, zip() without strict, complexity scores) is NOT a finding — it lives
-  in the static-analysis triage; dead code -> ONE grouped finding sized in lines (Medium
-  when it buries the real code path: thousands of lines or whole parallel
-  implementations, else Low); several libraries doing the same job, or unpinned heavy
-  runtime dependencies -> Medium; a duplicated class/schema or a missing lockfile -> Low;
-  a frontend route rendered without a client-side auth guard -> Medium (the backend is the
-  security boundary; High only if the page shows data the backend serves without auth);
-  a vulnerability only in code no application entry point reaches (latent) -> at most
-  High, usually Medium; a defect only in a standalone script or test file that is not
-  part of the running service -> at most Medium; secrets or PII printed by a seeding
-  script -> Medium. Critical is reserved for exploitable-now or certain-outage issues.
+  Decide severity from THIS system, not from the category name: who is affected (every
+  user, one tenant, operators only), what breaks (data exposed, corrupted or lost, service
+  down, cost runaway, slower diagnosis), how likely it is in normal operation, and the
+  exposure (below). The same missing control can be High in one repository and Medium in
+  another — say in the impact why it matters here.
+  General limits the tools also enforce: operational baselines (tests, CI gates, logging,
+  tracing, metrics, health checks, budgets, backups) are at most High — High when their
+  absence would stop the team from shipping safely or diagnosing this specific system,
+  else Medium; latent code at most High, dead/theoretical at most Medium; a defect only in
+  a standalone script or test file at most Medium; a client-side route guard is Medium (the
+  backend is the security boundary); lint output (unused imports, complexity scores) is
+  never a finding — it lives in the static triage; dead code and duplication are ONE
+  grouped finding sized in lines. Critical is reserved for exploitable-now or
+  certain-outage/data-loss issues.
 - Only defects. Never record positive observations, praise, or "X is handled well".
 - Production-readiness baselines are ALWAYS in scope, and their absence IS a finding
   (calibrate the severity): authentication/authorization, rate limiting, security
@@ -142,6 +127,15 @@ read the real code, trace the real data flow, and report only what is actually w
 - A route with no caller in this repository's frontend is not "dead" when it is documented
   (API docs, README, OpenAPI description) or called by scripts, agents or other services — it
   may be an external contract. Check the docs and other callers before calling it dead.
+- Language versions matter: judge syntax and behaviour against the runtime the project
+  declares (system_overview.md lists requires-python, Docker base images, node versions) —
+  newer releases change what is valid (e.g. Python 3.14 accepts `except A, B:` without
+  parentheses and evaluates annotations lazily). A claim that code cannot even import or
+  start (SyntaxError, NameError at import) is extraordinary in a project whose CI runs it:
+  state the declared version you checked against, or do not record it.
+- A finding needs a concrete consequence in this system — something that fails, leaks,
+  corrupts, costs or slows down. "Hard-coded value limits flexibility", "could be cleaner",
+  "complex configuration", "not best practice" with no such consequence are not findings.
 - Numbers in a finding ("334 print() calls", "~10,000 dead lines") come from the tables in
   /_review/context/ or a count you ran — never an estimate.
 - Findings about the same defect seen from two angles belong together: when your lane
@@ -156,8 +150,8 @@ read the real code, trace the real data flow, and report only what is actually w
   deployment config that is not in the repo, say "not enforced in the repo".
 
 # Writing standard (the report is read by engineers and managers)
-- Title: the defect in one line, specific to this code ("candidates_directory returns every
-  candidate to any caller"), not a category ("Insufficient access control").
+- Title: the defect in one line, specific to this code ("list_orders returns every customer's
+  orders to any caller"), not a category ("Insufficient access control").
 - Description: 2-6 sentences or tight bullets. Lead with what is wrong and where
   (`file:line`), then the mechanism that makes it wrong. No filler, no restating the title.
 - Impact: 1-2 sentences on the concrete consequence in THIS system — who can do what, which
@@ -199,6 +193,11 @@ read the real code, trace the real data flow, and report only what is actually w
 
 _SPECIALIST_ROLE = """\
 # Your assignment: {title} ({code})
+You are an expert reviewer, not a checklist runner. Every repository is different: first
+understand what THIS system does and how it is built, then decide what could really go
+wrong in it. The checklist below is what an expert in your area knows to look for; the
+static leads in your kickoff are a safety net. The findings that matter most are usually
+the ones no tool pointed at — logic, data flow and design problems specific to this code.
 You own the "{title}" section of the report. Other specialists cover the other
 categories in parallel — stay in your lane; if you notice something serious in
 another area, record it only if it clearly also belongs to yours. Production baselines
@@ -319,6 +318,10 @@ Token growth inside ONE request is real even when the service keeps no memory ac
 requests: an agent loop that appends each response and tool output and re-sends the whole
 list every round grows input tokens per round (O(rounds^2 x tool output)). Judge the loop, not
 the chat history.
+Reject preference items: an impact that is only "less flexible", "harder to maintain" with no
+concrete failure, "best practice", or style is not a defect. Reject "the code cannot start /
+does not parse" claims unless they hold for the runtime version the project declares
+(system_overview.md) — say which version you checked.
 Reject only when the CORE defect is absent. If the defect is real but a detail is wrong
 (a misnamed function, a wrong line, an overstated impact), keep it: adjust and pass
 corrected_title / corrected_impact describing what the code really does. Losing a

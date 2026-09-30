@@ -63,30 +63,23 @@ code = "INT"
 effort = 3
 enabled = true
 focus = """
-- Base URLs, hostnames and service endpoints: where each is defined, whether
-  defaults point at localhost / dev hosts, and whether several modules build
-  the same externally-facing URL from different defaults.
-- Configuration sources: multiple/contradictory .env templates, config read
-  ad hoc via os.getenv with inline defaults scattered across modules instead
-  of one validated settings object, the same key overloaded for several uses.
-- Frontend <-> backend contract: API base URL wiring, routes the client calls
-  that the server does not expose (and vice versa), request/response shape
-  drift, CORS configuration vs. the real deployed origins.
-- Transport-layer quirks: global side effects inside HTTP helpers, blind
-  retries of non-idempotent requests, missing timeouts on outbound calls.
-- Anything that would make this service fail when deployed on a different
-  host than the developer's machine.
-- For every key with divergent defaults, follow the value to where it is USED: a URL key
-  that mints links returned to clients or put in emails (download links, booking links,
-  callbacks) with one default on localhost/dev is a broken-integration finding in THIS lane
-  (links that only work on the server) — record it here even if security reports the
-  internal-host leak.
-- Frontend runtime configuration: how the SPA finds the backend (build-time base URL, dev
-  proxy, fallbacks), whether .env.example and the code agree, credentials in VITE_ vars and
-  API keys accepted in query strings (they land in proxy/server logs and browser history).
-- Start from /_review/context/env_map.md (keys with divergent defaults, defaults
-  pointing at localhost/dev hosts, keys missing from templates, duplicate keys) and
-  client_calls.md (frontend calls with no backend route = broken contract).
+Questions for THIS system: will it work when deployed somewhere other than the
+developer's machine, and do its parts agree with each other?
+- Configuration: where every setting comes from (env, files, defaults), whether one
+  validated settings object exists or values are read ad hoc with inline defaults,
+  keys whose defaults disagree between modules, the same key reused for different
+  purposes, templates (.env.example) that disagree with what the code reads.
+- Externally visible URLs and hosts: links, callbacks and redirects the system hands to
+  users or other services — follow each value to where it is USED; a default on
+  localhost/a dev host there breaks the feature for every real user.
+- Frontend <-> backend contract (client_calls.md): calls to routes that do not exist,
+  request/response shapes that drifted, base-URL/proxy wiring that only works in dev,
+  CORS vs the origins the system is really served from.
+- Credentials in transit: API keys shipped to the browser, secrets accepted in query
+  strings (they end up in logs, history, referrers).
+- Outbound calls: timeouts, retries of non-idempotent requests, error handling that hides
+  failures, global side effects inside HTTP helpers.
+- Start from env_map.md and client_calls.md; everything else from reading the code.
 """
 
 [[categories]]
@@ -97,37 +90,25 @@ effort = 5
 enabled = true
 owns_security_kpis = true
 focus = """
-- Authorization: routes missing auth dependencies, identity taken from
-  client-controlled input (headers, body, query) instead of a verified token,
-  object-level access checks (IDOR) on every data/file endpoint, role checks
-  that only test for presence.
-- Injection: SQL/NoSQL (string-built queries, raw text() with model/user
-  input), command injection (subprocess with shell=True / untrusted args),
-  path traversal (client filenames joined into filesystem paths), SSRF,
-  template/HTML injection, header injection.
-- Unsafe deserialization, eval/exec, insecure YAML/pickle loading.
-- LLM-specific: prompt injection via untrusted documents fed to models,
-  model output rendered as HTML/markdown or executed, tool calls with write
+Think like an attacker who has read this code: who can reach what, as whom, with which input?
+- Authorization: for every route that reads or changes data, who is the caller and how is
+  that proven? Identity taken from client-controlled input (header, body, query) instead
+  of a verified token; role checks that only test presence; object-level checks (IDOR) on
+  every id-addressed resource; services that receive the caller's identity but query
+  everything (a global dump).
+- Injection and unsafe processing: SQL/NoSQL built from strings, command execution with
+  untrusted args, path traversal through client filenames, SSRF, template/HTML/header
+  injection, unsafe deserialization, eval/exec.
+- Model/agent features (when present): untrusted content fed to models that decide or
+  act (prompt injection), model output rendered as HTML or executed, tools with write
   access driven by model output.
-- Transport/browser security: CORS with credentials, missing security
-  headers, cookies without Secure/HttpOnly/SameSite, CSRF on cookie auth.
-- Triage bandit / semgrep findings: confirm real exploitable issues, dismiss
-  false positives (test code, constant inputs, already-sanitized values).
-- Walk /_review/context/route_map.md: every mounted sub-app, every route whose
-  only protection is a shared key, and every CLIENT-ASSERTED IDENTITY row (group
-  rows that share one root cause into ONE finding listing the routes). For every
-  route that returns or changes user data, open the service it calls and check
-  the query is actually scoped to the verified caller — a service that validates
-  an email and then selects everything (a global dump) is Critical; a sequential
-  or guessable object id with no ownership check is an IDOR.
-- Personal-data lifecycle: which third-party services receive personal data
-  (runtime_signals.md lists every processor SDK the live code imports) and what each gets;
-  is there an audit trail of who viewed/changed personal records; is there a retention and
-  deletion path (documents, DB rows AND derived embeddings)?
-- Uploads: client filenames joined into paths (traversal), untrusted documents
-  (CVs, PDFs, emails) fed to LLMs that score or decide (prompt injection), model
-  output driving SQL/tools with write access — including latent code that is one
-  import away from a live route (say it is latent).
+- Browser-facing security: CORS with credentials, security headers, cookie flags, CSRF.
+- Data exposure and privacy: what personal or sensitive data the system stores and
+  where it flows — third-party services that receive it (runtime_signals.md lists the
+  processor SDKs), public file serving, logs, exports; audit trail of access; retention
+  and deletion (including derived copies such as caches, indexes and embeddings).
+- Walk route_map.md row by row (mounted sub-apps, shared-key-only routes, CLIENT-ASSERTED
+  IDENTITY rows grouped by root cause); triage bandit/semgrep; report latent code as latent.
 """
 
 [[categories]]
@@ -137,22 +118,16 @@ code = "AUTH"
 effort = 3
 enabled = true
 focus = """
-- JWT / session handling: secret source and fallback defaults, algorithm
-  pinning, expiry, clock handling (naive vs aware datetimes), refresh-token
-  rotation and reuse detection, token type confusion (refresh used as access).
-- Logout / revocation that doesn't actually revoke; password reset and OTP
-  flows (entropy, expiry, attempt limits, plaintext storage).
-- Password hashing (algorithm, work factor, timing-safe comparison), user
-  enumeration via different error messages or timings.
-- Account-creation paths that bypass verification, privilege escalation via
-  self-service endpoints, API keys compared non-constant-time or accepted in
-  query strings.
-- Startup validation of auth-critical settings: does the app fail closed or
-  boot with insecure defaults?
-- Frontend route guards that mount protected pages before auth completes.
-- Naive datetimes (utcnow / now() without tz) in token, OTP and session code: Low, grouped.
-- route_map.md marks every AUTH ENTRY POINT (login/register/OTP/reset/refresh):
-  that list is your rate-limiting and enumeration checklist.
+Can an attacker become someone else, stay someone after they should not, or guess their way in?
+- Tokens and sessions: secret source and insecure defaults, algorithm pinning, expiry and
+  clock handling, refresh rotation, token-type confusion, logout that does not revoke.
+- Credential flows: password hashing and comparison, reset/OTP/verification flows (entropy,
+  expiry, attempt limits, storage), account creation that skips verification, privilege
+  escalation through self-service endpoints, API keys compared non-constant-time.
+- Abuse resistance: rate limiting and lockout on every AUTH ENTRY POINT (route_map.md),
+  user enumeration through messages or timing.
+- Fail-closed startup for auth-critical settings; client-side guards that render
+  protected pages before auth completes.
 """
 
 [[categories]]
@@ -162,24 +137,18 @@ code = "WEB"
 effort = 2
 enabled = true
 focus = """
-Only applicable if the repository contains a browser client (React/Vue/Angular/
-Svelte/plain JS). If it does not, record nothing and say "not applicable".
-- Secrets and credentials in the bundle: VITE_/NEXT_PUBLIC_/REACT_APP_ keys that
-  act as credentials, API keys sent from the browser or in URLs, tokens in
-  localStorage/sessionStorage.
-- XSS sinks: dangerouslySetInnerHTML, innerHTML/document.write, iframes with
-  srcdoc or sandbox="allow-scripts allow-same-origin", markdown with raw HTML,
-  rendering of model/LLM or stored user content.
-- Exports built in the browser (xlsx/csv) from stored or model-generated values:
-  formula-injection neutralization.
-- Auth flow: protected routes that render before auth is checked, auth state read
-  once from storage (not reactive across tabs), logout that leaves tokens behind.
-- Transport helper: global redirects inside the fetch wrapper, blind retries of
-  non-idempotent requests, missing timeouts/abort, error handling that hides failures.
-- Contract with the backend (client_calls.md): calls to routes that do not exist,
-  dead client functions, base-URL/proxy configuration that only works in dev.
-- Resilience: no error boundary, assets with fragile paths, config differences
-  between .env.example and real usage.
+Only applicable if the repository contains a browser client. If not, record nothing and
+say "not applicable".
+- What the bundle exposes: credentials in public env vars (VITE_/NEXT_PUBLIC_/...),
+  tokens in web storage, secrets in URLs.
+- XSS sinks: raw HTML rendering (innerHTML, document.write, dangerouslySetInnerHTML,
+  markdown with raw HTML, iframes with scripts + same-origin), especially of stored user
+  or model-generated content; unvalidated URLs in href/src.
+- Browser-built exports (spreadsheets/CSV) from stored values: formula injection.
+- Auth flow in the client: guards, reactivity across tabs, logout leftovers.
+- Transport helper: global side effects, blind retries of non-idempotent requests,
+  missing timeouts, swallowed errors; contract drift with the backend (client_calls.md).
+- Resilience: error boundaries, fragile asset paths, dev-only configuration.
 """
 
 [[categories]]
@@ -189,21 +158,18 @@ code = "OBS"
 effort = 1
 enabled = true
 focus = """
-- Request/correlation IDs: can one request be traced end to end (API -> DB ->
-  external calls -> background jobs)? contextvars / middleware present?
-- Logging quality: print() used as logging, unstructured logs, missing levels,
-  swallowed exceptions (bare except / except Exception: pass), errors logged
-  without context, secrets or PII written to logs.
-- Health checks that report healthy without checking dependencies.
-- Metrics: latency, error rate, queue depth, external-call durations, LLM
-  token/cost accounting — present or absent?
-- Durability of failure information across restarts; background task errors
-  that vanish silently.
-- Data durability: backups and a restore path for the database, the vector store and the
-  uploaded files (deploy/infra files included) — absence is a finding for a stateful service.
-- runtime_signals.md lists print() calls per LIVE module and health routes that check
-  nothing: cite live service modules (not scripts) for the logging finding, and state the
-  total count. A finding that only cites scripts understates a service that logs by print().
+If this system fails in production tonight, can the team see it, trace it and recover?
+- Tracing: can one request be followed across the API, background work, external calls
+  and the database (request/correlation ids propagated)?
+- Logging: print() instead of logging in live code, missing levels/structure, swallowed
+  exceptions, errors without context, secrets or personal data written to logs.
+- Health: checks that report healthy without checking the dependencies the service needs.
+- Metrics: latency, error rate, queue depth, external-call durations, cost accounting
+  for metered APIs.
+- Durability: failure information that vanishes on restart; backups and a restore path
+  for the data the system owns (databases, local stores, uploaded files).
+- runtime_signals.md counts print() per LIVE module and lists static health checks — cite
+  live service code, not scripts, and give real counts.
 """
 
 [[categories]]
@@ -213,30 +179,20 @@ code = "TST"
 effort = 1
 enabled = true
 focus = """
-- Is there an automated test suite? What does it actually cover (units only,
-  or routes/integration/contracts)? Which critical paths (auth, authorization,
-  uploads, payments, data mutation, pipelines) have zero tests?
-- Tests that hit live external services, hardcoded credentials in tests,
-  tests that can never fail (no assertions, broad mocks).
-- CI: is there a pipeline config? Does it run tests/lint/type-check/security
-  scans, or only build and deploy? Pipeline hygiene: sudo, curl | sh, secrets echoed into
-  logs, images deployed by :latest, no image scan before deploy.
-- Frontend <-> backend contract checks, migration tests, fixture hygiene.
-- Report missing coverage as findings with the specific untested modules.
-- runtime_signals.md lists every test file, which of them drive the HTTP API, the declared
-  test frameworks and every CI/deploy pipeline with its stages. Separate findings: (1) no
-  automated route/integration/contract tests for the service (name the untested critical
-  paths: auth, authorization, uploads, pipelines, the frontend calls in client_calls.md
-  with no backend route — a contract test would have caught them); (2) CI/deploy pipelines
-  that build and deploy with no test/lint/scan gate (cite the pipeline file and its stages);
-  Make the missing-tests finding concrete: list the absent kinds (route/integration tests
-  with TestClient/httpx, authentication and authorization tests, upload security tests,
-  frontend<->backend contract tests, regression tests for the core pipeline) and name the
-  critical routes from your leads that nothing exercises.
-  (3) tests that cannot fail or hit live services, and credentials hard-coded in test or
-  automation scripts (runtime_signals.md lists both); (4) no security/dependency scanning in
-  any pipeline. These affect the deployed service even though the evidence is test and
-  pipeline files.
+What stops a regression from reaching production?
+- The test suite: does it exist, and what does it actually exercise — units only, or the
+  HTTP API, authentication/authorization, data mutation, file handling, the core
+  business flows, the frontend<->backend contract? Name the critical routes and modules
+  nothing exercises (your leads list them) instead of saying "no tests" in general.
+- Tests that cannot fail (no assertions), hit live external services, or carry
+  hard-coded credentials.
+- CI/CD: does any pipeline run tests, lint, type checks and security/dependency scans
+  before deploying, or does it only build and ship? Pipeline hygiene (sudo, curl | sh,
+  secrets echoed into logs, mutable image tags, no image scan).
+- Migrations: are schema changes applied and tested the way production runs them?
+- runtime_signals.md lists the test files, which drive the API, the declared frameworks
+  and every pipeline with its stages. These findings affect the deployed service even
+  though the evidence is test and pipeline files.
 """
 
 [[categories]]
@@ -246,26 +202,19 @@ code = "ENV"
 effort = 1
 enabled = true
 focus = """
-- Hardcoded credentials, API keys, tokens, private keys and connection strings
-  in source, config, docs, scripts, notebooks and tests (triage gitleaks
-  findings: real secret vs placeholder/example/test fixture).
-- Insecure defaults for secrets (os.getenv("SECRET", "secret")), secrets with
-  too-short length, secrets committed in example files with real values.
-- Missing startup validation of required environment variables; secrets that
-  are optional when they must be mandatory.
-- Duplicate keys in env templates, env files or deployment manifests that
-  make the effective value order-dependent.
-- Secrets exposed to browsers (VITE_/NEXT_PUBLIC_/REACT_APP_ prefixed keys).
-- Artifact governance: "not committed to git" is not enough. runtime_signals.md lists
-  Dockerfiles that COPY the whole build context without a .dockerignore excluding .env files
-  and data, personal documents (CVs) stored in the source tree, committed archives, and
-  deploy manifests (Nomad/compose) that set the same key twice or point at local/dev targets.
-- Startup validation: does the app refuse to boot when SECRET_KEY, database settings,
-  provider keys are missing, or does it start with defaults / None and fail later (or run
-  insecurely)? Count the required keys read with no validation (env_map.md).
-- NEVER open real .env files. /_review/context/env_map.md already lists every
-  .env* file's key names, duplicate keys and value flags (weak/short/localhost,
-  browser-exposed secrets) without revealing values — cite the file and key.
+Where can a secret leak, and what happens when one is missing?
+- Hard-coded credentials, keys, tokens and connection strings anywhere (source, config,
+  docs, scripts, notebooks, tests); triage gitleaks.
+- Insecure defaults for secrets, secrets too short, real values in example files, secrets
+  exposed to browsers through public env prefixes.
+- Startup validation: does the app refuse to boot without its required secrets and
+  settings, or start on defaults/None and fail later or run insecurely?
+- Configuration governance: duplicate keys whose effective value depends on load order
+  (templates, deploy manifests), contradictory env files.
+- Artifact governance: what the build and deploy ship — Dockerfiles copying the whole
+  context without a .dockerignore for env files and data, committed archives, personal or
+  customer documents stored in the tree, secrets written into containers at deploy.
+- NEVER open real .env files — env_map.md lists their key names and value flags.
 """
 
 [[categories]]
@@ -275,39 +224,20 @@ code = "PERF"
 effort = 2
 enabled = true
 focus = """
-- Blocking work on the async event loop (sync I/O, CPU-heavy work, sync SDK
-  calls, time.sleep, subprocess without to_thread inside async def).
-- Single-process state that blocks horizontal scaling: in-memory caches,
-  semaphores, locks, job queues, progress buses, local file stores.
-- N+1 queries, missing pagination, unbounded SELECTs, loading whole tables or
-  files into memory, missing indexes implied by query patterns.
-- Algorithmic hot spots (O(n^2) loops over growing data, repeated recomputation
-  of the same value, work redone per request that could be cached).
-- Missing timeouts / backoff / circuit breakers on external calls; unbounded
-  concurrency or no concurrency where work is embarrassingly parallel.
-- Startup that loads heavy resources synchronously or fails all-or-nothing.
-- Work that grows with the data instead of with the request: re-processing a whole
-  pool per upload, re-embedding or re-parsing the same content per item, reloading
-  the same rows several times in one job.
-- runtime_signals.md lists sync model/embedding work reached from async code (directly or
-  through repo functions): each is a blocked event loop while the model answers — check the
-  caller is really on the request/job path and report them as one grouped finding.
-- Use the dependency graph's fan-in (most-called functions) to find hot paths.
-- architecture.md lists every piece of process-local state (singletons, caches,
-  semaphores, flags): together they decide whether the service can run more than
-  one instance/worker — report that as one architectural finding with every item.
-- Unbounded reads (runtime_signals.md): whole-table selects (get_all_*, list_all_*),
-  whole-directory scans, whole pools reloaded per job — together with the unpaginated
-  endpoints in route_map.md this is ONE grouped finding listing every location.
-- Startup (runtime_signals.md): the lifespan/startup preloading models or vector stores with
-  no error handling, and provider clients constructed at import time — one failing
-  dependency stops the whole API, including /auth and /health.
-- Per-event I/O: progress/state files read, modified and rewritten whole on every event.
-- Deployment topology (deploy manifests): a job pinned to count = 1 because of the
-  process-local state is the scaling finding's evidence; cite it.
-- For each background job, check whether one upload/request triggers work over the
-  WHOLE existing pool (re-scoring, re-embedding, reloading everything): that is
-  O(pool) per event and O(n^2) overall.
+What happens to THIS system under real load and real data growth, and with more than one instance?
+- Event-loop blocking: sync I/O, CPU work, sync SDK/model calls or sleeps inside async
+  request or job code (runtime_signals.md traces them through helper functions).
+- Horizontal scaling: process-local state (caches, semaphores, locks, flags, queues,
+  progress buses, local file or vector stores) — one grouped architectural finding
+  listing every item; deployment topology that pins one instance because of it.
+- Growth with data instead of with the request: unbounded reads and missing server-side
+  pagination, whole collections reloaded or reprocessed per event (O(n) per event, O(n^2)
+  overall), whole files rewritten per event, N+1 queries, missing indexes.
+- External calls: timeouts, backoff, circuit breakers, bounded concurrency.
+- Startup: heavy resources loaded synchronously, clients built at import time, one failing
+  dependency taking the whole service down.
+- Use the dependency graph's fan-in for hot paths; architecture.md and runtime_signals.md
+  hold the static leads.
 """
 
 [[categories]]
@@ -317,39 +247,23 @@ code = "LLM"
 effort = 2
 enabled = true
 focus = """
-Only applicable if the repository calls LLM / embedding / ML model APIs. If
-it does not, record nothing and say "not applicable" in your final message.
-- Conversation memory: trace what one chat request actually sends to the model —
-  is history persisted (checkpointer/DB) or resent by the client, or is every turn
-  stateless? Report the real behavior; do not assume history "grows" without proof.
-- Token growth: whole histories or unbounded tool outputs resent every turn,
-  no input/context guards, no per-user/session budget.
-- Usage/cost metadata discarded instead of logged/persisted (e.g. the model
-  response's usage_metadata read nowhere), per-request token budgets absent.
-- The agent loop: how many rounds, is the whole message list re-sent each round,
-  are tool outputs size-bounded, are tool exceptions caught (or do they break the
-  stream with no error event)?
-- Model clients constructed at import time with network calls, missing
-  timeouts/retries around model calls, no structured-output validation.
-- Prompt construction from untrusted input (hand off exploitable injection
-  to the security narrative, but record cost/robustness impact here).
-- runtime_signals.md is your map: agent loops re-sending their message list, tool outputs
-  passed whole, files that call a model and never read usage, clients built at import time,
-  and sync model calls reached from async code. The four questions below each end as a
-  finding or a cited dismissal — never silently: (1) memory: what does one chat request
-  send (does the frontend send history? does the server load any? is a checkpointer or
-  session store used — a session id that is generated but never read is dead plumbing);
-  (2) token growth: per round and per turn, with the bound (max rounds, tool-output size);
-  (3) budget: any per-user/session/request token or cost limit, any input length cap;
-  (4) cost controls, as THREE separate findings when each is missing: MEASUREMENT (are input
-  and output tokens, model and duration captured for every call?), ATTRIBUTION (can the usage
-  of one user, session, job or requisition be answered?), ENFORCEMENT (is a per-user/session
-  budget or quota actually applied?).
-- Automated decisions: when model scores rank, shortlist or reject people, is there an
-  evaluation/regression set for the scores, and a human review/override step before a
-  decision is final? Missing either is a finding (fairness and accountability).
-- Duplicated model work: the same document embedded or sent to a model twice, the whole
-  pool re-scored per upload, the same prompt recomputed per item.
+Only applicable if the repository calls LLM / embedding / ML model APIs. If it does not,
+record nothing and say "not applicable".
+Trace what the system actually sends to the model and what it costs:
+- Memory: what does one conversational request send — is history persisted, resent, or
+  absent? (A session id that nothing reads is dead plumbing.) Report the real behavior.
+- Token growth inside ONE request: agent loops that append responses and tool outputs and
+  resend the whole list each round; unbounded tool outputs; no input/context guard.
+- Cost controls, as separate findings when missing: MEASUREMENT (tokens, model, duration
+  captured per call), ATTRIBUTION (usage per user/session/job answerable), ENFORCEMENT
+  (budgets or quotas applied).
+- Robustness: clients built at import time, missing timeouts/retries, tool exceptions
+  that break a stream, no structured-output validation.
+- Duplicated model work: the same content embedded or sent twice, whole collections
+  re-scored per event, prompts that grow with the size of the data.
+- Automated decisions: when model output ranks, filters or decides about people or
+  money, is there an evaluation set for its quality and a human review/override step?
+- Untrusted input in prompts: record the cost/robustness angle here (security owns the exploit).
 """
 
 [[categories]]
@@ -359,31 +273,22 @@ code = "INP"
 effort = 4
 enabled = true
 focus = """
-- File uploads: size limits enforced before reading the body, type validation
-  by magic bytes vs trusting client Content-Type/extension, filename
-  normalization, storage location, deduplication, quotas, cleanup of orphans.
-- Parser abuse: decompression bombs, XML entity expansion, huge PDFs/images (page
-  count and OCR work, not only bytes), external binaries invoked without timeouts
-  (runtime_signals.md lists every subprocess call with no timeout).
-- Audio/transcription paths: per-session buffers held in process memory (unbounded dicts,
-  lost across instances), ffmpeg/whisper subprocesses with no timeout, chunk size limits.
-- Lifecycle governance across ALL input paths (CVs, JDs, vacancy files, audio, chat text):
-  per-user quotas, job-creation caps, cancellation of running jobs, retry/backoff on the
-  pipeline, cleanup of orphaned files after failures — summarize them in the table.
-- Request validation: unbounded string/list fields, missing length limits on
-  chat/free-text inputs, missing pagination limits, trusting client-supplied
-  IDs.
-- Rate limiting and per-user/IP quotas on expensive endpoints (uploads, jobs,
-  model calls), job cancellation, stuck-lock recovery.
-Produce a markdown table (input path | type check | size limit | other gaps)
-inside the description of a summary finding when there are several upload
-paths.
-- Start from the FILE UPLOAD rows in /_review/context/route_map.md: open every
-  upload handler and the service it calls. You OWN input governance: record the
-  upload/input-control findings here even when the security lane may also report
-  an exploit through the same code (it reports the attack, you report the missing
-  controls). Finishing this lane with no findings on a repository that accepts
-  uploads is almost certainly a miss — re-check before you stop.
+Every way data enters this system — can it be abused to exhaust, corrupt or overload it?
+- Enumerate every input path (uploads, imports, webhooks, media, free-text/chat, bulk
+  endpoints) from route_map.md and the code, and for each: type validation by content
+  (not client Content-Type/extension), size limits enforced before reading, filename
+  handling, storage location.
+- Parser and processor abuse: decompression bombs, entity expansion, documents whose cost
+  is pages/frames/OCR rather than bytes, external programs run without timeouts
+  (runtime_signals.md lists every subprocess call without one).
+- Lifecycle governance: per-user quotas, job-creation caps, cancellation of running work,
+  retry/backoff, recovery of stuck jobs/locks, cleanup of orphaned files, per-session
+  buffers held in process memory.
+- Request validation: unbounded strings/lists, missing length limits, client-supplied
+  identifiers trusted as-is, rate limits on expensive endpoints.
+Summarize several input paths as a markdown table (input path | type check | size limit |
+other gaps) inside one summary finding. You own input governance even when security also
+reports an exploit through the same code.
 """
 
 [[categories]]
@@ -396,42 +301,23 @@ enabled = true
 # this lane's specialist runs on DEEP_REVIEW_JUDGE_MODEL.
 strong_model = true
 focus = """
-- Logic errors, wrong conditions, off-by-one, incorrect error handling paths,
-  exceptions swallowed so bad state persists, race conditions, locks/flags
-  that are never released on failure paths.
-- Data mutation bugs: silently "correcting" user data, lossy transformations,
-  inconsistent normalization between code paths, ID generation collisions,
-  heuristics that treat data shape as meaning.
-- Transaction boundaries: partial writes, missing rollbacks, commits inside
-  loops, async sessions shared across tasks.
-- Timezone/naive datetime bugs, float/decimal money handling, encoding bugs.
-- Reliance on private APIs of third-party libraries.
-- Your kickoff lists the core pipelines (upload handlers and background jobs) and
-  static leads (values rewritten during extraction, random identifiers, work claims
-  and in-progress flags). Open each and follow the data through the callees.
-- Trace the core business pipeline(s) end to end from their routes (e.g. upload ->
-  parse -> store -> embed -> score -> report): look for two code paths that process
-  the same data differently, work done twice, values silently rewritten, IDs that
-  can collide or whose shape is used as meaning, and flags/locks set in one place but
-  released only on the happy path. These are the highest-value bugs in this lane.
-- Parallel implementations (runtime_signals.md): two functions doing one job (two PDF
-  parsers, several screening orchestrators) usually already disagree — different casing,
-  cleaning, fields or error handling for the same data. Diff them and record the divergence.
-- The same content processed twice or in two shapes: a document embedded both whole and per
-  page (every page counted twice in similarity), text lowercased for one consumer but not for
-  another (embedding vs LLM vs external system), extraction that silently rewrites values
-  (years, emails, phone numbers) instead of flagging them.
-- Identifiers: random ids that can collide, and code that reads meaning from an id's shape
-  (runtime_signals.md lists every len(<id>) == N check).
-- Stuck state: a flag/lock set in the request and cleared only in a background task's
-  finally is stuck forever after a crash, OOM or deploy (no TTL/reaper) — that is High.
-- Scripts and entry points that cannot work as written (e.g. an async main() called
-  without asyncio.run, a coroutine used without await).
-- Triage pyright in bulk FIRST (triage_static_rule per rule group, a few samples
-  each) so your budget goes to the pipeline tracing above.
-- Triage pyright findings: which are real runtime bugs vs typing noise. A type
-  complaint ("str | None passed where str expected") is at most Low unless you show
-  the concrete runtime path that fails.
+Does THIS system produce correct results and keep its data consistent — not only when things go right?
+- Start from what the system is for (AGENTS.md, entry points, the core business flows) and
+  trace each core flow end to end through its callees: where data is transformed,
+  stored, derived and presented.
+- Logic errors: wrong conditions, off-by-one, error paths that leave bad state, exceptions
+  swallowed so failures look like success, race conditions and double processing.
+- Data integrity: values silently rewritten or "corrected", lossy or inconsistent
+  normalization between code paths, the same data processed twice or in two different
+  shapes, identifiers that can collide or whose shape is treated as meaning.
+- State: flags/locks/claims released only on the happy path (stuck after a crash or
+  deploy), transactions with partial writes, missing rollbacks, sessions shared across
+  tasks, naive vs aware datetimes, money as float.
+- Parallel implementations of one operation (runtime_signals.md): diff them — copies that
+  already disagree are correctness bugs.
+- Entry points and scripts that cannot work as written; reliance on private library APIs.
+- Triage pyright in bulk first (triage_static_rule); a type complaint is at most Low unless
+  you show the runtime path that fails.
 """
 
 [[categories]]
@@ -441,32 +327,17 @@ code = "MNT"
 effort = 4
 enabled = true
 focus = """
-- Dead code: unused modules/packages, orphaned entrypoints, commented-out
-  subsystems, legacy directories, unused dependencies (triage vulture).
-  Prove every dead-code claim with find_references: functions registered as
-  values (routes, graph nodes, callbacks, DI) or called at module level ARE used.
-- Dead or orphaned endpoints: routes no client calls (client_calls.md lists them),
-  duplicated endpoints, endpoints that should not exist (bulk delete guarded only by
-  a shared key), frontend functions calling routes that do not exist.
-- Whole dead code generations: reachability.md lists the modules no application
-  entry point imports, grouped by directory — report them as a few grouped findings
-  (e.g. "an entire earlier LangGraph generation under src/nodes, src/states"), each
-  confirmed with find_references, not one finding per file.
-- Duplicated implementations (triage jscpd): near-identical functions/modules,
-  multiple code generations coexisting. Only duplication that has ALREADY
-  diverged (two copies now behave differently) or doubles real work/maintenance
-  of a core path is a finding; repeated boilerplate (queries, schemas, DI params,
-  API-client wrappers) is not — triage those jscpd groups as low_value in bulk.
-- Parallel implementations (runtime_signals.md): name each set of functions doing one
-  job, which one production calls, and the duplicated lines — report the biggest sets as
-  one grouped finding.
-- Complexity hot spots (triage radon / lizard): only report the ones that
-  genuinely hurt comprehension or hide bugs, grouped, not one per function.
-- Layering violations, circular imports (use the import graph), god modules.
-  runtime_signals.md lists top-level layers that import each other both ways (core logic
-  importing the web app's database/models/crud): record it with the example imports.
-- Triage ruff findings in bulk by rule; report only what matters as grouped
-  findings (never one finding per lint hit).
+How hard is it for the team to change THIS system safely?
+- Dead code: modules no entry point reaches (reachability.md) as grouped findings sized in
+  lines — prove each with find_references (routes, registries, callbacks, string-based use
+  count as use). Endpoints no client calls are dead only if nothing else uses them and
+  nothing documents them (route rows marked DOCUMENTED are external contracts).
+- Duplication that matters: parallel implementations of one operation and copies that have
+  already diverged (triage jscpd; boilerplate is low_value).
+- Architecture: layering violations and import cycles between top-level packages, god
+  modules, several code generations coexisting, convoluted concurrency structure.
+- Complexity (radon/lizard) only where it hides bugs; ruff in bulk by rule — never one
+  finding per lint hit.
 """
 
 [[categories]]
@@ -476,17 +347,13 @@ code = "DEP"
 effort = 4
 enabled = true
 focus = """
-- Known-vulnerable packages (triage pip-audit: is the vulnerable code path
-  reachable/used? is a fixed version available?).
-- Unpinned or half-pinned runtime dependencies, missing lockfile, duplicated
-  libraries doing the same job (several PDF libs, several DB drivers, several
-  HTTP clients), heavyweight packages used only by dead code.
-- Dependencies declared but never imported, imported but never declared.
-  runtime_signals.md lists library families declared together (several PDF parsers,
-  several Postgres drivers, several HTTP clients) and packages nothing live imports —
-  confirm with grep and record grouped findings.
-- Reproducibility: requirements with no lockfile (transitive versions float), package.json
-  without a lockfile, Docker base images not pinned to a version or digest.
+Can the team rebuild exactly what runs in production, and is anything it ships known-vulnerable?
+- Known vulnerabilities (triage pip-audit): is the vulnerable code path used, is a fix available?
+- Reproducibility: unpinned or half-pinned runtime dependencies, missing lockfiles, base
+  images not pinned to a version or digest.
+- Weight and surface: several libraries doing the same job, packages declared but never
+  imported or used only by dead code (runtime_signals.md), heavyweight packages for a
+  small use, imported-but-undeclared packages.
 - Build/deploy artifacts pulling from unverified sources.
 """
 
@@ -620,7 +487,7 @@ no body-size limit at app or proxy level.
 [[security_kpis]]
 id = "KPI-12"
 title = "Stored XSS in Excel Exports"
-description = "Stored user/candidate/LLM fields exported to .xlsx/.csv must be neutralized for formulas and control characters, and HTML exports must be escaped."
+description = "Stored user/customer/LLM fields exported to .xlsx/.csv must be neutralized for formulas and control characters, and HTML exports must be escaped."
 look_for = """
 Export code paths that read stored records (DB rows, saved chat, profiles)
 and write them into spreadsheets or HTML reports: formula neutralization,

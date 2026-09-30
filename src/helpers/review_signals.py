@@ -21,7 +21,7 @@ hands each lane a short, citable list:
 - **Dependencies**: libraries doing the same job, and declared packages that
   nothing (or only dead code) imports.
 - **Architecture**: parallel implementations of one operation (functions whose
-  names differ only by a modifier: ``screen_cvs_async`` / ``screen_all_cvs_async``).
+  names differ only by a modifier: ``process_orders`` / ``process_all_orders_async``).
 - **Inputs**: external binaries run with no timeout.
 
 Every row is a heuristic lead with a ``file:line``: the agents confirm it in
@@ -549,8 +549,11 @@ def _structure_signals(files, live: set[str], routes, signals: RuntimeSignals) -
     signals.progress_channels = [(key, tuple(rows)) for key, rows in sorted(groups.items()) if len(rows) > 1]
 
 
-_PII_WORDS = re.compile(r"(?i)\b(email|phone|resume|cv_text|candidate|applicant|patient|customer|date_of_birth|national_id)\b")
-_SCORING = re.compile(r"(?i)\bdef\s+\w*(score|rank|rerank|shortlist|rating|evaluate_candidate)\w*\s*\(")
+_PII_WORDS = re.compile(
+    r"(?i)\b(email|phone|address|date_of_birth|dob|national_id|ssn|passport|resume|patient|customer|employee|"
+    r"applicant|salary|iban|card_number)\b"
+)
+_SCORING = re.compile(r"(?i)\bdef\s+\w*(score|rank|rerank|classify|approve|decide|eligib|rating|risk)\w*\s*\(")
 _STATEFUL = re.compile(r"(?i)sqlalchemy|psycopg|asyncpg|chromadb|pymongo|redis|create_engine|qdrant|faiss")
 _INFRA_FILE = re.compile(r"(?i)(dockerfile|jenkins|\.nomad$|\.hcl$|compose\.ya?ml$|\.gitlab-ci|\.github/workflows/|(^|/)k8s/|"
                          r"(^|/)helm/|(^|/)deploy/|(^|/)infra/|\.sh$|\.tf$)")
@@ -574,7 +577,10 @@ def _absent_controls(files, live: set[str], routes, signals: RuntimeSignals, inf
             signals.absent_controls.append((lane, label, mention))
 
 
-_PERSONAL_DOC_DIR = re.compile(r"(?i)(^|/)(cvs?|resumes?|uploads?|candidates?|applicants?|attachments?)(/|$)")
+_PERSONAL_DOC_DIR = re.compile(
+    r"(?i)(^|/)(uploads?|attachments?|documents?|user_?files|media|storage|cvs?|resumes?|invoices?|receipts?|"
+    r"statements?|contracts?|scans?)(/|$)"
+)
 _PERSONAL_DOC_EXT = (".pdf", ".docx", ".doc", ".rtf", ".odt")
 _ARCHIVE_EXT = (".zip", ".tar", ".tar.gz", ".tgz", ".7z", ".rar")
 _NAIVE_DT = frozenset({"utcnow", "utcfromtimestamp"})
@@ -605,7 +611,7 @@ def _artifact_signals(repo_path: Path, manifest: RepositoryManifest, signals: Ru
             signals.packaged_artifacts.append(Signal(path, 0, "archive committed to the repository (what does it ship?)"))
     for directory, n in sorted(docs.items(), key=lambda kv: -kv[1]):
         signals.packaged_artifacts.append(
-            Signal(directory, 0, f"{n} personal documents (CVs/uploads) stored in the source tree")
+            Signal(directory, 0, f"{n} user documents stored in the source tree")
         )
     for path in paths:
         name = PurePosixPath(path).name.lower()
@@ -617,9 +623,9 @@ def _artifact_signals(repo_path: Path, manifest: RepositoryManifest, signals: Ru
         ignore = _read(repo_path, ignore_path) if ignore_path in paths else ""
         for n, line in enumerate(text.splitlines(), start=1):
             if re.match(r"(?i)^\s*(COPY|ADD)\s+(--\S+\s+)*\.\s", line):
-                missing = [pat for pat in (".env", "cvs", "*.pdf") if pat.strip("*") not in ignore]
+                missing = [pat for pat in (".env", "*.pdf", "uploads") if pat.strip("*") not in ignore]
                 if not ignore:
-                    what = "no .dockerignore — every file in the build context (.env files, CVs, archives) is baked into the image"
+                    what = "no .dockerignore — every file in the build context (.env files, user data, archives) is baked into the image"
                 elif missing:
                     what = f".dockerignore does not exclude {', '.join(missing)} — they are baked into the image"
                 else:

@@ -360,7 +360,7 @@ def production(tmp_path: Path):
 def test_packaged_artifacts_and_supply_chain(production):
     sig = production.signals
     packaged = " | ".join(s.text for s in sig.packaged_artifacts)
-    assert "2 personal documents (CVs/uploads) stored in the source tree" in packaged
+    assert "2 user documents stored in the source tree" in packaged
     assert "no .dockerignore" in packaged
     chain = " | ".join(s.text for s in sig.supply_chain)
     assert "base image `python` is not pinned" in chain

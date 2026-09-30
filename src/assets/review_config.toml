@@ -146,6 +146,7 @@ focus = """
 - Startup validation of auth-critical settings: does the app fail closed or
   boot with insecure defaults?
 - Frontend route guards that mount protected pages before auth completes.
+- Naive datetimes (utcnow / now() without tz) in token, OTP and session code: Low, grouped.
 - route_map.md marks every AUTH ENTRY POINT (login/register/OTP/reset/refresh):
   that list is your rate-limiting and enumeration checklist.
 """
@@ -221,8 +222,10 @@ focus = """
   paths: auth, authorization, uploads, pipelines, the frontend calls in client_calls.md
   with no backend route — a contract test would have caught them); (2) CI/deploy pipelines
   that build and deploy with no test/lint/scan gate (cite the pipeline file and its stages);
-  (3) tests that cannot fail or hit live services. These affect the deployed service even
-  though the evidence is test and pipeline files.
+  (3) tests that cannot fail or hit live services, and credentials hard-coded in test or
+  automation scripts (runtime_signals.md lists both); (4) no security/dependency scanning in
+  any pipeline. These affect the deployed service even though the evidence is test and
+  pipeline files.
 """
 
 [[categories]]
@@ -242,6 +245,13 @@ focus = """
 - Duplicate keys in env templates, env files or deployment manifests that
   make the effective value order-dependent.
 - Secrets exposed to browsers (VITE_/NEXT_PUBLIC_/REACT_APP_ prefixed keys).
+- Artifact governance: "not committed to git" is not enough. runtime_signals.md lists
+  Dockerfiles that COPY the whole build context without a .dockerignore excluding .env files
+  and data, personal documents (CVs) stored in the source tree, committed archives, and
+  deploy manifests (Nomad/compose) that set the same key twice or point at local/dev targets.
+- Startup validation: does the app refuse to boot when SECRET_KEY, database settings,
+  provider keys are missing, or does it start with defaults / None and fail later (or run
+  insecurely)? Count the required keys read with no validation (env_map.md).
 - NEVER open real .env files. /_review/context/env_map.md already lists every
   .env* file's key names, duplicate keys and value flags (weak/short/localhost,
   browser-exposed secrets) without revealing values — cite the file and key.
@@ -275,6 +285,15 @@ focus = """
 - architecture.md lists every piece of process-local state (singletons, caches,
   semaphores, flags): together they decide whether the service can run more than
   one instance/worker — report that as one architectural finding with every item.
+- Unbounded reads (runtime_signals.md): whole-table selects (get_all_*, list_all_*),
+  whole-directory scans, whole pools reloaded per job — together with the unpaginated
+  endpoints in route_map.md this is ONE grouped finding listing every location.
+- Startup (runtime_signals.md): the lifespan/startup preloading models or vector stores with
+  no error handling, and provider clients constructed at import time — one failing
+  dependency stops the whole API, including /auth and /health.
+- Per-event I/O: progress/state files read, modified and rewritten whole on every event.
+- Deployment topology (deploy manifests): a job pinned to count = 1 because of the
+  process-local state is the scaling finding's evidence; cite it.
 - For each background job, check whether one upload/request triggers work over the
   WHOLE existing pool (re-scoring, re-embedding, reloading everything): that is
   O(pool) per event and O(n^2) overall.
@@ -311,7 +330,9 @@ it does not, record nothing and say "not applicable" in your final message.
   session store used — a session id that is generated but never read is dead plumbing);
   (2) token growth: per round and per turn, with the bound (max rounds, tool-output size);
   (3) budget: any per-user/session/request token or cost limit, any input length cap;
-  (4) accounting: is usage_metadata / token usage recorded with a user or job key.
+  (4) accounting and attribution: is usage_metadata / token usage recorded, and with a
+  user, job, request or session key, plus model, duration and tool output size — so the
+  cost of one user or one job can be answered; and is any budget ENFORCED per user/session.
 - Duplicated model work: the same document embedded or sent to a model twice, the whole
   pool re-scored per upload, the same prompt recomputed per item.
 """
@@ -329,6 +350,8 @@ focus = """
 - Parser abuse: decompression bombs, XML entity expansion, huge PDFs/images (page
   count and OCR work, not only bytes), external binaries invoked without timeouts
   (runtime_signals.md lists every subprocess call with no timeout).
+- Audio/transcription paths: per-session buffers held in process memory (unbounded dicts,
+  lost across instances), ffmpeg/whisper subprocesses with no timeout, chunk size limits.
 - Lifecycle governance across ALL input paths (CVs, JDs, vacancy files, audio, chat text):
   per-user quotas, job-creation caps, cancellation of running jobs, retry/backoff on the
   pipeline, cleanup of orphaned files after failures — summarize them in the table.
@@ -425,6 +448,8 @@ focus = """
 - Complexity hot spots (triage radon / lizard): only report the ones that
   genuinely hurt comprehension or hide bugs, grouped, not one per function.
 - Layering violations, circular imports (use the import graph), god modules.
+  runtime_signals.md lists top-level layers that import each other both ways (core logic
+  importing the web app's database/models/crud): record it with the example imports.
 - Triage ruff findings in bulk by rule; report only what matters as grouped
   findings (never one finding per lint hit).
 """
@@ -445,6 +470,8 @@ focus = """
   runtime_signals.md lists library families declared together (several PDF parsers,
   several Postgres drivers, several HTTP clients) and packages nothing live imports —
   confirm with grep and record grouped findings.
+- Reproducibility: requirements with no lockfile (transitive versions float), package.json
+  without a lockfile, Docker base images not pinned to a version or digest.
 - Build/deploy artifacts pulling from unverified sources.
 """
 

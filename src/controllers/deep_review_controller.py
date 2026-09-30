@@ -35,6 +35,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from deepagents.backends.utils import create_file_data
+
 from controllers import BaseController
 from helpers import (
     PipelineProgress,
@@ -54,6 +56,8 @@ from helpers import (
     synthesizer_prompt,
     verifier_prompt,
 )
+from helpers.review_agents import current_lane_reads
+from helpers.review_context import CONTEXT_MOUNT
 from system import get_logger
 from utils import (
     AgentRunStats,
@@ -124,12 +128,32 @@ def _coverage(workspace: ReviewWorkspace, runs: list[AgentRunStats]) -> ReviewCo
         discovery_timed_out=stats.discovery_timed_out,
         unreadable_directories=tuple(manifest.unreadable_directories),
         system_docs=tuple(path for path, _ in workspace.system_docs),
+        lane_scopes=tuple(_scope_rows(workspace, runs)),
     )
 
 
-def _unverified_nudge(workspace: ReviewWorkspace, category_id: str) -> str | None:
+def _scope_rows(workspace: ReviewWorkspace, runs: list[AgentRunStats]) -> list[str]:
+    """Per lane: how many files of its scope the lane itself (with its explorers) opened."""
+    rows = []
+    for lane, scope in workspace.lane_scopes().items():
+        if not scope:
+            continue
+        opened: set[str] = set()
+        for run in runs:
+            if run.agent == f"specialist:{lane}" or run.agent.startswith(f"specialist:{lane}-"):
+                opened |= set(run.files_read)
+        done = len(set(scope) & opened)
+        rows.append(f"{lane}: {done} of {len(scope)} scope files opened")
+    return rows
+
+
+_VERIFY_BATCH = 8
+"""Findings per verifier run."""
+
+
+def _unverified_nudge(workspace: ReviewWorkspace, category_id: str, ids: set[str] | None = None) -> str | None:
     """Completion check for a verifier: every finding it was given needs a verdict."""
-    pending = workspace.findings_to_verify(category_id)
+    pending = [f for f in workspace.findings_to_verify(category_id) if ids is None or f.id in ids]
     if not pending:
         return None
     return (
@@ -197,6 +221,7 @@ class DeepReviewController(BaseController):
         formatting = workspace.auto_triage_formatting()
         brief = build_repo_brief(workspace, repository_name)
         files = build_context_files(workspace, brief)
+        files[f"{CONTEXT_MOUNT}scopes.md"] = create_file_data(workspace.render_scopes())
         # Report order stays the config's; launch order is longest-first.
         categories = sorted(config.enabled_categories, key=lambda c: -c.effort)
 
@@ -284,6 +309,15 @@ class DeepReviewController(BaseController):
             f"Begin the {category.title} review of this repository. The repository brief is in your instructions; "
             "/_review/context/ holds the full lists. Plan with write_plan, then work through it."
         )
+        scope = workspace.lane_scopes().get(category.id, [])
+        if scope:
+            kickoff += (
+                f"\n\nYour file scope: {len(scope)} files (listed under '{category.id}' in /_review/context/scopes.md). "
+                "Open every one of them for your lane's concerns before you finish — read the small ones yourself in "
+                "parallel batches, and hand the rest to code-explorer sweeps (several `task` calls in ONE turn, 8-12 "
+                "files each, each asked to report every defect relevant to your lane with file:line). Their reads count "
+                "toward your scope."
+            )
         leads = workspace.lane_leads(category.id)
         if leads:
             kickoff += (
@@ -304,9 +338,25 @@ class DeepReviewController(BaseController):
             missing = workspace.unaddressed_leads(category.id)
             if missing:
                 parts.append(
-                    "None of your findings cites these mandatory lead groups. Check each one and record what is "
-                    "real (or reply why a group is not a defect):\n"
+                    "These mandatory leads are still open. Each row ends as a finding that cites it (group rows that "
+                    "share a root cause into one finding) or as dismiss_lead with the code that shows it is not a "
+                    "defect:\n"
                     + "\n".join(_format_lead_group(label, rows) for label, rows in missing)
+                )
+            unopened = workspace.unopened_scope(category.id, current_lane_reads())
+            if unopened:
+                total = len(workspace.lane_scopes().get(category.id, []))
+                sweeps = [unopened[i : i + 10] for i in range(0, min(len(unopened), 40), 10)]
+                calls = "\n".join(
+                    f'{n}. task(subagent_type="general-purpose", description="{category.title} review. Read each of '
+                    f'these files in full and report every defect relevant to {category.title} with file:line and the '
+                    f'mechanism, or \'none\' per file: {", ".join(chunk)}")'
+                    for n, chunk in enumerate(sweeps, start=1)
+                )
+                parts.append(
+                    f"You have opened {total - len(unopened)} of the {total} files in your scope; {len(unopened)} are "
+                    f"still unopened. Issue these {len(sweeps)} sweeps together in ONE turn (they run in parallel), "
+                    "then verify the key lines of what they report and record the real defects:\n" + calls
                 )
             untriaged = workspace.untriaged_groups(category.id)
             if untriaged:
@@ -343,11 +393,15 @@ class DeepReviewController(BaseController):
                 )
             )
 
+        # Heavier lanes (larger scopes, deeper tracing) get proportionally more wall-clock time.
+        lane_timeout = int(self.config.DEEP_REVIEW_AGENT_TIMEOUT_SECONDS * (0.9 + 0.1 * category.effort))
+
         async def run_part(name: str, prompt: str, tools: list, completion_check, strong: bool) -> None:
             async with semaphore:
                 runs.append(
                     await self._run(
                         name,
+                        timeout_seconds=lane_timeout,
                         role="specialist",
                         repo_path=repo_path,
                         system_prompt=prompt,
@@ -366,22 +420,31 @@ class DeepReviewController(BaseController):
         pending = workspace.findings_to_verify(category.id)
         if not pending:
             return
-        verify_kickoff = "Verify each of these findings:\n\n" + "\n\n".join(workspace.render_finding(f) for f in pending)
-        async with semaphore:
-            runs.append(
-                await self._run(
-                    f"verifier:{category.id}",
-                    role="verifier",
-                    repo_path=repo_path,
-                    system_prompt=verifier_prompt(category, brief),
-                    tools=workspace.verifier_tools(category.id),
-                    explorer_tools=workspace.query_tools(),
-                    model_calls=self.config.DEEP_REVIEW_VERIFIER_MODEL_CALLS,
-                    kickoff=verify_kickoff,
-                    files=files,
-                    completion_check=lambda: _unverified_nudge(workspace, category.id),
+        # One verifier per batch: a lane with many findings used to hand one verifier more than it
+        # could re-check before its time cap. Each batch has its own budget and clock.
+        batches = [pending[i : i + _VERIFY_BATCH] for i in range(0, len(pending), _VERIFY_BATCH)]
+
+        async def verify(index: int, batch: list) -> None:
+            ids = {f.id for f in batch}
+            kickoff = "Verify each of these findings:\n\n" + "\n\n".join(workspace.render_finding(f) for f in batch)
+            suffix = f"-{index + 1}" if len(batches) > 1 else ""
+            async with semaphore:
+                runs.append(
+                    await self._run(
+                        f"verifier:{category.id}{suffix}",
+                        role="verifier",
+                        repo_path=repo_path,
+                        system_prompt=verifier_prompt(category, brief),
+                        tools=workspace.verifier_tools(category.id),
+                        explorer_tools=workspace.query_tools(),
+                        model_calls=self.config.DEEP_REVIEW_VERIFIER_MODEL_CALLS,
+                        kickoff=kickoff,
+                        files=files,
+                        completion_check=lambda: _unverified_nudge(workspace, category.id, ids),
+                    )
                 )
-            )
+
+        await asyncio.gather(*(verify(i, b) for i, b in enumerate(batches)))
 
     async def _run_synthesizer(
         self, workspace: ReviewWorkspace, brief: str, files: dict[str, dict], repo_path: Path
@@ -422,6 +485,7 @@ class DeepReviewController(BaseController):
         files: dict[str, dict],
         completion_check=None,
         strong: bool = False,
+        timeout_seconds: int | None = None,
     ) -> AgentRunStats:
         progress = getattr(self, "_progress", None)
         if progress is not None:
@@ -438,6 +502,7 @@ class DeepReviewController(BaseController):
             files=files,
             completion_check=completion_check,
             strong=strong,
+            timeout_seconds=timeout_seconds,
         )
         if progress is not None:
             await progress.agent_finished(stats)
@@ -457,6 +522,7 @@ class DeepReviewController(BaseController):
         files: dict[str, dict],
         completion_check=None,
         strong: bool = False,
+        timeout_seconds: int | None = None,
     ) -> AgentRunStats:
         try:
             agent = build_agent(
@@ -480,7 +546,7 @@ class DeepReviewController(BaseController):
             name=name,
             kickoff=kickoff,
             files=files,
-            timeout_seconds=self.config.DEEP_REVIEW_AGENT_TIMEOUT_SECONDS,
+            timeout_seconds=timeout_seconds or self.config.DEEP_REVIEW_AGENT_TIMEOUT_SECONDS,
             completion_check=completion_check,
             model_calls=model_calls,
         )
@@ -605,6 +671,9 @@ class DeepReviewController(BaseController):
             categories=config.enabled_categories,
             findings=tuple(findings),
             rejected_findings=tuple(workspace.rejected.values()),
+            dismissed_leads=tuple(
+                f"{lane} — {row} — {reason}" for (lane, row), reason in sorted(workspace.dismissed_leads.items())
+            ),
             merged_findings=tuple(sorted(merged, key=lambda m: m.id)),
             inventory=build_inventory(workspace.maps, line_counts={f.path: f.lines or 0 for f in workspace.manifest.files}),
             coverage=_coverage(workspace, runs),

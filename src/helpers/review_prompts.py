@@ -29,6 +29,8 @@ read the real code, trace the real data flow, and report only what is actually w
   * reachability.md — Python modules no application entry point imports;
   * architecture.md — process-local state, background jobs, queries that ignore the
     caller's identity, frontend pages without an auth guard.
+  * scopes.md — the files each lane must open (every live source file is in some lane's
+    scope; the completion check lists what you have not opened yet);
   * runtime_signals.md — how the running system behaves beyond the linters: sync model
     work reached from async code, agent loops re-sending their history, token usage
     never read, print() in live modules, static health checks, tests that drive the API,
@@ -88,8 +90,16 @@ read the real code, trace the real data flow, and report only what is actually w
   recorded -> Medium; sync model/LLM work run inside async request or job code (blocks the
   event loop) -> High; one upload/event re-processing the whole existing pool (O(n) per
   event, O(n^2) overall) with model calls -> High; print() as the logging of live service
-  modules -> High together with no request IDs, else Medium; missing metrics / error
-  boundary alone -> Medium; lint output (unused
+  modules -> High together with no request IDs, else Medium; secrets or personal data
+  (CVs) baked into the deployable image or delivered tree -> High; the same env key set
+  twice in one deploy manifest (last writer wins) -> High; no startup validation of required
+  secrets/config -> High; unbounded reads / no server-side pagination on growing data ->
+  High; all-or-nothing startup (model/vector store/provider clients loaded with no error
+  handling, one failure takes the whole API down) -> High; model usage never attributed to a
+  user/job/session and no budget -> High; a privileged container -> High; whole-file rewrite
+  per event -> Medium; layering violations (core logic importing the app layer) -> Medium;
+  tests that cannot fail or credentials in test scripts -> Medium; naive datetimes -> Low;
+  missing metrics / error boundary alone -> Medium; lint output (unused
   imports/variables, zip() without strict, complexity scores) is NOT a finding — it lives
   in the static-analysis triage; dead code -> ONE grouped finding sized in lines (Medium
   when it buries the real code path: thousands of lines or whole parallel
@@ -161,6 +171,17 @@ read the real code, trace the real data flow, and report only what is actually w
   OWN turn budget, not yours: it is how you cover a whole repository without burning
   your limited turns on mechanical reading. It returns a concise summary with
   file:line citations; verify the key lines yourself before recording.
+- Your kickoff lists mandatory leads. Every row ends one of three ways: a finding whose
+  evidence cites it (group rows sharing a root cause into ONE finding that cites them all);
+  dismiss_lead with finding_id when one of your findings already covers it (its location is
+  added to that finding); or dismiss_lead with the repository `path:line` that shows it is not
+  a defect. Small lead groups are tracked row by row — citing one row does not close the
+  others. "Out of budget", "partially investigated" or "no bugs found" are not reasons: the
+  tool refuses them.
+- Your file scope (scopes.md) is part of the job: open every file in it. Sweep with several
+  code-explorer `task` calls in ONE turn (8-12 files each) and record what they report after
+  checking the key lines. A lane that finishes after reading a handful of files has not
+  reviewed its scope.
 - Record findings with record_finding as soon as they are verified — not all at the
   end. Recorded work survives even if you run out of budget.
 - Finish when your checklist is covered; call list_my_findings as a final check,

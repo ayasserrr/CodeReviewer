@@ -277,3 +277,115 @@ def test_documented_rule_is_attached_as_evidence(tmp_path):
         title="x", severity="Low", confidence="high", description="d", impact="i",
         evidence=[EvidenceInput(file="app.py", line_start=1, line_end=1)], violates_documented_rule="README.md:2"))
     assert bad.startswith("NOT RECORDED")
+
+
+def _subprocess_leads(ws):
+    from helpers.review_signals import Signal
+
+    ws.maps.signals.subprocess_no_timeout = [
+        Signal("app/main.py", 10, "subprocess.run `antiword` with no timeout"),
+        Signal("app/services/cv_operations_service.py", 300, "subprocess.Popen `ffmpeg` with no timeout"),
+    ]
+    return "External commands run with no timeout (a hostile document hangs the worker)"
+
+
+def test_small_lead_groups_are_tracked_row_by_row(workspace):
+    ws = workspace
+    label = _subprocess_leads(ws)
+    record(ws, "inputs", "antiword runs without a timeout", "Medium", ("app/main.py", 10, 10))
+    open_rows = dict(ws.unaddressed_leads("inputs"))[label]
+    # citing antiword no longer closes the group: ffmpeg is still open
+    assert open_rows == ["subprocess.Popen `ffmpeg` with no timeout (app/services/cv_operations_service.py:300)"]
+
+
+def test_dismiss_lead_needs_a_citation_and_closes_the_row(workspace):
+    ws = workspace
+    label = _subprocess_leads(ws)
+    inputs = ws.config.category("inputs")
+    from helpers.review_workspace import _DismissLeadArgs
+
+    refused = ws.dismiss_lead(inputs, _DismissLeadArgs(lead="ffmpeg", reason="not a problem"))
+    assert refused.startswith("NOT RECORDED")
+    ok = ws.dismiss_lead(inputs, _DismissLeadArgs(
+        lead="cv_operations_service.py:300", reason="wrapped by the watchdog at app/main.py:12"))
+    assert ok == "Dismissed 1 lead row(s)."
+    open_rows = dict(ws.unaddressed_leads("inputs")).get(label, [])
+    assert all("ffmpeg" not in row for row in open_rows)
+    assert ("inputs", "subprocess.Popen `ffmpeg` with no timeout (app/services/cv_operations_service.py:300)") \
+        in ws.dismissed_leads
+
+
+def test_every_live_source_file_is_in_some_lane_scope(workspace):
+    scopes = workspace.lane_scopes()
+    claimed = set().union(*scopes.values())
+    live = {f.path for f in workspace.manifest.files if (f.lines or 0) >= 5}
+    assert live <= claimed
+    assert workspace.unopened_scope("correctness", set(claimed)) == []
+    assert "# File scope per lane" in workspace.render_scopes()
+
+
+def test_exposure_is_relabelled_in_dead_code_and_caps_severity(workspace):
+    ws = workspace
+    ws.maps.unreachable = ["src/utils/extract_docx_txt.py"]
+    dead_sql = record(ws, "security", "Model output executed as SQL", "Critical", ("src/utils/extract_docx_txt.py", 3, 5))
+    theory = ws.record_finding(ws.config.category("performance"), _RecordFindingArgs(
+        title="Would not scale past one region", severity="High", confidence="high", description="d", impact="i",
+        exposure="theoretical", evidence=[EvidenceInput(file="app/main.py", line_start=1)])).split()[1]
+    ws.apply_severity_caps()
+    assert ws.findings[dead_sql].exposure == "latent" and ws.findings[dead_sql].severity == "High"
+    assert ws.findings[theory].severity == "Medium"
+
+
+def test_verifier_batch_check_only_covers_its_own_findings(workspace):
+    from controllers.deep_review_controller import _unverified_nudge
+
+    ws = workspace
+    first = record(ws, "security", "Header identity is trusted", "High", ("app/main.py", 1, 2))
+    second = record(ws, "security", "Static CV mount is public", "High", ("app/main.py", 30, 31))
+    nudge = _unverified_nudge(ws, "security", {first})
+    assert first in nudge and second not in nudge
+    assert _unverified_nudge(ws, "security", {"SEC-99"}) is None
+
+
+def test_budget_is_not_a_dismissal_reason_and_covered_rows_attach_to_the_finding(workspace):
+    from helpers.review_workspace import _DismissLeadArgs
+
+    ws = workspace
+    _subprocess_leads(ws)
+    inputs = ws.config.category("inputs")
+    lazy = ws.dismiss_lead(inputs, _DismissLeadArgs(
+        lead="ffmpeg", reason="Covered the critical paths; out of budget. See app/main.py:12"))
+    assert lazy.startswith("NOT RECORDED") and "finding_id" in lazy
+    fid = record(ws, "inputs", "External binaries run without timeouts", "High", ("app/main.py", 10, 10))
+    attached = ws.dismiss_lead(inputs, _DismissLeadArgs(lead="ffmpeg", finding_id=fid))
+    assert attached == f"Attached 1 lead location(s) to {fid} as evidence."
+    assert ("app/services/cv_operations_service.py", 300) in {(e.file, e.line_start) for e in ws.findings[fid].evidence}
+    assert not any("ffmpeg" in row for _, rows in ws.unaddressed_leads("inputs") for row in rows)
+    assert not ws.dismissed_leads  # attached, not dismissed: nothing for the report's dismissal appendix
+
+
+def test_missing_control_needs_a_finding_that_names_it(workspace):
+    ws = workspace
+    ws.maps.signals.absent_controls = [("llm", "a per-user token budget", r"(?i)budget|per[- ]user")]
+    label = "Control with no trace anywhere in the live code: a per-user token budget"
+    ws.record_finding(ws.config.category("llm"), _RecordFindingArgs(
+        title="Token usage is never recorded", severity="High", confidence="high",
+        description="nothing is logged per user", impact="i", evidence=[EvidenceInput(file="app/main.py", line_start=1)]))
+    assert label in dict(ws.unaddressed_leads("llm"))  # a passing mention does not close it
+    record(ws, "llm", "No per-user or per-session token budget", "High", ("app/main.py", 2, 2))
+    assert label not in dict(ws.unaddressed_leads("llm"))
+
+
+def test_named_row_needs_a_finding_that_names_the_symbol(workspace):
+    from helpers.review_maps import ProcessState
+
+    ws = workspace
+    ws.maps.process_state = [ProcessState("audio_buffers", "app/main.py", 22, "module-level cache")]
+    label = "Process-local state (singletons, caches, flags, semaphores: one process only, lost on restart)"
+    record(ws, "performance", "Process-local caches block scaling", "High", ("app/main.py", 20, 25))
+    assert label in dict(ws.unaddressed_leads("performance"))  # cited nearby, never named
+    ws.record_finding(ws.config.category("performance"), _RecordFindingArgs(
+        title="In-memory audio session buffers", severity="High", confidence="high",
+        description="`audio_buffers` holds every session's audio in one process", impact="i",
+        evidence=[EvidenceInput(file="app/main.py", line_start=22)]))
+    assert label not in dict(ws.unaddressed_leads("performance"))

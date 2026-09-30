@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field
 
 from helpers.fs_scanner import is_sensitive_env_file
 from helpers.review_maps import ReviewMaps, classify_env_value
+from helpers.review_signals import is_test_file
 from utils import (
     DependencyGraph,
     EvidenceRef,
@@ -110,7 +111,16 @@ def _is_script_or_test(path: str, scripts: set[str], unreachable: set[str]) -> b
         or name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
     )
     return is_test or path in scripts or ("scripts" in parts[:-1] and path in unreachable)
+_AUTHISH_PATH = re.compile(r"(?i)(auth|security|jwt|token|otp|session|password|login)")
 _LEAD_LINE_TOLERANCE = 15
+_NON_REASON = re.compile(
+    r"(?i)\b(budget|out of time|no time|time ran|ran out|partially|not (fully )?(investigated|checked|traced|reviewed)|"
+    r"did not (check|trace|review)|covered (by|in|under) (finding|another)|see finding|already (recorded|reported|covered)|"
+    r"will (check|review) later|skipp?ed)\b"
+)
+_EACH_ROW_MAX_KEYS = 25
+_ROW_SYMBOL = re.compile(r"^`?([A-Za-z_][A-Za-z0-9_]{3,})`?\s*\(")
+"""Lead groups up to this many distinct locations are tracked row by row, not as a whole."""
 # High-signal bundled semgrep rules the security lane must rule on one by one.
 _SECURITY_LEAD_RULES: dict[str, str] = {
     "python-cors-wildcard-with-credentials": "CORS allows any origin with credentials",
@@ -294,6 +304,24 @@ class _KpiArgs(BaseModel):
     finding_ids: list[str] = Field(default_factory=list, description="Your recorded findings that detail this KPI.")
 
 
+class _DismissLeadArgs(BaseModel):
+    lead: str = Field(
+        ...,
+        description="Text identifying the lead: a distinctive part of one row (e.g. its file:line) closes that row; "
+        "a group label closes the whole group.",
+    )
+    reason: str = Field(
+        "",
+        description="Why it is not a defect, citing the repository `path:line` that shows it (the guard, caller, "
+        "config or test). Shown in the report. Not needed with finding_id.",
+    )
+    finding_id: str | None = Field(
+        None,
+        description="When one of your findings already covers this lead: its id. The lead's location is added to "
+        "that finding's evidence instead of being dismissed.",
+    )
+
+
 class _VerifyArgs(BaseModel):
     finding_id: str
     verdict: Literal["confirmed", "rejected", "adjusted"] = Field(
@@ -418,6 +446,10 @@ class ReviewWorkspace:
         self._lock = threading.Lock()
         self.findings: dict[str, ReviewFinding] = {}
         self.withdrawn: dict[str, str] = {}
+        # Lead rows a specialist dismissed with a cited reason: (category_id, row) -> reason.
+        self.dismissed_leads: dict[tuple[str, str], str] = {}
+        self._lead_rows: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        self._scopes: dict[str, list[str]] | None = None
         self.invalid_evidence_bounces = 0
         self._counters: Counter[str] = Counter()
         self.triage: dict[str, StaticTriage] = {}
@@ -940,6 +972,7 @@ class ReviewWorkspace:
         def add(label: str, rows: list[tuple[str, str]]) -> None:
             if rows:
                 groups.append((label, frozenset(f for f, _ in rows), [r for _, r in rows]))
+                self._lead_rows[(category_id, label)] = list(rows)
 
         def static_rows(*rules: str) -> list[tuple[str, str]]:
             # Keyed "file:line": a static lead is addressed only by a finding citing near
@@ -1097,6 +1130,16 @@ class ReviewWorkspace:
         if category_id in ("integration", "auth"):
             add("Credentials accepted in the query string (proxy/server logs, browser history, referrers)",
                 rows(sig.query_credentials))
+        if category_id == "secrets":
+            add("Secrets / personal data shipped with the code or baked into the image — not committed to git is not "
+                "enough when the build context or delivered tree carries them", rows(sig.packaged_artifacts))
+            add("Deploy manifests: env keys set twice (last writer wins) or pointing at local/dev targets",
+                rows([x for x in sig.deploy_env if "privileged" not in x.text and "count = 1" not in x.text]))
+        if category_id == "security":
+            add("Containers deployed privileged", rows([x for x in sig.deploy_env if "privileged" in x.text]))
+        if category_id == "auth":
+            add("Naive datetimes in token / OTP / session code (expiry and iat computed without a timezone)",
+                rows([x for x in sig.naive_datetimes if _AUTHISH_PATH.search(x.file)]))
         if category_id == "integration":
             add("Keys set to contradictory targets in different .env files (dev vs prod, local vs remote)",
                 [(f, f"{key} — {f}: {flags}") for key, per_file in self.maps.env_contradictions() for f, flags in per_file])
@@ -1113,6 +1156,13 @@ class ReviewWorkspace:
         elif category_id == "performance":
             add("Sync model / embedding work reached from async code — each call freezes every request on the worker",
                 rows(sig.blocking_in_async))
+            add("Unbounded reads: whole tables / whole directories loaded per request (record ONE grouped finding "
+                "together with the unpaginated endpoints)", rows(sig.unbounded_reads))
+            add("All-or-nothing startup: heavy init with no error handling, provider clients built at import time",
+                rows(sig.startup_fragility))
+            add("Whole-file JSON rewrites per event (O(events x file size) disk I/O)", rows(sig.whole_file_rewrites))
+            add("Deployment pinned to one instance (the process-local state above is why)",
+                rows([x for x in sig.deploy_env if "count = 1" in x.text]))
         elif category_id == "observability":
             if sig.print_live:
                 total = sum(n for _, n in sig.print_live)
@@ -1129,10 +1179,13 @@ class ReviewWorkspace:
                 [(p.file, f"{p.file}: stages {', '.join(p.stages) or 'unnamed'}") for p in sig.ci_without_checks])
             add("Frontend calls with no backend route — broken contracts a contract/integration test would have caught",
                 [(c.file, f"{c.path} ({c.file}:{c.line})") for c in self.maps.unmatched_client_calls()])
+            add("Tests that cannot fail (no assertion) and credentials hard-coded in test/automation scripts",
+                rows(sig.weak_tests))
         elif category_id == "dependencies":
             add("Libraries doing the same job", [(src, f"{fam}: {', '.join(pkgs)} ({src})") for fam, pkgs, src in sig.duplicate_libraries])
             add("Declared dependencies nothing live imports (dead weight / attack surface)",
                 [(x.file, f"{x.text} ({x.file})") for x in sig.unused_dependencies])
+            add("Supply chain: missing lockfiles, unpinned base images", rows(sig.supply_chain))
         elif category_id == "inputs":
             add("External commands run with no timeout (a hostile document hangs the worker)", rows(sig.subprocess_no_timeout))
         elif category_id == "maintainability":
@@ -1140,7 +1193,11 @@ class ReviewWorkspace:
                 [(r.split(" (", 1)[1].rsplit(":", 1)[0], f"{key}: {r}") for key, routes in sig.progress_channels for r in routes])
             add("Executor nesting / single-worker thread pools (concurrency that is hard to reason about)",
                 rows(sig.executor_nesting))
+            add("Layers that import each other both ways (layering violation: core logic depends on the app layer)",
+                [(ex.split(" -> ", 1)[0], f"{a} <-> {b}: {ex}") for a, b, examples in sig.layer_cycles for ex in examples])
         if category_id == "correctness":
+            add("Naive datetimes outside auth code (date math against aware values, wrong 'now' across timezones)",
+                rows([x for x in sig.naive_datetimes if not _AUTHISH_PATH.search(x.file)][:15]))
             add("Identifier shape used as meaning (e.g. len(candidate_id) == 6 means 'manual upload')", rows(sig.id_shape_checks))
         if category_id in ("maintainability", "correctness") and sig.parallel_implementations:
             label = (
@@ -1177,6 +1234,15 @@ class ReviewWorkspace:
             (f"Control with no trace anywhere in the live code: {label}", mention)
             for lane, label, mention in sig.absent_controls if lane == category_id
         ]
+        if category_id == "dependencies" and any("no lockfile" in x.text or "no package-lock" in x.text
+                                                 for x in sig.supply_chain):
+            leads.append((
+                (
+                    "Control with no trace anywhere in the live code: a dependency lockfile (transitive versions "
+                    "float between builds)"
+                ),
+                r"(?i)lock\s?-?file|lockfile|lock file|package-lock|poetry\.lock",
+            ))
         if category_id == "testing" and sig.ci_pipelines and not any(p.runs_scans for p in sig.ci_pipelines):
             leads.append((
                 "No CI/deploy pipeline runs a security or dependency scan (bandit/semgrep/pip-audit/npm audit/trivy/...)",
@@ -1218,15 +1284,208 @@ class ReviewWorkspace:
                 return any(lo - _LEAD_LINE_TOLERANCE <= n <= hi + _LEAD_LINE_TOLERANCE for lo, hi in spans.get(file, ()))
             return key in spans
 
-        missing = [
-            (label, rows)
-            for label, keys, rows in self.lane_leads(category_id)
-            if keys and not any(addressed(key) for key in keys)
-        ]
+        dismissed = {row for (cat, row) in self.dismissed_leads if cat == category_id}
+        missing: list[tuple[str, list[str]]] = []
+        for label, keys, rows in self.lane_leads(category_id):
+            if not keys or label in dismissed:
+                continue
+            pairs = self._lead_rows.get((category_id, label)) or [(k, r) for k, r in zip(sorted(keys), rows, strict=False)]
+            if len(keys) <= _EACH_ROW_MAX_KEYS:
+                # Small groups are checked row by row: citing one row no longer hides the others
+                # (observed: `antiword` cited, `ffmpeg` in the same group silently dropped).
+                texts = " ".join(
+                    f"{f.title} {f.description} " + " ".join(e.note or "" for e in f.evidence) for f in mine
+                )
+
+                def named(row: str, texts: str = texts) -> bool:
+                    # A row about a named symbol ("audio_buffers (file:22): ...") is covered only when a
+                    # finding names it — a citation near it in a big grouped finding is not enough.
+                    ident = _ROW_SYMBOL.match(row)
+                    return ident is None or ident.group(1) in texts
+
+                open_rows = [row for key, row in pairs if not (addressed(key) and named(row)) and row not in dismissed]
+                if open_rows:
+                    missing.append((label, open_rows))
+            elif not any(addressed(key) for key in keys) and not any(row in dismissed for _, row in pairs):
+                missing.append((label, rows))
         for label, mention in self._absence_leads(category_id):
-            if not any(re.search(mention, f"{f.title} {f.description}") for f in mine):
+            if label in dismissed:
+                continue
+            # A missing control needs a finding of its own: its title must name it (a passing
+            # mention in another finding's text used to close it — observed with the token budget).
+            strict = label.startswith("Control with no trace")
+            if not any(re.search(mention, f.title if strict else f"{f.title} {f.description}") for f in mine):
                 missing.append((label, ["confirm the absence (the static search found nothing) and record it"]))
         return missing
+
+    # ------------------------------------------------------------------
+    # Lead dismissals and file scopes
+    # ------------------------------------------------------------------
+
+    def dismiss_lead(self, category: ReviewCategory, args: "_DismissLeadArgs") -> str:
+        """Close lead rows: attach them to the finding that covers them, or dismiss them with a cited reason."""
+        if args.finding_id:
+            return self._attach_lead(category, args)
+        if _NON_REASON.search(args.reason):
+            return (
+                "NOT RECORDED — lack of time/budget, 'partially investigated' or 'covered elsewhere' is not a reason a "
+                "row is not a defect. If a finding covers it, call dismiss_lead again with finding_id=<that finding> "
+                "(the row is added to its evidence). Otherwise open the code and either record it or cite what makes "
+                "it safe."
+            )
+        if not self._cites_repository(args.reason):
+            return (
+                "NOT RECORDED — a dismissal must cite the repository code that shows the row is not a defect "
+                "(a `path:line` in the reason: the guard, the caller, the config that handles it). If you cannot "
+                "cite one, the row is a finding: record it."
+            )
+        needle = args.lead.strip().lower()
+        if len(needle) < 4:
+            return "NOT RECORDED — pass a distinctive part of the lead row (e.g. its file:line) or the group label."
+        self.lane_leads(category.id)  # refresh the row index
+        candidates: list[str] = []
+        for (cat, label), pairs in self._lead_rows.items():
+            if cat != category.id:
+                continue
+            if needle in label.lower():
+                candidates.append(label)
+            candidates += [row for _, row in pairs if needle in row.lower()]
+        candidates += [label for label, _ in self._absence_leads(category.id) if needle in label.lower()]
+        if not candidates:
+            return f"No lead of your lane matches '{args.lead}'. Use text from a row or label exactly as listed."
+        with self._lock:
+            for row in dict.fromkeys(candidates):
+                self.dismissed_leads[(category.id, row)] = args.reason.strip()[:600]
+        return f"Dismissed {len(set(candidates))} lead row(s)."
+
+    def _attach_lead(self, category: ReviewCategory, args: "_DismissLeadArgs") -> str:
+        """Add the matching lead rows' locations to one of the lane's findings (addresses them properly)."""
+        with self._lock:
+            finding = self.findings.get(args.finding_id or "")
+        if finding is None or finding.category_id != category.id:
+            return f"Unknown finding '{args.finding_id}' in your category."
+        needle = args.lead.strip().lower()
+        self.lane_leads(category.id)
+        keys = [
+            key for (cat, label), pairs in self._lead_rows.items() if cat == category.id
+            for key, row in pairs if needle in row.lower() or needle in label.lower()
+        ]
+        refs = []
+        for key in dict.fromkeys(keys):
+            file, sep, line = key.rpartition(":")
+            evidence = EvidenceInput(file=file, line_start=int(line)) if sep and line.isdigit() and int(line) > 0 \
+                else EvidenceInput(file=key, line_start=1)
+            valid, _ = self.validate_evidence([evidence])
+            refs += valid
+        if not refs:
+            return f"No lead row of your lane matches '{args.lead}' with a citable location."
+        with self._lock:
+            known = {(e.file, e.line_start) for e in finding.evidence}
+            added = tuple(r for r in refs if (r.file, r.line_start) not in known)
+            self.findings[finding.id] = finding.model_copy(update={"evidence": finding.evidence + added})
+        return f"Attached {len(added)} lead location(s) to {finding.id} as evidence."
+
+    def lane_scopes(self) -> dict[str, list[str]]:
+        """Which repository files each lane must open itself (directly or through its code-explorers).
+
+        Every live source file lands in at least one lane: a file no rule claims goes to
+        correctness (backend) or frontend (browser code). Dead modules are left to the
+        maintainability lane's reachability evidence — reading them adds nothing.
+        """
+        if self._scopes is not None:
+            return self._scopes
+        maps, sig = self.maps, self.maps.signals
+        dead = set(maps.unreachable)
+        code_langs_excluded = {"Markdown", "JSON", "YAML", "TOML"}
+        entries = {f.path: f for f in self.manifest.files}
+
+        def is_live_code(path: str) -> bool:
+            f = entries.get(path)
+            return bool(
+                f and f.language and f.language not in code_langs_excluded and path not in dead
+                and not is_test_file(path) and not f.skipped_due_to_size
+                and ((f.lines or 0) >= 5 if f.lines is not None else f.size_bytes >= 120)
+                and not path.endswith((".min.js", ".d.ts"))
+            )
+
+        live = sorted(p for p in entries if is_live_code(p))
+        web = [p for p in live if p.endswith((".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".mjs"))]
+        backend = [p for p in live if p not in set(web)]
+
+        # A top-level folder holding several code packages is a project container
+        # ("talent-acquisition-agent/{app,src}"): its name says nothing about each file.
+        children: dict[str, set[str]] = defaultdict(set)
+        for p in live:
+            parts = PurePosixPath(p).parts
+            if len(parts) > 2:
+                children[parts[0]].add(parts[1])
+        containers = {top for top, subs in children.items() if len(subs) >= 2}
+
+        def rel(path: str) -> str:
+            parts = PurePosixPath(path).parts
+            return "/".join(parts[1:]) if len(parts) > 1 and parts[0] in containers else path
+
+        def match(rx: str, pool=live) -> set[str]:
+            return {p for p in pool if re.search(rx, "/" + rel(p), re.IGNORECASE)}
+
+        deploy = {p for p in entries if re.search(
+            r"(?i)(^|/)(dockerfile[^/]*|jenkinsfile[^/]*|docker-compose[^/]*|compose\.ya?ml|\.gitlab-ci\.yml)$|/jenkins/|"
+            r"\.nomad$|\.github/workflows/|(^|/)k8s/|(^|/)helm/", p)}
+        manifests = {p for p in entries if re.search(
+            r"(?i)(^|/)(requirements[^/]*\.(txt|in)|pyproject\.toml|package\.json|pipfile|setup\.(py|cfg))$", p)
+            and "node_modules" not in p}
+        templates = {p for p in entries if is_sensitive_env_file(PurePosixPath(p).name) is False
+                     and re.search(r"(?i)(^|/)\.env[^/]*(example|sample|template|dist)", p)}
+        route_files = {r.file for r in maps.routes} & set(live)
+        upload_files: set[str] = set()
+        for r in maps.routes:
+            if r.accepts_upload:
+                upload_files |= self._reachable_files(r.file, r.handler, depth=2)
+        env_files = {r.file for r in maps.env_reads} & set(live)
+        model_files = {x.file for x in sig.usage_never_read + sig.model_clients_at_import + sig.blocking_in_async
+                       + sig.agent_loops + sig.unbounded_tool_output}
+        job_files = {j.file for j in maps.background_jobs if j.file}
+        scopes: dict[str, set[str]] = {
+            "security": route_files | match(r"(auth|security|deps|middleware|permission|guard|export|html|iframe)"),
+            "auth": match(r"(auth|security|jwt|token|session|login|user|otp|password|deps)"),
+            "integration": env_files | match(r"(config|settings|client|/api/|http|proxy|vite\.config|(^|/)main\.(py|tsx?))")
+            | deploy,
+            "frontend": set(web),
+            "observability": set(maps.app_roots) | {f for f, _ in sig.print_live} | job_files
+            | {x.file for x in sig.static_health},
+            "testing": set(sig.test_files) | deploy,
+            "secrets": env_files | templates | deploy | match(r"(^|/)scripts?/"),
+            "performance": {x.file for x in maps.process_state} | {x.file for x in sig.blocking_in_async} | job_files
+            | {x.file for x in sig.unbounded_reads} | {x.file for x in sig.startup_fragility}
+            | {r.file for r in maps.routes if r.is_unpaginated_listing},
+            "llm": model_files | match(r"(llm|agent|prompt|chat|rag|embed|vector|transcri|whisper)"),
+            "inputs": upload_files | match(r"(upload|extract|pars|ocr|pdf|docx|audio|transcri|whisper|file|vacanc)"),
+            "correctness": upload_files | job_files | match(r"(service|screen|scor|pipeline|extract|process|crud|repositor)",
+                                                             backend),
+            "maintainability": {x.file for _, sites in sig.parallel_implementations for x in sites}
+            | {ex.split(" -> ", 1)[0] for _, _, examples in sig.layer_cycles for ex in examples},
+            "dependencies": manifests | {p for p in deploy if "dockerfile" in p.lower()},
+        }
+        claimed = set().union(*scopes.values())
+        for path in live:
+            if path not in claimed:
+                scopes["frontend" if path in set(web) else "correctness"].add(path)
+        live_or_config = set(live) | deploy | manifests | templates | set(sig.test_files)
+        self._scopes = {lane: sorted(p for p in paths if p in live_or_config) for lane, paths in scopes.items()}
+        return self._scopes
+
+    def unopened_scope(self, category_id: str, opened: set[str]) -> list[str]:
+        opened = {p.lstrip("/") for p in opened}
+        return [p for p in self.lane_scopes().get(category_id, []) if p not in opened]
+
+    def render_scopes(self) -> str:
+        lines = ["# File scope per lane (every live source file is in at least one lane's scope)",
+                 "Open every file of your lane — yourself or through code-explorer sweeps (their reads count).", ""]
+        for lane, paths in self.lane_scopes().items():
+            lines.append(f"## {lane} ({len(paths)} files)")
+            lines += [f"- {p}" for p in paths] or ["- none"]
+            lines.append("")
+        return "\n".join(lines)
 
     def assess_kpi(self, args: _KpiArgs) -> str:
         kpi = next((k for k in self.config.security_kpis if k.id == args.kpi_id), None)
@@ -1663,6 +1922,11 @@ class ReviewWorkspace:
                   "Withdraw one of your findings that turned out to be wrong.", _WithdrawArgs),
             _tool(lambda: self.list_my_findings(category), "list_my_findings",
                   "Recap of what you have recorded so far (findings, triage progress, KPI coverage)."),
+            _tool(lambda **kw: self.dismiss_lead(category, _DismissLeadArgs(**kw)), "dismiss_lead",
+                  "Close a mandatory lead row (or a whole group). With finding_id: the row is covered by that finding "
+                  "and its location is added to the finding's evidence. Without: the row is NOT a defect, and the "
+                  "reason cites the code that shows it (listed in the report). Budget/time is never a reason.",
+                  _DismissLeadArgs),
         ]
         if kpi_assessor:
             tools.append(

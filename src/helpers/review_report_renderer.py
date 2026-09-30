@@ -275,6 +275,8 @@ def render_report(report: DeepReviewReport) -> str:
         pct = round(100 * cov.source_files_opened_by_agents / cov.source_files) if cov.source_files else 0
         out.append(f"| Agents | {cov.source_files_opened_by_agents} of {cov.source_files} source files opened directly "
                    f"({pct}%); the rest were covered through static analysis, the dependency graph, grep and the maps |")
+        if cov.lane_scopes:
+            out.append("| Lane file scopes | " + "; ".join(cov.lane_scopes) + " |")
         out.append("")
         warnings = []
         if cov.traversal_timed_out:
@@ -327,6 +329,16 @@ def render_report(report: DeepReviewReport) -> str:
         for finding in sorted(report.rejected_findings, key=lambda f: (f.category_id, f.id)):
             reason = finding.verification.note if finding.verification else ""
             out.append(f"- **{finding.title}** ({finding.category_id}, {finding.severity}) — {reason[:400]}")
+        out.append("")
+        out.append("---")
+        out.append("")
+
+    if report.dismissed_leads:
+        out.append("## Appendix C. Mandatory leads dismissed by the specialists")
+        out.append("")
+        out.append("Statically detected leads a specialist judged not to be defects, each with the code it cited.")
+        out.append("")
+        out.extend(f"- {row[:500]}" for row in report.dismissed_leads)
         out.append("")
         out.append("---")
         out.append("")

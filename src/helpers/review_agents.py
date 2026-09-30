@@ -308,6 +308,7 @@ class _RunBudget:
     limit: int
     deadline: float
     timeout: float
+    time_capped: bool = False
     used: int = 0
 
     def seconds_left(self) -> float:
@@ -315,6 +316,20 @@ class _RunBudget:
 
 
 _RUN_BUDGET: ContextVar[_RunBudget | None] = ContextVar("deep_review_run_budget", default=None)
+REVIEW_READS: ContextVar[set[str] | None] = ContextVar("deep_review_reads", default=None)
+_LANE_READS: ContextVar[set[str] | None] = ContextVar("deep_review_lane_reads", default=None)
+
+
+def current_lane_reads() -> set[str]:
+    """Files the agent currently running (and its code-explorers) opened — for completion checks."""
+    return set(_LANE_READS.get() or ())
+"""Every repository file any agent of the current review opened (shared by all lanes, live)."""
+
+_STOP_GRACE_SECONDS = 45.0
+"""An agent (and every explorer it launched) stops this long before its wall-clock cap.
+
+Stopping cleanly keeps the run "completed" with everything recorded; the hard cap used to cancel
+agents mid-explorer-call (observed: a lane whose explorer was still reading when the cap hit)."""
 _AGENT_NAME: ContextVar[str] = ContextVar("deep_review_agent_name", default="")
 
 _RESUME_BONUS_CALLS = 12
@@ -341,6 +356,11 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
         return _RUN_BUDGET.get() if self.shared else None
 
     def _exhausted(self) -> dict[str, Any] | None:
+        parent = _RUN_BUDGET.get()
+        if parent is not None and parent.seconds_left() <= _STOP_GRACE_SECONDS:
+            # Applies to explorers too (they run inside the parent's call): the lane's clock is theirs.
+            parent.time_capped = True
+            return {"jump_to": "end", "messages": [AIMessage(content="Wall-clock budget for this review lane is spent.")]}
         budget = self._budget()
         if budget is None:
             return None
@@ -365,7 +385,10 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
             low_time = seconds <= budget.timeout * self.time_fraction
         else:
             remaining = self.limit - int(request.state.get("run_model_call_count", 0) or 0)
-            seconds, low_time = None, False
+            parent = _RUN_BUDGET.get()
+            # An explorer wraps up when its parent lane is short of time, not only of its own calls.
+            seconds = parent.seconds_left() if parent is not None else None
+            low_time = seconds is not None and seconds <= max(120.0, parent.timeout * 0.12)
         if remaining > self.remaining_threshold and not low_time:
             return request
         left = f"{max(remaining, 0)} model turns" + (f" and about {max(int(seconds // 60), 0)} minute(s)" if seconds is not None else "")
@@ -592,6 +615,9 @@ class _UsageCounter(BaseCallbackHandler):
             # Repository files only: the agent-side /_review/ area is tooling, not code.
             if path and not path.startswith(AGENT_ROOT.strip("/")):
                 self.files_read.add(path)
+                shared = REVIEW_READS.get()
+                if shared is not None:
+                    shared.add(path)
 
 
 def _tool_input_path(inputs: Any, input_str: str) -> str | None:
@@ -605,8 +631,11 @@ def _tool_input_path(inputs: Any, input_str: str) -> str | None:
     return str(path).lstrip("/") if path else None
 
 
-_MAX_CHECK_RESUMES = 3
-"""How many times a completion check may send an agent back while it still makes progress."""
+_MAX_CHECK_RESUMES = 6
+"""How many times a completion check may send an agent back while it still makes progress.
+
+Each round must change the nudge (the lane opened files, recorded or dismissed leads), so a
+stuck agent stops after one repeat; six rounds let a lane with a large file scope finish it."""
 
 _MAX_RESUMES = 2
 """How many times an agent that ended on an empty model turn is resumed."""
@@ -651,10 +680,12 @@ async def run_agent(
     budget = _RunBudget(limit=model_calls or 10**9, deadline=start + timeout_seconds, timeout=timeout_seconds)
     _RUN_BUDGET.set(budget)
     _AGENT_NAME.set(name)
+    _LANE_READS.set(usage.files_read)
 
     async def run_with_resume() -> bool:
         state: dict[str, Any] = {"messages": [HumanMessage(content=kickoff)], "files": files}
         checks = 0
+        escalated = False
         last_nudge: str | None = None
         resume = 0
         while resume <= _MAX_RESUMES:
@@ -665,11 +696,18 @@ async def run_agent(
                 # A silent end (thoughts only) is a normal end: the completion check, not the
                 # missing prose, decides whether the agent's work is actually done. It may send
                 # the agent back several times, but stops as soon as a round changes nothing.
-                nudge = completion_check() if completion_check and checks < _MAX_CHECK_RESUMES else None
-                if not nudge or nudge == last_nudge:
+                raw = completion_check() if completion_check and checks < _MAX_CHECK_RESUMES else None
+                if not raw or (raw == last_nudge and escalated):
                     return True
+                # An agent that ignored the check once gets it once more, stated plainly.
+                escalated = raw == last_nudge
+                nudge = (
+                    "You stopped without acting on this. It is not optional — do it now, starting with the first "
+                    f"item, before any summary.\n\n{raw}"
+                    if escalated else raw
+                )
                 checks += 1
-                last_nudge = nudge
+                last_nudge = raw
                 if budget.seconds_left() < min(120.0, budget.timeout * 0.1):
                     # Too close to the wall-clock cap to act on it; stopping cleanly beats a timeout.
                     logger.info("deep_review_agent_incomplete_work_skipped", agent=name, reason="too little time left")
@@ -701,6 +739,8 @@ async def run_agent(
     except Exception as exc:  # noqa: BLE001 -- one agent's failure must never abort the review
         status, error = "failed", f"{type(exc).__name__}: {exc}"[:500]
     duration = time.monotonic() - start
+    if status == "completed" and budget.time_capped:
+        error = "wrapped up at its time cap (everything recorded is kept)"
     log = logger.info if status == "completed" else logger.warning
     log(
         "deep_review_agent_finished",

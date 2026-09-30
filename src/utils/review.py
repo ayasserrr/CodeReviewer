@@ -324,6 +324,7 @@ class ReviewCoverage(BaseModel):
     discovery_timed_out: bool = False
     unreadable_directories: tuple[str, ...] = ()
     system_docs: tuple[str, ...] = ()
+    lane_scopes: tuple[str, ...] = ()  # "security: 41 of 42 scope files opened"
 
 
 class ReviewStatistics(BaseModel):
@@ -384,6 +385,7 @@ class DeepReviewReport(BaseModel):
     categories: tuple[ReviewCategory, ...] = Field(default_factory=tuple)
     findings: tuple[ReviewFinding, ...] = Field(default_factory=tuple)
     rejected_findings: tuple[ReviewFinding, ...] = Field(default_factory=tuple)
+    dismissed_leads: tuple[str, ...] = Field(default_factory=tuple)  # "lane — lead row — cited reason"
     merged_findings: tuple[MergedFinding, ...] = Field(default_factory=tuple)
     inventory: tuple[InventorySection, ...] = Field(default_factory=tuple)
     coverage: ReviewCoverage | None = None

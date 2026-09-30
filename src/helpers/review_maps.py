@@ -39,6 +39,11 @@ from pathlib import Path, PurePosixPath
 
 from helpers.ast_analyzer import parse_quietly
 from helpers.fs_scanner import IGNORED_DIR_NAMES
+from helpers.review_signals import (
+    RuntimeSignals,
+    build_runtime_signals,
+    render_runtime_signals,
+)
 from system import get_logger
 from utils import InventorySection, RepositoryManifest
 
@@ -262,6 +267,7 @@ class ReviewMaps:
     process_state: list["ProcessState"] = field(default_factory=list)
     identity_unused: list["IdentityUnused"] = field(default_factory=list)
     unguarded_routes: list["ClientRoute"] = field(default_factory=list)
+    signals: RuntimeSignals = field(default_factory=RuntimeSignals)
 
     # -------------------------------------------------------------- derived
     def imported_by(self) -> dict[str, set[str]]:
@@ -275,7 +281,13 @@ class ReviewMaps:
         if not self.routes:
             return []
         patterns = [_path_regex(r.path) for r in self.routes] + [_path_regex(m.path, prefix=True) for m in self.mounts]
-        return [c for c in self.client_calls if not any(p.fullmatch(_normalize_client_path(c.path)) for p in patterns)]
+        # A bare route prefix ("/api" in a dev-proxy config) is not a call.
+        prefixes = {"/" + r.path.strip("/").split("/", 1)[0] for r in self.routes}
+        return [
+            c for c in self.client_calls
+            if _normalize_client_path(c.path) not in prefixes
+            and not any(p.fullmatch(_normalize_client_path(c.path)) for p in patterns)
+        ]
 
     def routes_without_client(self) -> list[RouteInfo]:
         if not self.client_calls:
@@ -313,7 +325,9 @@ def _path_regex(path: str, *, prefix: bool = False) -> re.Pattern[str]:
 
 
 def _normalize_client_path(path: str) -> str:
-    return path.split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+    path = path.split("?", 1)[0].split("#", 1)[0]
+    path = re.sub(r"(?<=[^/]){}$", "", path)  # `${base}/items${query}` -> /items
+    return path.rstrip("/") or "/"
 
 
 def _literal(node: ast.AST | None) -> str | None:
@@ -1006,12 +1020,17 @@ def build_review_maps(repo_path: Path, manifest: RepositoryManifest, *, inspect_
         ("imports", lambda: _fill_imports(maps, files)),
         ("env", lambda: _fill_env(maps, files, js_sources, repo_path, inspect_env_files)),
         ("client_calls", lambda: _fill_client_calls(maps, js_sources)),
+        ("signals", lambda: _fill_signals(maps, files, repo_path, manifest)),
     ):
         try:
             step()
         except Exception:  # one map failing must not cost the others
             logger.exception("review_map_failed", map=name)
     return maps
+
+
+def _fill_signals(maps: ReviewMaps, files: list[_PyFile], repo_path: Path, manifest: RepositoryManifest) -> None:
+    maps.signals = build_runtime_signals(files, repo_path, manifest, unreachable=maps.unreachable, routes=maps.routes)
 
 
 def _fill_routes(maps: ReviewMaps, files: list[_PyFile]) -> None:
@@ -1388,6 +1407,16 @@ def maps_brief(maps: ReviewMaps) -> list[str]:
             "- Production baselines with NO trace anywhere in the code (searched statically): "
             + "; ".join(b.label for b in maps.absent_baselines)
         )
+    sig = maps.signals
+    lines.append(
+        f"- runtime_signals.md: {len(sig.blocking_in_async)} sync model calls reached from async code; "
+        f"{len(sig.agent_loops)} agent loops re-sending their message list; {len(sig.usage_never_read)} of "
+        f"{sig.model_call_files} model-calling files never read token usage; {sum(n for _, n in sig.print_live)} "
+        f"print() calls in live modules; {len(sig.static_health)} static health checks; {len(sig.test_files)} test files "
+        f"({len(sig.route_tests)} drive the API); CI pipelines without a test/lint/scan step: "
+        f"{', '.join(p.file for p in sig.ci_without_checks) or 'none'}; {len(sig.duplicate_libraries)} duplicate-library "
+        f"families; {len(sig.parallel_implementations)} parallel implementations."
+    )
     lines.append(
         f"- reachability.md: {len(maps.unreachable)} Python modules unreachable from the app roots "
         f"({', '.join(maps.app_roots[:3]) or 'none detected'}); {len(maps.orphan_scripts)} standalone scripts."
@@ -1415,6 +1444,7 @@ def render_context_files(maps: ReviewMaps) -> dict[str, str]:
         "env_map.md": render_env_map(maps),
         "client_calls.md": render_client_calls(maps),
         "reachability.md": render_reachability(maps),
+        "runtime_signals.md": render_runtime_signals(maps.signals),
     }
 
 
@@ -1472,5 +1502,23 @@ def build_inventory(
                  for key, reads in sorted(divergent.items())]),
         section("Production baselines with no trace anywhere in the code",
                 [b.label for b in maps.absent_baselines]),
+        section("Sync model / embedding work reached from async code (blocks the event loop)",
+                [s.row for s in maps.signals.blocking_in_async]),
+        section("Agent loops that re-send a growing message list to the model",
+                [s.row for s in maps.signals.agent_loops]),
+        section("Files that call a model but never read token usage",
+                [s.row for s in maps.signals.usage_never_read]),
+        section(f"print() used as logging in live modules ({sum(n for _, n in maps.signals.print_live)} calls)",
+                [f"{f}: {n}" for f, n in maps.signals.print_live]),
+        section("Health endpoints that check no dependency", [s.row for s in maps.signals.static_health]),
+        section("CI / deploy pipelines with no test, lint or scan step",
+                [f"{p.file} (stages: {', '.join(p.stages) or 'unnamed'})" for p in maps.signals.ci_without_checks]),
+        section("Libraries doing the same job",
+                [f"{fam}: {', '.join(pkgs)} ({src})" for fam, pkgs, src in maps.signals.duplicate_libraries]),
+        section("Declared dependencies nothing live imports",
+                [f"{s.text} ({s.file})" for s in maps.signals.unused_dependencies]),
+        section("Parallel implementations of one operation",
+                [f"{name}: " + "; ".join(x.row for x in sites) for name, sites in maps.signals.parallel_implementations]),
+        section("External commands run with no timeout", [s.row for s in maps.signals.subprocess_no_timeout]),
     ]
     return tuple(s for s in sections if s is not None)

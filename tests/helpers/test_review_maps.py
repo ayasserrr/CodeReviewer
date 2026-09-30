@@ -226,7 +226,7 @@ class TestImportsAndReachability:
 
 def test_context_files_and_brief(maps):
     files = render_context_files(maps)
-    assert set(files) == {"route_map.md", "env_map.md", "client_calls.md", "reachability.md", "architecture.md"}
+    assert set(files) == {"route_map.md", "env_map.md", "client_calls.md", "reachability.md", "architecture.md", "runtime_signals.md"}
     assert "CLIENT-ASSERTED IDENTITY" in files["route_map.md"]
     brief = "\n".join(maps_brief(maps))
     assert "mounted sub-apps (/static/files)" in brief

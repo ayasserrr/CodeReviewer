@@ -81,6 +81,16 @@ _CONTROLS = (
          r"tokens_?per_?(user|session|day)"
      ),
      r"(?i)budget|quota|cost limit|token limit|per[- ]user|per[- ]session", "llm"),
+    ("secrets", "startup validation of required configuration (the app refuses to boot without SECRET_KEY, DB, keys)",
+     (
+         r"(?i)\bBaseSettings\b|validate_(settings|config|env)|raise\s+\w*Error\(.{0,80}(not set|missing|required)|"
+         r"sys\.exit\(.{0,40}(env|config)"
+     ),
+     r"(?i)startup validation|validat\w* (at|on) (startup|boot)|refuse\w* to (start|boot)|boots? (with|misconfigured)",
+     "env"),
+    ("llm", "cost attribution — token usage recorded per user / job / request / session",
+     r"(?i)(usage|tokens?|cost)\w*\s*[,(].{0,80}(user_?(id|email)|job_?id|request_?id|session_?id)",
+     r"(?i)attribut|per[- ](user|job|request|session)|cost", "llm"),
     ("inputs", "per-user / per-IP upload or job quotas",
      r"(?i)quota|max_?uploads|upload_?limit|max_?files_?per|max_?jobs|jobs_?per_?user|daily_?limit",
      r"(?i)quota|per[- ]user|job[- ]creation|limit on (jobs|uploads)", "uploads"),
@@ -182,6 +192,15 @@ class RuntimeSignals:
     progress_channels: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)  # resource, routes
     executor_nesting: list[Signal] = field(default_factory=list)
     absent_controls: list[tuple[str, str, str]] = field(default_factory=list)  # (lane, label, mention regex)
+    packaged_artifacts: list[Signal] = field(default_factory=list)  # secrets / personal data shipped in the image or tree
+    deploy_env: list[Signal] = field(default_factory=list)  # env keys in deploy manifests: duplicates, local/dev targets
+    unbounded_reads: list[Signal] = field(default_factory=list)
+    startup_fragility: list[Signal] = field(default_factory=list)
+    whole_file_rewrites: list[Signal] = field(default_factory=list)
+    layer_cycles: list[tuple[str, str, tuple[str, ...]]] = field(default_factory=list)  # layer a, layer b, examples
+    weak_tests: list[Signal] = field(default_factory=list)  # tests that cannot fail, credentials in test scripts
+    supply_chain: list[Signal] = field(default_factory=list)  # missing lockfiles, unpinned base images
+    naive_datetimes: list[Signal] = field(default_factory=list)
 
     @property
     def ci_without_checks(self) -> list[CiPipeline]:
@@ -225,12 +244,17 @@ def _norm_pkg(name: str) -> str:
     return re.sub(r"\[.*\]$", "", name.strip().lower().replace("_", "-"))
 
 
+def is_test_file(path: str) -> bool:
+    """Test code, test automation scripts and pytest config — judged by the testing lane, not run in production."""
+    return _is_test_file(path)
+
+
 def _is_test_file(path: str) -> bool:
     parts = PurePosixPath(path).parts
     name = parts[-1]
     return (
         any(p in ("tests", "test", "testing", "__tests__", "e2e") for p in parts[:-1])
-        or name.startswith("test_") or name.endswith(("_test.py", "_tests.py")) or name == "conftest.py"
+        or name.startswith("test_") or name.endswith(("_test.py", "_tests.py")) or name in ("conftest.py", "test.py", "tests.py")
         or bool(re.search(r"\.(test|spec)\.[jt]sx?$", name))
     )
 
@@ -514,10 +538,224 @@ def _absent_controls(files, live: set[str], routes, signals: RuntimeSignals) -> 
         "llm": signals.model_call_files > 0 or bool(signals.model_clients_at_import),
         "uploads": any(getattr(r, "accepts_upload", False) for r in routes),
         "jobs": any(getattr(r, "accepts_upload", False) for r in routes) or signals.model_call_files > 0,
+        "env": any("getenv" in text or "environ" in text for text in corpus),
     }
     for lane, label, evidence, mention, when in _CONTROLS:
         if applies.get(when) and not any(re.search(evidence, text) for text in corpus):
             signals.absent_controls.append((lane, label, mention))
+
+
+_PERSONAL_DOC_DIR = re.compile(r"(?i)(^|/)(cvs?|resumes?|uploads?|candidates?|applicants?|attachments?)(/|$)")
+_PERSONAL_DOC_EXT = (".pdf", ".docx", ".doc", ".rtf", ".odt")
+_ARCHIVE_EXT = (".zip", ".tar", ".tar.gz", ".tgz", ".7z", ".rar")
+_NAIVE_DT = frozenset({"utcnow", "utcfromtimestamp"})
+_AUTHISH = re.compile(r"(?i)(auth|security|jwt|token|otp|session|password|login)")
+_TEST_CREDENTIAL = re.compile(r"""(?i)(password|passwd|pwd|secret|api_?key)\s*[:=]\s*['"][^'"\s]{4,}['"]""")
+_ENV_BLOCK = re.compile(r"(?ms)^\s*env\s*\{(.*?)^\s*\}")
+_HCL_ASSIGN = re.compile(r"""^\s*"?([A-Z][A-Z0-9_]*)"?\s*=\s*"?([^"\n]*)""")
+_COMPOSE_ENV = re.compile(r"""^\s*-?\s*([A-Z][A-Z0-9_]*)\s*[=:]\s*['"]?([^'"\n]*)""")
+_LOCKFILES = ("poetry.lock", "Pipfile.lock", "uv.lock", "pdm.lock", "requirements.lock", "requirements-lock.txt",
+              "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "npm-shrinkwrap.json")
+
+
+def _read(repo_path: Path, rel: str, limit: int = 400_000) -> str:
+    try:
+        return (repo_path / rel).read_text(encoding="utf-8", errors="replace")[:limit]
+    except OSError:
+        return ""
+
+
+def _artifact_signals(repo_path: Path, manifest: RepositoryManifest, signals: RuntimeSignals) -> None:
+    paths = [f.path for f in manifest.files]
+    docs: dict[str, int] = defaultdict(int)
+    for path in paths:
+        lower = path.lower()
+        if lower.endswith(_PERSONAL_DOC_EXT) and _PERSONAL_DOC_DIR.search(lower):
+            docs[str(PurePosixPath(path).parent)] += 1
+        elif lower.endswith(_ARCHIVE_EXT):
+            signals.packaged_artifacts.append(Signal(path, 0, "archive committed to the repository (what does it ship?)"))
+    for directory, n in sorted(docs.items(), key=lambda kv: -kv[1]):
+        signals.packaged_artifacts.append(
+            Signal(directory, 0, f"{n} personal documents (CVs/uploads) stored in the source tree")
+        )
+    for path in paths:
+        name = PurePosixPath(path).name.lower()
+        if not (name == "dockerfile" or name.startswith("dockerfile.") or name.endswith(".dockerfile")):
+            continue
+        text = _read(repo_path, path)
+        context = str(PurePosixPath(path).parent)
+        ignore_path = f"{context}/.dockerignore" if context not in (".", "") else ".dockerignore"
+        ignore = _read(repo_path, ignore_path) if ignore_path in paths else ""
+        for n, line in enumerate(text.splitlines(), start=1):
+            if re.match(r"(?i)^\s*(COPY|ADD)\s+(--\S+\s+)*\.\s", line):
+                missing = [pat for pat in (".env", "cvs", "*.pdf") if pat.strip("*") not in ignore]
+                if not ignore:
+                    what = "no .dockerignore — every file in the build context (.env files, CVs, archives) is baked into the image"
+                elif missing:
+                    what = f".dockerignore does not exclude {', '.join(missing)} — they are baked into the image"
+                else:
+                    continue
+                signals.packaged_artifacts.append(Signal(path, n, f"`{line.strip()}` copies the whole context: {what}"))
+            match = re.match(r"(?i)^\s*FROM\s+(\S+)", line)
+            if match:
+                image = match.group(1)
+                if image.lower() != "scratch" and "@sha256:" not in image and (":" not in image.split("/")[-1] or image.endswith(":latest")):
+                    signals.supply_chain.append(Signal(path, n, f"base image `{image}` is not pinned to a version/digest"))
+
+
+def _deploy_env_signals(repo_path: Path, manifest: RepositoryManifest, signals: RuntimeSignals) -> None:
+    from helpers.review_maps import (
+        classify_env_value,  # local import: review_maps imports this module
+    )
+
+    for entry in manifest.files:
+        lower = entry.path.lower()
+        name = PurePosixPath(lower).name
+        is_hcl = lower.endswith((".nomad", ".hcl")) or ("/nomad/" in f"/{lower}" and "." not in name)
+        is_compose = name.startswith(("docker-compose", "compose")) and name.endswith((".yml", ".yaml"))
+        if not (is_hcl or is_compose):
+            continue
+        text = _read(repo_path, entry.path)
+        seen: dict[str, list[int]] = defaultdict(list)
+        lines = text.splitlines()
+        if is_hcl:
+            spans = [(text.count("\n", 0, m.start(1)), m.group(1)) for m in _ENV_BLOCK.finditer(text)]
+            candidates = [(start + i, line) for start, block in spans for i, line in enumerate(block.splitlines())]
+            pattern = _HCL_ASSIGN
+        else:
+            candidates = list(enumerate(lines))
+            pattern = _COMPOSE_ENV
+        for idx, line in candidates:
+            match = pattern.match(line)
+            if not match:
+                continue
+            key, value = match.group(1), match.group(2)
+            seen[key].append(idx + 1)
+            flags = [f for f in classify_env_value(key, value) if f not in ("placeholder", "empty")]
+            if flags:
+                signals.deploy_env.append(Signal(entry.path, idx + 1, f"{key}: {'; '.join(flags)} (value not shown)"))
+        for n, line in enumerate(lines, start=1):
+            if re.match(r"(?i)^\s*privileged\s*[:=]\s*true", line):
+                signals.deploy_env.append(Signal(entry.path, n, "container runs privileged (full host access if compromised)"))
+            elif is_hcl and re.match(r"^\s*count\s*=\s*1\s*$", line):
+                signals.deploy_env.append(Signal(entry.path, n, "job pinned to a single instance (count = 1)"))
+        for key, nums in seen.items():
+            if len(nums) > 1:
+                signals.deploy_env.append(Signal(entry.path, nums[0], f"{key} set {len(nums)} times (lines {', '.join(map(str, nums))}) — last writer wins"))
+
+
+def _production_signals(files, live: set[str], edges, repo_path: Path, manifest: RepositoryManifest,
+                        signals: RuntimeSignals) -> None:
+    for py in files:
+        is_live = py.path in live
+        for fn in _functions(py.tree):
+            loads = dumps = grows = False
+            for node in _own_nodes(fn):
+                if isinstance(node, ast.Call):
+                    callee = _dotted(node.func)
+                    last = callee.split(".")[-1]
+                    if last in ("load", "loads") and callee.startswith("json") or re.match(r"(?i)^_?(read|load)_\w*(snapshot|state|file|json|progress|store)", last):
+                        loads = True
+                    elif last in ("dump", "dumps") and callee.startswith("json") or re.match(r"(?i)^_?(write|save|dump|persist)_\w*(snapshot|state|file|json|progress|store)", last):
+                        dumps = True
+                    elif last in ("append", "extend"):
+                        grows = True
+            if is_live and loads and dumps and (grows or re.search(r"(?i)progress|snapshot|event|append|record", fn.name)):
+                signals.whole_file_rewrites.append(Signal(
+                    py.path, fn.lineno, f"{fn.name}() reads a whole JSON document, changes it and writes it all back"
+                ))
+            if not is_live:
+                continue
+            whole = re.match(r"(?i)^_?(get|list|load|fetch|read)_all", fn.name)
+            if whole and not re.search(r"\b(limit|offset|page|cursor)\b", ast.unparse(fn.args)):
+                signals.unbounded_reads.append(
+                    Signal(py.path, fn.lineno, f"{fn.name}() returns a whole collection (no limit/offset)")
+                )
+        if not is_live:
+            continue
+        for node in ast.walk(py.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = _dotted(node.func)
+            last = callee.split(".")[-1]
+            if last in _NAIVE_DT and callee.startswith(("datetime", "dt")):
+                signals.naive_datetimes.append(Signal(py.path, node.lineno, f"{callee}() returns a naive datetime"))
+            elif last == "now" and callee.endswith("datetime.now") and not node.args and not node.keywords:
+                signals.naive_datetimes.append(Signal(py.path, node.lineno, "datetime.now() without a timezone"))
+            elif last in ("listdir", "scandir", "walk", "iterdir", "glob", "rglob") and callee.split(".")[0] in ("os", "glob", "Path") \
+                    or last in ("iterdir", "rglob") and isinstance(node.func, ast.Attribute):
+                signals.unbounded_reads.append(Signal(py.path, node.lineno, f"{callee}() scans a whole directory"))
+
+    # startup: lifespan / startup handlers in app roots, and model clients built at import in live modules
+    for py in files:
+        if py.path not in live:
+            continue
+        for fn in _functions(py.tree):
+            decorators = " ".join(ast.unparse(d) for d in fn.decorator_list)
+            if fn.name != "lifespan" and "startup" not in decorators and fn.name not in ("startup", "on_startup"):
+                continue
+            guarded = {id(n) for t in _own_nodes(fn) if isinstance(t, ast.Try) for b in t.body for n in ast.walk(b)}
+            for node in _own_nodes(fn):
+                if isinstance(node, ast.Call) and id(node) not in guarded:
+                    callee = _dotted(node.func).split(".")[-1]
+                    if re.search(r"(?i)(load|init|warm|preload|connect|get_.*(model|index|store|client|embedding)|build)", callee):
+                        signals.startup_fragility.append(Signal(
+                            py.path, node.lineno,
+                            f"startup runs {callee}() with no error handling — if it fails the whole API does not start",
+                        ))
+    live_clients = [s for s in signals.model_clients_at_import if s.file in live]
+    for s in live_clients:
+        signals.startup_fragility.append(Signal(
+            s.file, s.line, f"{s.text.split(' built', 1)[0]} constructed when the module is imported — a provider/network "
+            "failure breaks every import of it",
+        ))
+
+    # layering: top-level packages that import each other both ways
+    def layer(path: str) -> str:
+        parts = PurePosixPath(path).parts
+        return "/".join(parts[:2]) if len(parts) > 2 else parts[0]
+
+    cross: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for src, targets in (edges or {}).items():
+        if src not in live:
+            continue
+        for target in targets:
+            a, b = layer(src), layer(target)
+            if a != b:
+                cross[(a, b)].append(f"{src} -> {target}")
+    for (a, b), examples in sorted(cross.items()):
+        if a < b and (b, a) in cross:
+            signals.layer_cycles.append((a, b, tuple(examples[:3] + cross[(b, a)][:3])))
+
+    # tests that cannot fail, credentials in test/automation scripts
+    for path in signals.test_files:
+        text = _read(repo_path, path)
+        if path.endswith(".py") and "assert" not in text and "pytest.raises" not in text and "self.assert" not in text:
+            signals.weak_tests.append(Signal(path, 1, "test file with no assertion — it cannot fail"))
+        for n, line in enumerate(text.splitlines(), start=1):
+            if _TEST_CREDENTIAL.search(line):
+                signals.weak_tests.append(Signal(path, n, "credential hard-coded in a test/automation script"))
+                break
+
+    # lockfiles
+    names = {f.path for f in manifest.files}
+    for entry in manifest.files:
+        name = PurePosixPath(entry.path).name
+        folder = str(PurePosixPath(entry.path).parent)
+        prefix = "" if folder in (".", "") else folder + "/"
+        if name.startswith("requirements") and name.endswith(".txt"):
+            text = _read(repo_path, entry.path)
+            reqs = [ln.split("#", 1)[0].strip() for ln in text.splitlines()]
+            reqs = [r for r in reqs if r and not r.startswith(("-", "git+", "http"))]
+            unpinned = [r for r in reqs if "==" not in r]
+            if not any(prefix + lock in names for lock in _LOCKFILES) and (unpinned or "--hash" not in text):
+                signals.supply_chain.append(Signal(
+                    entry.path, 1,
+                    f"no lockfile next to it; {len(unpinned)} of {len(reqs)} requirements unpinned, transitive versions float",
+                ))
+        elif name == "package.json" and "node_modules" not in entry.path:
+            if not any(prefix + lock in names for lock in _LOCKFILES):
+                signals.supply_chain.append(Signal(entry.path, 1, "no package-lock/yarn/pnpm lockfile next to package.json"))
 
 
 # ----------------------------------------------------------------------
@@ -694,7 +932,9 @@ def _parallel_implementations(files, live: set[str], signals: RuntimeSignals) ->
 # ----------------------------------------------------------------------
 
 
-def build_runtime_signals(files, repo_path: Path, manifest: RepositoryManifest, *, unreachable, routes) -> RuntimeSignals:
+def build_runtime_signals(
+    files, repo_path: Path, manifest: RepositoryManifest, *, unreachable, routes, edges=None
+) -> RuntimeSignals:
     """Compute every signal. ``files`` are the review maps' parsed Python files."""
     signals = RuntimeSignals()
     dead = set(unreachable)
@@ -709,6 +949,9 @@ def build_runtime_signals(files, repo_path: Path, manifest: RepositoryManifest, 
         ("parallel_implementations", lambda: _parallel_implementations(files, live, signals)),
         ("structure", lambda: _structure_signals(files, live, routes, signals)),
         ("controls", lambda: _absent_controls(files, live, routes, signals)),
+        ("artifacts", lambda: _artifact_signals(repo_path, manifest, signals)),
+        ("deploy_env", lambda: _deploy_env_signals(repo_path, manifest, signals)),
+        ("production", lambda: _production_signals(files, live, edges, repo_path, manifest, signals)),
     ):
         try:
             step()
@@ -766,6 +1009,19 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
     lines += block("Identifier shape used as meaning", [s.row for s in signals.id_shape_checks])
     lines += block("Production controls with no trace anywhere in the live code",
                    [f"{label} (lane: {lane})" for lane, label, _ in signals.absent_controls])
+    lines += block("Secrets / personal data shipped with the code or baked into the image",
+                   [s.row if s.line else f"{s.text} ({s.file})" for s in signals.packaged_artifacts])
+    lines += block("Deploy manifests: duplicate env keys, local/dev targets, privileged or single-instance jobs",
+                   [s.row for s in signals.deploy_env])
+    lines += block("Unbounded reads (whole tables, whole directories)", [s.row for s in signals.unbounded_reads])
+    lines += block("All-or-nothing startup (heavy init with no error handling, clients built at import)",
+                   [s.row for s in signals.startup_fragility])
+    lines += block("Whole-file JSON rewrites per event", [s.row for s in signals.whole_file_rewrites])
+    lines += block("Layers importing each other both ways (layering violations)",
+                   [f"{a} <-> {b}: " + "; ".join(ex) for a, b, ex in signals.layer_cycles])
+    lines += block("Tests that cannot fail / credentials in test scripts", [s.row for s in signals.weak_tests])
+    lines += block("Supply chain: missing lockfiles, unpinned base images", [s.row for s in signals.supply_chain])
+    lines += block("Naive datetimes (no timezone)", [s.row for s in signals.naive_datetimes])
     lines += block("Parallel implementations (same operation, names differ by a modifier; bodies differ)",
                    [f"{name}: " + "; ".join(s.row for s in sites) for name, sites in signals.parallel_implementations], 20)
     return "\n".join(lines)

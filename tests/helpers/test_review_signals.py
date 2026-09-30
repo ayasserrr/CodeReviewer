@@ -276,3 +276,122 @@ def test_env_contradictions_compare_flags_only(tmp_path: Path):
         ("API_URL", [(".env.example", "points at localhost/loopback"),
                      ("deploy/.env.prod.example", "no flag (a real, non-local value)")]),
     ]
+
+
+PRODUCTION = {
+    "svc/app/main.py": '''
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from app.store import preload_vector_index, get_all_candidates
+from core.engine import score
+import os
+SECRET = os.getenv("SECRET_KEY", "secret")
+
+@asynccontextmanager
+async def lifespan(app):
+    preload_vector_index()
+    yield
+
+app = FastAPI(lifespan=lifespan)
+
+@app.get("/candidates")
+async def candidates():
+    return get_all_candidates()
+''',
+    "svc/app/store.py": '''
+import json, os
+from datetime import datetime
+from app.models import Candidate
+
+def preload_vector_index():
+    return None
+
+def get_all_candidates(session=None):
+    return session.execute(select(Candidate)).scalars().all()
+
+def publish(path, event):
+    snapshot = _read_snapshot(path)
+    snapshot["events"].append(event)
+    _write_snapshot(path, snapshot)
+
+def _read_snapshot(path):
+    return json.load(open(path))
+
+def _write_snapshot(path, data):
+    json.dump(data, open(path, "w"))
+
+def scan(folder):
+    return os.listdir(folder)
+
+def token_expiry():
+    return datetime.utcnow()
+''',
+    "svc/app/models.py": "class Candidate: ...\n",
+    "svc/core/engine.py": "from app.models import Candidate\n\ndef score(c: Candidate):\n    return 1\n",
+    "svc/test.py": "from selenium import webdriver\nPASSWORD = 'recruiter123'\ndriver = webdriver.Chrome()\n",
+    "svc/requirements.txt": "fastapi\nuvicorn==0.30\n",
+    "svc/Dockerfile": "FROM python\nWORKDIR /app\nCOPY . .\n",
+    "svc/src/assets/cvs/req_1/123_jane.pdf": "%PDF-1.4",
+    "svc/src/assets/cvs/req_1/124_john.pdf": "%PDF-1.4",
+    "svc/deploy/nomad/dev/app.nomad": (
+        'job "x" {\n  group "g" {\n    count = 1\n    task "t" {\n      config {\n        privileged = true\n'
+        '      }\n      env {\n        BASE_URL = "http://localhost:8000"\n        API_KEY = "abc"\n'
+        '        BASE_URL = "https://prod.example.com"\n      }\n    }\n  }\n}\n'
+    ),
+}
+
+
+@pytest.fixture
+def production(tmp_path: Path):
+    entries = []
+    for rel, text in PRODUCTION.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        language = "Python" if rel.endswith(".py") else None
+        entries.append(FileEntry(path=rel, language=language, size_bytes=len(text), lines=text.count("\n")))
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+    )
+    return build_review_maps(tmp_path, manifest)
+
+
+def test_packaged_artifacts_and_supply_chain(production):
+    sig = production.signals
+    packaged = " | ".join(s.text for s in sig.packaged_artifacts)
+    assert "2 personal documents (CVs/uploads) stored in the source tree" in packaged
+    assert "no .dockerignore" in packaged
+    chain = " | ".join(s.text for s in sig.supply_chain)
+    assert "base image `python` is not pinned" in chain
+    assert "no lockfile next to it; 1 of 2 requirements unpinned" in chain
+
+
+def test_deploy_manifest_env_never_shows_values(production):
+    rows = [s.text for s in production.signals.deploy_env]
+    assert "job pinned to a single instance (count = 1)" in rows
+    assert "container runs privileged (full host access if compromised)" in rows
+    assert any(r.startswith("BASE_URL set 2 times") for r in rows)
+    assert any(r.startswith("BASE_URL: points at localhost") for r in rows)
+    assert not any("abc" in r or "prod.example.com" in r for r in rows)
+
+
+def test_reads_startup_rewrites_and_datetimes(production):
+    sig = production.signals
+    unbounded = " | ".join(s.text for s in sig.unbounded_reads)
+    assert "get_all_candidates() returns a whole collection" in unbounded and "os.listdir()" in unbounded
+    assert any("preload_vector_index() with no error handling" in s.text for s in sig.startup_fragility)
+    assert [s.text.split("(")[0] for s in sig.whole_file_rewrites] == ["publish"]
+    assert [s.text for s in sig.naive_datetimes] == ["datetime.utcnow() returns a naive datetime"]
+
+
+def test_layering_and_weak_tests(production):
+    sig = production.signals
+    assert [(a, b) for a, b, _ in sig.layer_cycles] == [("svc/app", "svc/core")]
+    weak = {s.text for s in sig.weak_tests}
+    assert weak == {"test file with no assertion — it cannot fail", "credential hard-coded in a test/automation script"}
+
+
+def test_startup_validation_control(production):
+    labels = [label for lane, label, _ in production.signals.absent_controls if lane == "secrets"]
+    assert labels and labels[0].startswith("startup validation of required configuration")

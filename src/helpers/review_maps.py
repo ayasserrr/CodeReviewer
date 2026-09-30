@@ -1049,7 +1049,9 @@ def build_review_maps(repo_path: Path, manifest: RepositoryManifest, *, inspect_
 
 
 def _fill_signals(maps: ReviewMaps, files: list[_PyFile], repo_path: Path, manifest: RepositoryManifest) -> None:
-    maps.signals = build_runtime_signals(files, repo_path, manifest, unreachable=maps.unreachable, routes=maps.routes)
+    maps.signals = build_runtime_signals(
+        files, repo_path, manifest, unreachable=maps.unreachable, routes=maps.routes, edges=maps.import_edges
+    )
 
 
 def _fill_routes(maps: ReviewMaps, files: list[_PyFile]) -> None:
@@ -1552,5 +1554,17 @@ def build_inventory(
         section("Executor nesting / single-worker thread pools", [s.row for s in maps.signals.executor_nesting]),
         section("Production controls with no trace anywhere in the live code",
                 [label for _, label, _ in maps.signals.absent_controls]),
+        section("Secrets / personal data shipped with the code or baked into the image",
+                [s.row if s.line else f"{s.text} ({s.file})" for s in maps.signals.packaged_artifacts]),
+        section("Deploy manifests: duplicate env keys, local/dev targets, privileged or single-instance jobs",
+                [s.row for s in maps.signals.deploy_env]),
+        section("Unbounded reads (whole tables, whole directories)", [s.row for s in maps.signals.unbounded_reads]),
+        section("All-or-nothing startup", [s.row for s in maps.signals.startup_fragility]),
+        section("Whole-file JSON rewrites per event", [s.row for s in maps.signals.whole_file_rewrites]),
+        section("Layers importing each other both ways",
+                [f"{a} <-> {b}: " + "; ".join(ex) for a, b, ex in maps.signals.layer_cycles]),
+        section("Tests that cannot fail / credentials in test scripts", [s.row for s in maps.signals.weak_tests]),
+        section("Supply chain: missing lockfiles, unpinned base images", [s.row for s in maps.signals.supply_chain]),
+        section("Naive datetimes (no timezone)", [s.row for s in maps.signals.naive_datetimes]),
     ]
     return tuple(s for s in sections if s is not None)

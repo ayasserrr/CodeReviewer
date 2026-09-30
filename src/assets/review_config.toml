@@ -79,6 +79,10 @@ developer's machine, and do its parts agree with each other?
   strings (they end up in logs, history, referrers).
 - Outbound calls: timeouts, retries of non-idempotent requests, error handling that hides
   failures, global side effects inside HTTP helpers.
+- Operational scripts in your scope (migrations, bootstrap/entrypoint, shell, SQL,
+  Makefile): run each one in your head against an EXISTING production environment and
+  a second time — does it mark schema as applied without applying it, drop or reset
+  data, depend on the developer's paths, or silently continue after a failed step?
 - Start from env_map.md and client_calls.md; everything else from reading the code.
 """
 

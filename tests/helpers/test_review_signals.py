@@ -443,3 +443,46 @@ def test_documented_routes_are_marked_as_contracts(tmp_path: Path):
     ])
     _fill_documented_routes(maps, tmp_path, manifest)
     assert maps.documented_routes == {"/api/v1/auth/me": "API_DOCUMENTATION.md"}
+
+
+def test_hotspots_rank_functions_by_combined_side_effects(tmp_path: Path):
+    files = {
+        "app/main.py": "from fastapi import FastAPI\nfrom app.routes import router\napp = FastAPI()\n"
+                       "app.include_router(router)\n",
+        "app/routes.py": '''
+from fastapi import APIRouter
+from app import orders
+router = APIRouter()
+
+@router.post("/orders")
+def place_order(body: dict, session=None):
+    order = orders.create_order(session, body)
+    send_email(body["email"], order)
+    return order
+
+@router.get("/orders")
+def list_orders(session=None):
+    return session.query("x")
+''',
+        "app/orders.py": '''
+def create_order(session, body):
+    session.add(body)
+    session.commit()
+    return body
+''',
+        "app/other.py": "def create_order():\n    return 1\n",
+        "app/mail.py": "def send_email(to, order):\n    pass\n",
+    }
+    entries = []
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+        entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+    )
+    hotspots = build_review_maps(tmp_path, manifest).signals.hotspots
+    # The handler's db write lives in orders.create_order (resolved by module, not the other.py namesake).
+    assert [h.row for h in hotspots] == [
+        "`place_order` (db write, messaging, route handler; 4 lines) (app/routes.py:7)"]

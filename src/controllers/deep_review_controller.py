@@ -311,7 +311,7 @@ class DeepReviewController(BaseController):
             "1. UNDERSTAND: read /_review/context/system_overview.md, agents_md.md if present, and the entry points "
             "and core modules that matter for your lane. Work out how THIS system works: its purpose, main flows, data, "
             "trust boundaries and where failure would hurt most.\n"
-            "2. HYPOTHESIZE: call record_hypotheses with your system model and at least 4 suspicions specific to this "
+            "2. HYPOTHESIZE: call record_hypotheses with your system model and at least 6 suspicions specific to this "
             "repository — things an expert would check here because of how this system is built, not generic "
             "categories and not copies of the leads below.\n"
             "3. INVESTIGATE: prove or disprove each hypothesis in the code (resolve_hypothesis), sweep your file "
@@ -350,7 +350,7 @@ class DeepReviewController(BaseController):
             if scope_files and not any(h["lane"] == category.id for h in workspace.hypotheses.values()):
                 parts.append(
                     "You have not recorded your system model and hypotheses. Call record_hypotheses now: how this "
-                    "system works for your lane, and at least 4 repository-specific suspicions with their files. Then "
+                    "system works for your lane, and at least 6 repository-specific suspicions with their files. Then "
                     "investigate each."
                 )
             open_h = workspace.open_hypotheses(category.id)
@@ -389,6 +389,14 @@ class DeepReviewController(BaseController):
                     "Static findings you own are still untriaged. Sample 2-3 instances per group with "
                     "query_static_findings, then give each group one verdict with triage_static_rule:\n"
                     + "\n".join(f"- {tool} {rule}: {count} untriaged" for tool, rule, count in untriaged[:15])
+                )
+            unrecorded = workspace.unrecorded_true_positives(category.id)
+            if unrecorded:
+                parts.append(
+                    "You triaged these severe static findings as true_positive but no finding reports them. A "
+                    "triage verdict does not reach the report: record each (group those that share one fix, e.g. "
+                    "all CVEs of one package) with its real exploitability in THIS system, or re-triage it with "
+                    "the code fact that makes it harmless here:\n" + "\n".join(f"- {r}" for r in unrecorded[:20])
                 )
             return ("Before you finish:\n\n" + "\n\n".join(parts)) if parts else None
 
@@ -442,6 +450,39 @@ class DeepReviewController(BaseController):
 
         await asyncio.gather(*(run_part(*part) for part in parts))
 
+        await self._verify_findings(category, workspace, brief, files, repo_path, semaphore, runs)
+        await self._audit_negatives(category, workspace, brief, files, repo_path, semaphore, runs)
+
+    async def _audit_negatives(self, category, workspace, brief, files, repo_path, semaphore, runs) -> None:
+        """A second agent checks the lane's "this is safe" conclusions, the way findings are checked."""
+        items = workspace.negatives_to_audit(category.id)
+        if not items:
+            return
+        refs = {i["ref"] for i in items}
+        kickoff = (
+            "The specialist concluded that each item below is NOT a defect. You are the skeptic: re-open the code "
+            "and decide whether that conclusion holds. Common failure modes: the protection exists but not on every "
+            "path (crash, cancellation, background task), a different caller bypasses it, the note describes other "
+            "code than the claim. For each item call uphold (citing the code that makes it safe) or overturn "
+            "(record the defect — it becomes a verified finding).\n\n"
+            + "\n\n".join(f"### {i['ref']} ({i['kind']})\nClaim: {i['claim']}\nSpecialist's reason: {i['reason']}"
+                            for i in items)
+        )
+
+        def pending() -> str | None:
+            left = [r for r in refs if r not in workspace.negative_audit]
+            return ("These items are not judged yet: " + ", ".join(sorted(left))
+                    + ". Call uphold or overturn for each.") if left else None
+
+        async with semaphore:
+            runs.append(await self._run(
+                f"verifier:{category.id}-negatives", role="verifier", repo_path=repo_path,
+                system_prompt=verifier_prompt(category, brief), tools=workspace.negative_audit_tools(category),
+                explorer_tools=workspace.query_tools(), model_calls=self.config.DEEP_REVIEW_VERIFIER_MODEL_CALLS,
+                kickoff=kickoff, files=files, completion_check=pending,
+            ))
+
+    async def _verify_findings(self, category, workspace, brief, files, repo_path, semaphore, runs) -> None:
         pending = workspace.findings_to_verify(category.id)
         if not pending:
             return

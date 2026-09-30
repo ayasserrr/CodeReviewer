@@ -113,6 +113,7 @@ def _is_script_or_test(path: str, scripts: set[str], unreachable: set[str]) -> b
     return is_test or path in scripts or ("scripts" in parts[:-1] and path in unreachable)
 _AUTHISH_PATH = re.compile(r"(?i)(auth|security|jwt|token|otp|session|password|login)")
 _LEAD_LINE_TOLERANCE = 15
+_SEVERE_STATIC = {"critical", "high"}  # security tools only; pyright/radon use "error" for ordinary hits
 _NON_REASON = re.compile(
     r"(?i)\b(budget|out of time|no time|time ran|ran out|partially|not (fully )?(investigated|checked|traced|reviewed)|"
     r"did not (check|trace|review)|covered (by|in|under) (finding|another)|see finding|already (recorded|reported|covered)|"
@@ -122,7 +123,9 @@ _ANCHOR_TERMS = frozenset({
     "cors", "csrf", "xss", "jwt", "ssrf", "xxe", "idor", "csp", "hsts", "otp", "sqli", "injection", "traversal",
     "deserialization", "clickjacking", "openapi", "swagger", "mktemp", "pickle", "yaml", "iframe", "sandbox",
 })
-_MIN_HYPOTHESES = 4
+_MIN_HYPOTHESES = 6
+_GENERIC_NOTE_WORDS = frozenset({"code", "file", "function", "line", "this", "that", "with", "because", "safe",
+                                 "defect", "issue", "application", "system", "data", "value", "check", "used"})
 _EACH_ROW_MAX_KEYS = 25
 _ROW_SYMBOL = re.compile(r"^`?([A-Za-z_][A-Za-z0-9_]{3,})`?\s*\(")
 """Lead groups up to this many distinct locations are tracked row by row, not as a whole."""
@@ -322,7 +325,7 @@ class _HypothesesArgs(BaseModel):
         "trust boundaries, what could hurt most) — learned from the code and AGENTS.md, not from the leads.",
     )
     hypotheses: list[_HypothesisInput] = Field(
-        ..., min_length=1, description="Repository-specific suspicions to investigate (at least 4)."
+        ..., min_length=1, description="Repository-specific suspicions to investigate (at least 6)."
     )
 
 
@@ -331,6 +334,22 @@ class _ResolveHypothesisArgs(BaseModel):
     outcome: Literal["confirmed", "ruled_out"]
     finding_id: str | None = Field(None, description="For confirmed: the finding you recorded for it.")
     note: str = Field("", description="For ruled_out: what makes it safe, citing the repository path:line.")
+
+
+class _UpholdArgs(BaseModel):
+    ref: str = Field(..., description="The item id (H-... or D-...).")
+    note: str = Field(..., description="The code you checked that makes it safe, citing repository path:line.")
+
+
+class _OverturnArgs(BaseModel):
+    ref: str = Field(..., description="The item id (H-... or D-...) whose 'safe' conclusion is wrong.")
+    why_wrong: str = Field(..., description="Why the specialist's reasoning does not hold, citing the code.")
+    title: str
+    severity: Literal["Critical", "High", "Medium", "Low"]
+    description: str
+    impact: str
+    evidence: list[EvidenceInput] = Field(..., min_length=1)
+    exposure: Literal["live", "conditional", "latent", "dead", "theoretical"] = "live"
 
 
 class _DismissLeadArgs(BaseModel):
@@ -481,6 +500,7 @@ class ReviewWorkspace:
         self._scopes: dict[str, list[str]] | None = None
         # Per lane: the agent's own system model and repo-specific hypotheses (id -> record).
         self.system_models: dict[str, str] = {}
+        self.negative_audit: dict[str, str] = {}  # ref -> "upheld: ..." / "overturned -> FID"
         self.hypotheses: dict[str, dict[str, Any]] = {}
         self.invalid_evidence_bounces = 0
         self._counters: Counter[str] = Counter()
@@ -1157,6 +1177,17 @@ class ReviewWorkspace:
         def rows(signals) -> list[tuple[str, str]]:
             return [(f"{x.file}:{x.line}" if x.line else x.file, x.row if x.line else f"{x.text} ({x.file})") for x in signals]
 
+        # Keyed by file (not file:line) and closed only by a finding NAMING the function: a defect deep
+        # inside a long function is still about that function.
+        if category_id == "correctness":
+            add("Hotspots — functions that combine several kinds of side effect. For each, walk every failure "
+                "path: a step failing after an earlier one committed, two concurrent calls, a retry, a crash "
+                "mid-way. Where is state left inconsistent, a lock or record stuck, work duplicated or lost?",
+                [(x.file, x.row) for x in sig.hotspots])
+        if category_id == "security":
+            add("Route handlers with the most powerful side effects — who can call each (authn/authz), what "
+                "caller input reaches the file, network, subprocess or database effect, and is it constrained?",
+                [(x.file, x.row) for x in sig.hotspots if "route handler" in x.text])
         if category_id in ("integration", "auth"):
             add("Credentials accepted in the query string (proxy/server logs, browser history, referrers)",
                 rows(sig.query_credentials))
@@ -1303,10 +1334,40 @@ class ReviewWorkspace:
         if not mine:
             return []
         pending = [f for f in mine if f.id not in self.triage]
+        # A severe hit is never covered by the "most of it is triaged" allowance.
+        severe = [f for f in pending if f.severity in _SEVERE_STATIC]
         if len(pending) <= threshold * len(mine):
+            pending = severe
+        if not pending:
             return []
         groups = Counter((f.tool, f.category) for f in pending)
         return [(tool, rule, count) for (tool, rule), count in groups.most_common()]
+
+    def unrecorded_true_positives(self, category_id: str) -> list[str]:
+        """Severe static hits the lane marked real that no finding (in any lane) reports.
+
+        A triage verdict alone never reaches the report's findings — a confirmed CVE or
+        injection sink that only lives in the triage table is a lost defect."""
+        owned = {t for t, owner in self.config.static_tool_owners.items() if owner == category_id}
+        texts = [" ".join([f.title, f.description, f.impact or ""]).lower() for f in self.findings.values()]
+        spans: dict[str, list[tuple[int, int]]] = defaultdict(list)
+        for f in self.findings.values():
+            for ref in f.evidence:
+                spans[ref.file].append((ref.line_start, ref.line_end or ref.line_start))
+        rows = []
+        for sf in self.static_by_id.values():
+            if (sf.tool not in owned or sf.severity not in _SEVERE_STATIC
+                    or getattr(self.triage.get(sf.id), "verdict", None) != "true_positive"):
+                continue
+            rule = sf.category.lower()
+            package = sf.message.split()[0].lower() if sf.line is None and sf.message else ""
+            cited = sf.line is not None and any(
+                lo - _LEAD_LINE_TOLERANCE <= sf.line <= hi + _LEAD_LINE_TOLERANCE for lo, hi in spans.get(sf.file, ()))
+            named = any(rule in t or (len(package) > 2 and re.search(rf"\b{re.escape(package)}\b", t)) for t in texts)
+            if not (cited or named):
+                where = f"{sf.file}:{sf.line}" if sf.line else sf.file
+                rows.append(f"{sf.id} [{sf.tool} {sf.category}, {sf.severity}] {where} — {sf.message[:140]}")
+        return rows
 
     def unaddressed_leads(self, category_id: str, *, any_lane: bool = False) -> list[tuple[str, list[str]]]:
         """Lead groups (or rows) no finding cites. ``any_lane``: a finding from ANY lane counts
@@ -1467,9 +1528,81 @@ class ReviewWorkspace:
                 return "NOT RECORDED — confirmed needs the id of the finding you recorded for it."
         elif not self._cites_repository(args.note) or _NON_REASON.search(args.note):
             return "NOT RECORDED — ruled_out needs the code that shows it is safe (a repository path:line in the note)."
+        elif not self._note_matches(args.note, record["statement"], record["files"]):
+            return (
+                f"NOT RECORDED — this note does not address {args.hypothesis_id} ('{record['statement'][:100]}'). "
+                "Re-check which hypothesis you are closing and cite the code that decides it."
+            )
         with self._lock:
             record.update(outcome=args.outcome, finding_id=args.finding_id, note=args.note.strip()[:600])
         return f"{args.hypothesis_id}: {args.outcome}."
+
+    def _note_matches(self, note: str, statement: str, files) -> bool:
+        """A note closes a hypothesis/lead only if it talks about it (shares its files or key words)."""
+        note_l = (note or "").lower()
+        if any(PurePosixPath(f).name.lower() in note_l for f in files):
+            return True
+        words = set(re.findall(r"[a-z][a-z0-9_]{3,}", statement.lower())) - _TITLE_STOPWORDS - _GENERIC_NOTE_WORDS
+        return len(words & set(re.findall(r"[a-z][a-z0-9_]{3,}", note_l))) >= 2
+
+    # ------------------------------------------------------------------
+    # Audit of negative conclusions (dismissed leads, ruled-out hypotheses)
+    # ------------------------------------------------------------------
+
+    def negatives_to_audit(self, category_id: str, limit: int = 12) -> list[dict[str, str]]:
+        """The lane's "this is safe" conclusions, for a second agent to check like any finding.
+
+        A wrong dismissal is as costly as a false finding and used to go unchecked (observed: a
+        stuck-lock lead dismissed because the release sat in a background task's finally block —
+        exactly the bug)."""
+        items: list[dict[str, str]] = []
+        for hid, h in self.hypotheses.items():
+            if h["lane"] == category_id and h["outcome"] == "ruled_out" and hid not in self.negative_audit:
+                items.append({"ref": hid, "kind": "ruled-out hypothesis", "claim": h["statement"], "reason": h["note"]})
+        for n, ((lane, row), reason) in enumerate(sorted(self.dismissed_leads.items()), start=1):
+            ref = f"D-{self.config.category(lane).code}-{n}" if lane == category_id else ""
+            if ref and ref not in self.negative_audit:
+                items.append({"ref": ref, "kind": "dismissed lead", "claim": row, "reason": reason})
+        return items[:limit]
+
+    def uphold_negative(self, category_id: str, args: "_UpholdArgs") -> str:
+        item = next((i for i in self.negatives_to_audit(category_id, limit=999) if i["ref"] == args.ref), None)
+        if item is None:
+            return f"Unknown or already judged item '{args.ref}'."
+        if not self._cites_repository(args.note):
+            return "NOT RECORDED — upholding needs the code you checked (a repository path:line in the note)."
+        with self._lock:
+            self.negative_audit[args.ref] = f"upheld: {args.note.strip()[:300]}"
+        return f"{args.ref}: upheld."
+
+    def overturn_negative(self, category: ReviewCategory, args: "_OverturnArgs") -> str:
+        item = next((i for i in self.negatives_to_audit(category.id, limit=999) if i["ref"] == args.ref), None)
+        if item is None:
+            return f"Unknown or already judged item '{args.ref}'."
+        record = _RecordFindingArgs(
+            title=args.title, severity=args.severity, confidence="high", description=args.description,
+            impact=args.impact, evidence=args.evidence, exposure=args.exposure,
+        )
+        out = self.record_finding(category, record)
+        if not out.startswith("Recorded "):
+            return out
+        fid = out.split()[1]
+        with self._lock:
+            finding = self.findings[fid]
+            self.findings[fid] = finding.model_copy(update={"verification": Verification(
+                verdict="confirmed", original_severity=finding.severity,
+                note=f"Found by the verifier: the specialist's {item['kind']} was wrong — {args.why_wrong.strip()[:600]}",
+            )})
+            self.verifications[fid] = self.findings[fid].verification
+            self.negative_audit[args.ref] = f"overturned -> {fid}"
+            if args.ref in self.hypotheses:
+                self.hypotheses[args.ref].update(outcome="confirmed", finding_id=fid,
+                                                 note=f"ruling overturned by the verifier: {args.why_wrong[:200]}")
+            else:
+                # Kept (not deleted) so the other D- refs stay stable while the audit runs.
+                for key in [k for k in self.dismissed_leads if k[0] == category.id and k[1] == item["claim"]]:
+                    self.dismissed_leads[key] = f"dismissal overturned by the verifier → {fid}"
+        return f"{args.ref}: overturned; recorded {fid} (verified)."
 
     def open_hypotheses(self, category_id: str) -> list[str]:
         return [f"{hid}: {h['statement'][:160]}" for hid, h in self.hypotheses.items()
@@ -1481,7 +1614,8 @@ class ReviewWorkspace:
             if h["outcome"] == "confirmed":
                 result = f"confirmed → {h['finding_id']}"
             elif h["outcome"] == "ruled_out":
-                result = f"ruled out — {h['note']}"
+                audit = self.negative_audit.get(hid, "")
+                result = f"ruled out — {h['note']}" + ("; verifier upheld" if audit.startswith("upheld") else "")
             else:
                 result = "not resolved"
             rows.append(f"{h['lane']} — {hid}: {h['statement']} [{result}]")
@@ -1639,6 +1773,11 @@ class ReviewWorkspace:
         deploy = {p for p in entries if re.search(
             r"(?i)(^|/)(dockerfile[^/]*|jenkinsfile[^/]*|docker-compose[^/]*|compose\.ya?ml|\.gitlab-ci\.yml)$|/jenkins/|"
             r"\.nomad$|\.github/workflows/|(^|/)k8s/|(^|/)helm/", p)}
+        # Operational scripts run against real environments (migrations, bootstrap, cron): the
+        # deploy-facing lanes must read them, not only the catch-all lane.
+        ops = {p for p in entries if not is_test_file(p) and "node_modules" not in p and re.search(
+            r"(?i)(\.(sh|bash|sql)$|(^|/)(makefile|procfile|alembic\.ini|entrypoint[^/]*)$|(^|/)(migrations?|alembic)/)",
+            p) and (entries[p].size_bytes or 0) > 0}
         manifests = {p for p in entries if re.search(
             r"(?i)(^|/)(requirements[^/]*\.(txt|in)|pyproject\.toml|package\.json|pipfile|setup\.(py|cfg))$", p)
             and "node_modules" not in p}
@@ -1657,11 +1796,11 @@ class ReviewWorkspace:
             "security": route_files | match(r"(auth|security|deps|middleware|permission|guard|export|html|iframe)"),
             "auth": match(r"(auth|security|jwt|token|session|login|user|otp|password|deps)"),
             "integration": env_files | match(r"(config|settings|client|/api/|http|proxy|vite\.config|(^|/)main\.(py|tsx?))")
-            | deploy,
+            | deploy | ops,
             "frontend": set(web),
             "observability": set(maps.app_roots) | {f for f, _ in sig.print_live} | job_files
             | {x.file for x in sig.static_health},
-            "testing": set(sig.test_files) | deploy,
+            "testing": set(sig.test_files) | deploy | ops,
             "secrets": env_files | templates | deploy | match(r"(^|/)scripts?/"),
             "performance": {x.file for x in maps.process_state} | {x.file for x in sig.blocking_in_async} | job_files
             | {x.file for x in sig.unbounded_reads} | {x.file for x in sig.startup_fragility}
@@ -1678,7 +1817,7 @@ class ReviewWorkspace:
         for path in live:
             if path not in claimed:
                 scopes["frontend" if path in set(web) else "correctness"].add(path)
-        live_or_config = set(live) | deploy | manifests | templates | set(sig.test_files)
+        live_or_config = set(live) | deploy | manifests | templates | set(sig.test_files) | ops
         self._scopes = {lane: sorted(p for p in paths if p in live_or_config) for lane, paths in scopes.items()}
         return self._scopes
 
@@ -2169,7 +2308,7 @@ class ReviewWorkspace:
             _tool(lambda: self.list_my_findings(category), "list_my_findings",
                   "Recap of what you have recorded so far (findings, triage progress, KPI coverage)."),
             _tool(lambda **kw: self.record_hypotheses(category, _HypothesesArgs(**kw)), "record_hypotheses",
-                  "FIRST STEP: record your model of this system and at least 4 repository-specific hypotheses "
+                  "FIRST STEP: record your model of this system and at least 6 repository-specific hypotheses "
                   "(suspected defects with the files involved), derived from reading the code.", _HypothesesArgs),
             _tool(lambda **kw: self.resolve_hypothesis(category, _ResolveHypothesisArgs(**kw)), "resolve_hypothesis",
                   "Close one hypothesis: confirmed (with the finding id) or ruled_out (citing the code that makes "
@@ -2203,6 +2342,16 @@ class ReviewWorkspace:
             *self.query_tools(),
             _tool(lambda **kw: self.submit_verification(category_id, _VerifyArgs(**kw)), "submit_verification",
                   "Record your independent verdict on one finding.", _VerifyArgs),
+        ]
+
+    def negative_audit_tools(self, category: ReviewCategory) -> list[BaseTool]:
+        return [
+            *self.query_tools(),
+            _tool(lambda **kw: self.uphold_negative(category.id, _UpholdArgs(**kw)), "uphold",
+                  "The specialist was right: the item is not a defect. Cite the code you checked.", _UpholdArgs),
+            _tool(lambda **kw: self.overturn_negative(category, _OverturnArgs(**kw)), "overturn",
+                  "The specialist was wrong: record the defect as a finding (it is marked verified by you).",
+                  _OverturnArgs),
         ]
 
     def synthesizer_tools(self) -> list[BaseTool]:

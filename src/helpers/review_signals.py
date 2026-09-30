@@ -215,6 +215,10 @@ class RuntimeSignals:
     naive_datetimes: list[Signal] = field(default_factory=list)
     data_processors: list[Signal] = field(default_factory=list)  # third-party services that receive app data
     pipeline_hygiene: list[Signal] = field(default_factory=list)  # CI/deploy script practices
+    # Functions combining several kinds of side effect (db write, network, files, subprocess,
+    # model call, lock, background work): where partial failure and ordering bugs live.
+    hotspots: list[Signal] = field(default_factory=list)
+    hotspot_handlers: set[tuple[str, str]] = field(default_factory=set)  # (file, function) that serve a route
 
     @property
     def ci_without_checks(self) -> list[CiPipeline]:
@@ -1015,6 +1019,111 @@ def _parallel_implementations(files, live: set[str], signals: RuntimeSignals) ->
 # ----------------------------------------------------------------------
 
 
+_DB_WRITE = {"commit", "add", "add_all", "delete", "merge", "execute", "executemany", "bulk_save_objects", "flush",
+             "insert_one", "insert_many", "update_one", "update_many", "delete_one", "delete_many", "replace_one",
+             "bulk_write", "upsert", "save", "create", "update", "bulk_create", "bulk_update"}
+_HTTP_VERBS = {"get", "post", "put", "patch", "delete", "request", "send", "stream", "head"}
+_FS_WRITE = {"write_text", "write_bytes", "copyfileobj", "rmtree", "remove", "unlink", "rename", "replace",
+             "makedirs", "mkdir", "move", "copy", "copyfile", "dump"}
+_SPAWN = {"add_task", "create_task", "ensure_future", "submit", "delay", "apply_async", "enqueue", "send_task",
+          "start_soon", "Thread", "Process"}
+
+
+def _effects(func: ast.AST, model_names: set[str]) -> set[str]:
+    kinds: set[str] = set()
+    for node in _own_nodes(func):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = _dotted(node.func)
+        parts = callee.split(".")
+        last, root, base = parts[-1], parts[0], ".".join(parts[:-1]).lower()
+        if root in ("subprocess", "pty") or callee in ("os.system", "os.popen") or last.startswith(
+                "create_subprocess"):
+            kinds.add("subprocess")
+        elif root in ("requests", "httpx", "aiohttp", "urllib3") or (
+                last in _HTTP_VERBS and re.search(r"(client|http|api|requests)", base)):
+            kinds.add("network")
+        elif last in ("sendmail", "send_message") or "smtp" in base or re.search(r"(?i)send_?(e?mail|sms|notification)",
+                                                                                  last):
+            kinds.add("messaging")
+        elif _is_generation_call(node, model_names):
+            kinds.add("model call")
+        elif last in _SPAWN:
+            kinds.add("background work")
+        elif last in ("acquire", "release") or re.search(r"(?i)lock", last):
+            kinds.add("lock")
+        elif (last == "open" and any(
+                isinstance(a, ast.Constant) and isinstance(a.value, str) and set(a.value) & set("wax")
+                for a in node.args[1:2] + [k.value for k in node.keywords if k.arg == "mode"])) or (
+                last in _FS_WRITE and (root in ("os", "shutil", "json", "pickle") or "path" in base
+                                       or last.startswith("write"))):
+            kinds.add("file write")
+        elif last in _DB_WRITE and re.search(r"(session|db|conn|cursor|collection|repo|table|objects|cur)\b", base):
+            kinds.add("db write")
+    return kinds
+
+
+def _risk_hotspots(files, live: set[str], routes, signals: RuntimeSignals, limit: int = 15) -> None:
+    """Rank live functions by how many KINDS of side effect they combine — no rule list, so it
+    finds the functions worth tracing in any codebase: a failure between two effects leaves
+    state half-written, concurrent calls race, retries duplicate."""
+    model_names = _model_objects(files)
+    handlers = {(r.file, r.handler) for r in routes}
+    # Effects reached through the repository's own functions count too (two calls deep): route
+    # handlers usually delegate the work to services. A call resolves by its module qualifier
+    # ("crud.create_user" -> crud.py), else the same file, else a name defined at most twice.
+    defs: dict[str, list[tuple[str, ast.AST]]] = defaultdict(list)
+    for py in files:
+        if not _is_test_file(py.path):
+            for func in _functions(py.tree):
+                defs[func.name].append((py.path, func))
+    own = {id(f): _effects(f, model_names) for group in defs.values() for _, f in group}
+
+    def resolve(call: ast.Call, path: str) -> list[ast.AST]:
+        dotted = _dotted(call.func).split(".")
+        cands = defs.get(dotted[-1], [])
+        if len(dotted) > 1:
+            hit = [f for p, f in cands if PurePosixPath(p).stem == dotted[-2]]
+            if hit:
+                return hit
+        same = [f for p, f in cands if p == path]
+        return same or ([f for _, f in cands] if len(cands) <= 2 else [])
+
+    def reached(func, path: str, depth: int = 2) -> set[str]:
+        kinds = set(own.get(id(func)) or _effects(func, model_names))
+        if depth:
+            for node in _own_nodes(func):
+                if isinstance(node, ast.Call):
+                    for callee in resolve(node, path):
+                        if callee is not func:
+                            kinds |= reached(callee, path, depth - 1)
+        return kinds
+
+    scored = []
+    for py in files:
+        if py.path not in live:
+            continue
+        for func in _functions(py.tree):
+            kinds = reached(func, py.path)
+            if len(kinds) < 2:
+                continue
+            length = (getattr(func, "end_lineno", func.lineno) or func.lineno) - func.lineno + 1
+            broad = any(isinstance(n, ast.ExceptHandler) and (n.type is None or _dotted(n.type) in (
+                "Exception", "BaseException")) for n in _own_nodes(func))
+            is_handler = (py.path, func.name) in handlers
+            score = 2 * len(kinds) + (3 if is_handler else 0) + min(length / 40, 3) + (1 if broad else 0)
+            notes = sorted(kinds) + (["route handler"] if is_handler else []) + (
+                ["broad except"] if broad else [])
+            scored.append((score, Signal(py.path, func.lineno, f"`{func.name}` ({', '.join(notes)}; {length} lines)")))
+            if is_handler:
+                signals.hotspot_handlers.add((py.path, func.name))
+    per_file: dict[str, int] = defaultdict(int)
+    for _, sig in sorted(scored, key=lambda x: (-x[0], x[1].file, x[1].line)):
+        if per_file[sig.file] < 3 and len(signals.hotspots) < limit:
+            per_file[sig.file] += 1
+            signals.hotspots.append(sig)
+
+
 def build_runtime_signals(
     files, repo_path: Path, manifest: RepositoryManifest, *, unreachable, routes, edges=None
 ) -> RuntimeSignals:
@@ -1037,6 +1146,7 @@ def build_runtime_signals(
         ("artifacts", lambda: _artifact_signals(repo_path, manifest, signals)),
         ("deploy_env", lambda: _deploy_env_signals(repo_path, manifest, signals)),
         ("production", lambda: _production_signals(files, live, edges, repo_path, manifest, signals)),
+        ("hotspots", lambda: _risk_hotspots(files, live, routes, signals)),
     ):
         try:
             step()
@@ -1068,6 +1178,8 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
                    [s.row for s in signals.usage_never_read])
     total = sum(n for _, n in signals.print_live)
     lines += block(f"print() calls in live modules ({total} calls)", [f"{f}: {n}" for f, n in signals.print_live], 25)
+    lines += block("Hotspots: functions combining several kinds of side effect (trace every failure path)",
+                   [s.row for s in signals.hotspots])
     lines += block("Health endpoints that check nothing", [s.row for s in signals.static_health])
     lines += block("External commands run with no timeout", [s.row for s in signals.subprocess_no_timeout])
     lines += [

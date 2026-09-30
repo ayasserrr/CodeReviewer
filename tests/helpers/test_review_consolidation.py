@@ -422,13 +422,14 @@ def test_hypotheses_need_a_system_model_real_files_and_a_cited_resolution(worksp
              "access. Identity arrives from request headers and file uploads are stored on local disk.")
     few = ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=[
         _HypothesisInput(statement="Upload service joins client filenames into disk paths", files=["app/main.py"])]))
-    assert few.startswith("NOT RECORDED") and "at least 4" in few
+    assert few.startswith("NOT RECORDED") and "at least 6" in few
     hyps = [_HypothesisInput(statement=f"Suspected defect number {i} in the routing and service layer", files=[f])
             for i, f in enumerate(["app/main.py", "app/routers/auth.py", "app/services/orders_service.py",
-                                   "app/routers/item_actions.py"], start=1)]
+                                   "app/routers/item_actions.py", "app/services/documents_service.py",
+                                   "src/utils/extract_docx_txt.py"], start=1)]
     out = ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=hyps))
-    assert out.startswith("Recorded H-SEC-1, H-SEC-2, H-SEC-3, H-SEC-4")
-    assert len(ws.open_hypotheses("security")) == 4
+    assert out.startswith("Recorded H-SEC-1, H-SEC-2, H-SEC-3, H-SEC-4, H-SEC-5, H-SEC-6")
+    assert len(ws.open_hypotheses("security")) == 6
     lazy = ws.resolve_hypothesis(security, _ResolveHypothesisArgs(hypothesis_id="H-SEC-1", outcome="ruled_out",
                                                                   note="looks fine"))
     assert lazy.startswith("NOT RECORDED")
@@ -479,3 +480,65 @@ def test_declared_runtimes_are_reported(workspace, tmp_path):
         FileEntry(path="pyproject.toml", language="TOML", size_bytes=40),)})
     assert workspace.declared_runtimes() == ["pyproject.toml: requires-python >=3.14,<4.0"]
     assert "requires-python >=3.14" in workspace.render_system_overview()
+
+
+def test_verifier_audits_the_lanes_safe_conclusions(workspace):
+    from helpers.review_workspace import (
+        _HypothesesArgs,
+        _HypothesisInput,
+        _OverturnArgs,
+        _ResolveHypothesisArgs,
+        _UpholdArgs,
+    )
+
+    ws = workspace
+    security = ws.config.category("security")
+    model = ("The API in app/main.py serves routers under app/routers; services in app/services hold the data "
+             "access. Identity arrives from request headers and file uploads are stored on local disk.")
+    files = ["app/main.py", "app/routers/auth.py", "app/services/orders_service.py", "app/routers/item_actions.py",
+             "app/services/documents_service.py", "src/utils/extract_docx_txt.py"]
+    ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=[
+        _HypothesisInput(statement=f"Suspected defect number {i} in the routing and service layer", files=[f])
+        for i, f in enumerate(files, start=1)]))
+    # A note about other code is refused even when it cites a line.
+    crossed = ws.resolve_hypothesis(security, _ResolveHypothesisArgs(
+        hypothesis_id="H-SEC-3", outcome="ruled_out", note="bcrypt hashing is offloaded at app/routers/auth.py:19"))
+    assert crossed.startswith("NOT RECORDED")
+    for hid, f in (("H-SEC-1", "app/main.py:3"), ("H-SEC-3", "app/services/orders_service.py:4")):
+        ws.resolve_hypothesis(security, _ResolveHypothesisArgs(hypothesis_id=hid, outcome="ruled_out",
+                                                               note=f"guarded at {f}"))
+    refs = [i["ref"] for i in ws.negatives_to_audit("security")]
+    assert refs == ["H-SEC-1", "H-SEC-3"]
+    assert ws.uphold_negative("security", _UpholdArgs(ref="H-SEC-1", note="fine")).startswith("NOT RECORDED")
+    assert ws.uphold_negative("security", _UpholdArgs(ref="H-SEC-1", note="dependency at app/main.py:3")) \
+        == "H-SEC-1: upheld."
+    out = ws.overturn_negative(security, _OverturnArgs(
+        ref="H-SEC-3", why_wrong="the guard at app/services/orders_service.py:4 only covers one caller",
+        title="Order lookup is not scoped to the caller", severity="High",
+        description="The lookup returns any order by id.", impact="Any user reads other users' orders.",
+        evidence=[{"file": "app/services/orders_service.py", "line_start": 1, "line_end": 2}]))
+    assert "overturned" in out
+    fid = out.split("recorded ")[1].split()[0]
+    assert ws.findings[fid].verification.verdict == "confirmed"
+    assert ws.hypotheses["H-SEC-3"]["outcome"] == "confirmed"
+    assert ws.negatives_to_audit("security") == []
+
+
+def test_severe_true_positives_must_reach_a_finding(workspace):
+    from helpers.review_workspace import _TriageArgs
+    from utils.finding import StaticFinding
+
+    ws = workspace
+    cve = StaticFinding(id="sf-cve", tool="pip_audit", file="requirements.txt", line=None, severity="high",
+                        category="GHSA-abcd-1234", message="multipartlib 0.0.5: request body DoS")
+    style = StaticFinding(id="sf-low", tool="pip_audit", file="requirements.txt", line=None, severity="low",
+                          category="GHSA-low", message="otherlib 1.0: minor")
+    ws.static_by_id.update({cve.id: cve, style.id: style})
+    dependencies = ws.config.category("dependencies")
+    assert [g[1] for g in ws.untriaged_groups("dependencies")] == ["GHSA-abcd-1234", "GHSA-low"]
+    ws.triage_static(dependencies, _TriageArgs(finding_ids=["sf-cve", "sf-low"], verdict="true_positive",
+                                               reason="pinned in requirements.txt"))
+    rows = ws.unrecorded_true_positives("dependencies")
+    assert len(rows) == 1 and rows[0].startswith("sf-cve")
+    record(ws, "dependencies", "Vulnerable multipartlib pinned for the upload API", "High", ("app/main.py", 1, 2))
+    assert ws.unrecorded_true_positives("dependencies") == []

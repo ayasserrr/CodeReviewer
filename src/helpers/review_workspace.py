@@ -1084,7 +1084,9 @@ class ReviewWorkspace:
                 by_dir[str(PurePosixPath(path).parent)].append(path)
             add("Backend routes no frontend code calls — an API route is NOT dead just because this frontend skips it; "
                 "record at most ONE grouped finding, only for routes nothing else uses (scripts, other services, docs)",
-                [(r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
+                [(r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})"
+                  + (f" — DOCUMENTED in {self.maps.documented_routes[r.path]}: an external contract unless the "
+                     "docs are stale" if r.path in self.maps.documented_routes else ""))
                  for r in self.maps.routes_without_client()])
             if by_dir:
                 lines = {f.path: f.lines or 0 for f in self.manifest.files}
@@ -1137,6 +1139,9 @@ class ReviewWorkspace:
                 rows([x for x in sig.deploy_env if "privileged" not in x.text and "count = 1" not in x.text]))
         if category_id == "security":
             add("Containers deployed privileged", rows([x for x in sig.deploy_env if "privileged" in x.text]))
+            add("Third-party services that receive application data — which personal data goes to each, is it "
+                "minimized, documented and covered by the users' consent (one grouped finding)",
+                rows(sig.data_processors))
         if category_id == "auth":
             add("Naive datetimes in token / OTP / session code (expiry and iat computed without a timezone)",
                 rows([x for x in sig.naive_datetimes if _AUTHISH_PATH.search(x.file)]))
@@ -1181,6 +1186,14 @@ class ReviewWorkspace:
                 [(c.file, f"{c.path} ({c.file}:{c.line})") for c in self.maps.unmatched_client_calls()])
             add("Tests that cannot fail (no assertion) and credentials hard-coded in test/automation scripts",
                 rows(sig.weak_tests))
+            add("Deployment pipeline hygiene (sudo, curl | sh, secrets echoed, :latest images, --privileged)",
+                rows(sig.pipeline_hygiene))
+            if not sig.route_tests:
+                critical = [r for r in self.maps.routes if r.is_auth_entry or r.accepts_upload
+                            or "CLIENT-ASSERTED IDENTITY" in r.flags]
+                add("Critical routes no test exercises — name them in the missing-tests finding (auth, authorization, "
+                    "uploads) rather than saying 'no tests' in general",
+                    [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in critical][:40])
         elif category_id == "dependencies":
             add("Libraries doing the same job", [(src, f"{fam}: {', '.join(pkgs)} ({src})") for fam, pkgs, src in sig.duplicate_libraries])
             add("Declared dependencies nothing live imports (dead weight / attack surface)",
@@ -1702,7 +1715,7 @@ class ReviewWorkspace:
                 verification = (
                     finding.verification.model_copy(update={"note": f"{finding.verification.note} {note}".strip()})
                     if finding.verification
-                    else Verification(verdict="adjusted", original_severity=finding.severity, note=note)
+                    else Verification(verdict="adjusted", original_severity=finding.severity, note=note, independent=False)
                 )
                 self.findings[fid] = finding.model_copy(update={"severity": ceiling, "verification": verification})
                 capped += 1

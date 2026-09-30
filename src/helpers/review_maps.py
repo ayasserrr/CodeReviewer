@@ -268,6 +268,7 @@ class ReviewMaps:
     identity_unused: list["IdentityUnused"] = field(default_factory=list)
     unguarded_routes: list["ClientRoute"] = field(default_factory=list)
     signals: RuntimeSignals = field(default_factory=RuntimeSignals)
+    documented_routes: dict[str, str] = field(default_factory=dict)  # route path -> doc file that mentions it
 
     # -------------------------------------------------------------- derived
     def imported_by(self) -> dict[str, set[str]]:
@@ -1040,12 +1041,32 @@ def build_review_maps(repo_path: Path, manifest: RepositoryManifest, *, inspect_
         ("env", lambda: _fill_env(maps, files, js_sources, repo_path, inspect_env_files)),
         ("client_calls", lambda: _fill_client_calls(maps, js_sources)),
         ("signals", lambda: _fill_signals(maps, files, repo_path, manifest)),
+        ("docs", lambda: _fill_documented_routes(maps, repo_path, manifest)),
     ):
         try:
             step()
         except Exception:  # one map failing must not cost the others
             logger.exception("review_map_failed", map=name)
     return maps
+
+
+def _fill_documented_routes(maps: ReviewMaps, repo_path: Path, manifest: RepositoryManifest) -> None:
+    """Routes named in the repository's own docs (API docs, READMEs, OpenAPI files): external contracts."""
+    docs = []
+    for entry in manifest.files:
+        lower = entry.path.lower()
+        if lower.endswith((".md", ".rst", ".txt", ".adoc")) or re.search(r"(openapi|swagger)[^/]*\.(json|ya?ml)$", lower):
+            try:
+                docs.append((entry.path, (repo_path / entry.path).read_text(encoding="utf-8", errors="replace")[:500_000]))
+            except OSError:
+                continue
+    for route in maps.routes:
+        bare = re.sub(r"\{[^}]*\}", "", route.path).rstrip("/")
+        tail = "/".join(p for p in route.path.split("/")[-2:] if p and not p.startswith("{"))
+        for path, text in docs:
+            if (bare and bare in text) or (tail and len(tail) > 6 and f"/{tail}" in text):
+                maps.documented_routes[route.path] = path
+                break
 
 
 def _fill_signals(maps: ReviewMaps, files: list[_PyFile], repo_path: Path, manifest: RepositoryManifest) -> None:
@@ -1361,7 +1382,10 @@ def render_client_calls(maps: ReviewMaps) -> str:
         *([f"- {c.path} ({c.file}:{c.line})" for c in unmatched] or ["- none"]),
         "",
         "## Backend routes the frontend never references (dead, or external/integration-only — verify)",
-        *([f"- {r.method} {r.path} -> {r.handler} ({r.file}:{r.line})" for r in orphan_routes] or ["- none"]),
+        *([f"- {r.method} {r.path} -> {r.handler} ({r.file}:{r.line})"
+           + (f" — documented in {maps.documented_routes[r.path]} (external contract?)"
+              if r.path in maps.documented_routes else "")
+           for r in orphan_routes] or ["- none"]),
         "",
         "## All frontend call sites",
         *[f"- {c.path} ({c.file}:{c.line})" for c in maps.client_calls],

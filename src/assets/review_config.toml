@@ -120,6 +120,10 @@ focus = """
   the query is actually scoped to the verified caller — a service that validates
   an email and then selects everything (a global dump) is Critical; a sequential
   or guessable object id with no ownership check is an IDOR.
+- Personal-data lifecycle: which third-party services receive personal data
+  (runtime_signals.md lists every processor SDK the live code imports) and what each gets;
+  is there an audit trail of who viewed/changed personal records; is there a retention and
+  deletion path (documents, DB rows AND derived embeddings)?
 - Uploads: client filenames joined into paths (traversal), untrusted documents
   (CVs, PDFs, emails) fed to LLMs that score or decide (prompt injection), model
   output driving SQL/tools with write access — including latent code that is one
@@ -195,6 +199,8 @@ focus = """
   token/cost accounting — present or absent?
 - Durability of failure information across restarts; background task errors
   that vanish silently.
+- Data durability: backups and a restore path for the database, the vector store and the
+  uploaded files (deploy/infra files included) — absence is a finding for a stateful service.
 - runtime_signals.md lists print() calls per LIVE module and health routes that check
   nothing: cite live service modules (not scripts) for the logging finding, and state the
   total count. A finding that only cites scripts understates a service that logs by print().
@@ -213,7 +219,8 @@ focus = """
 - Tests that hit live external services, hardcoded credentials in tests,
   tests that can never fail (no assertions, broad mocks).
 - CI: is there a pipeline config? Does it run tests/lint/type-check/security
-  scans, or only build and deploy?
+  scans, or only build and deploy? Pipeline hygiene: sudo, curl | sh, secrets echoed into
+  logs, images deployed by :latest, no image scan before deploy.
 - Frontend <-> backend contract checks, migration tests, fixture hygiene.
 - Report missing coverage as findings with the specific untested modules.
 - runtime_signals.md lists every test file, which of them drive the HTTP API, the declared
@@ -222,6 +229,10 @@ focus = """
   paths: auth, authorization, uploads, pipelines, the frontend calls in client_calls.md
   with no backend route — a contract test would have caught them); (2) CI/deploy pipelines
   that build and deploy with no test/lint/scan gate (cite the pipeline file and its stages);
+  Make the missing-tests finding concrete: list the absent kinds (route/integration tests
+  with TestClient/httpx, authentication and authorization tests, upload security tests,
+  frontend<->backend contract tests, regression tests for the core pipeline) and name the
+  critical routes from your leads that nothing exercises.
   (3) tests that cannot fail or hit live services, and credentials hard-coded in test or
   automation scripts (runtime_signals.md lists both); (4) no security/dependency scanning in
   any pipeline. These affect the deployed service even though the evidence is test and
@@ -330,9 +341,13 @@ it does not, record nothing and say "not applicable" in your final message.
   session store used — a session id that is generated but never read is dead plumbing);
   (2) token growth: per round and per turn, with the bound (max rounds, tool-output size);
   (3) budget: any per-user/session/request token or cost limit, any input length cap;
-  (4) accounting and attribution: is usage_metadata / token usage recorded, and with a
-  user, job, request or session key, plus model, duration and tool output size — so the
-  cost of one user or one job can be answered; and is any budget ENFORCED per user/session.
+  (4) cost controls, as THREE separate findings when each is missing: MEASUREMENT (are input
+  and output tokens, model and duration captured for every call?), ATTRIBUTION (can the usage
+  of one user, session, job or requisition be answered?), ENFORCEMENT (is a per-user/session
+  budget or quota actually applied?).
+- Automated decisions: when model scores rank, shortlist or reject people, is there an
+  evaluation/regression set for the scores, and a human review/override step before a
+  decision is final? Missing either is a finding (fairness and accountability).
 - Duplicated model work: the same document embedded or sent to a model twice, the whole
   pool re-scored per upload, the same prompt recomputed per item.
 """

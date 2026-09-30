@@ -395,3 +395,53 @@ def test_layering_and_weak_tests(production):
 def test_startup_validation_control(production):
     labels = [label for lane, label, _ in production.signals.absent_controls if lane == "secrets"]
     assert labels and labels[0].startswith("startup validation of required configuration")
+
+
+def test_processors_pipeline_hygiene_and_governance_controls(tmp_path: Path):
+    files = {
+        "svc/app/main.py": (
+            "from fastapi import FastAPI\nfrom openai import OpenAI\nfrom langchain_ibm import ChatWatsonx\n"
+            "import sqlalchemy\napp = FastAPI()\nllm = ChatWatsonx(model_id='x')\n"
+            "def score_candidate(candidate, email, phone, resume):\n    return llm.invoke(candidate)\n"
+            "def rank(candidate, email, phone):\n    return 1\n"
+        ),
+        "svc/deploy/jenkins/jenkins-dev": "pipeline { stages { stage('Deploy') { steps { sh 'sudo docker pull app:latest' } } } }\n",
+        "svc/README.md": "Call GET /api/v1/items to list items.\n",
+    }
+    entries = []
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        entries.append(FileEntry(path=rel, language="Python" if rel.endswith(".py") else None,
+                                 size_bytes=len(text), lines=text.count("\n")))
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+    )
+    sig = build_review_maps(tmp_path, manifest).signals
+    assert [s.text.split(" —")[0] for s in sig.data_processors] == ["IBM watsonx", "OpenAI"]
+    hygiene = {s.text for s in sig.pipeline_hygiene}
+    assert "runs commands with sudo in the pipeline" in hygiene
+    assert "deploys an image by the mutable :latest tag" in hygiene
+    labels = {label for _, label, _ in sig.absent_controls}
+    assert "an audit trail of who viewed or changed personal records" in labels
+    assert "backups / disaster recovery for the database, vector store and uploaded files" in labels
+    assert "human oversight of automated decisions (review / override before a model score rejects someone)" in labels
+
+
+def test_documented_routes_are_marked_as_contracts(tmp_path: Path):
+    from helpers.review_maps import ReviewMaps, RouteInfo, _fill_documented_routes
+
+    (tmp_path / "API_DOCUMENTATION.md").write_text("### GET /api/v1/auth/me\nReturns the caller.\n")
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=(FileEntry(path="API_DOCUMENTATION.md", language="Markdown", size_bytes=1),),
+    )
+    maps = ReviewMaps(routes=[
+        RouteInfo("GET", "/api/v1/auth/me", "me", "a.py", 1, (), (), False, False),
+        RouteInfo("POST", "/api/v1/requisitions/update", "update", "a.py", 9, (), (), False, False),
+    ])
+    _fill_documented_routes(maps, tmp_path, manifest)
+    assert maps.documented_routes == {"/api/v1/auth/me": "API_DOCUMENTATION.md"}

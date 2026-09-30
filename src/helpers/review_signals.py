@@ -91,6 +91,21 @@ _CONTROLS = (
     ("llm", "cost attribution — token usage recorded per user / job / request / session",
      r"(?i)(usage|tokens?|cost)\w*\s*[,(].{0,80}(user_?(id|email)|job_?id|request_?id|session_?id)",
      r"(?i)attribut|per[- ](user|job|request|session)|cost", "llm"),
+    ("security", "an audit trail of who viewed or changed personal records",
+     r"(?i)audit_?log|AuditLog|audit_?trail|access_?log_?(entry|record)|viewed_by|activity_?log|log_access",
+     r"(?i)audit", "pii"),
+    ("security", "a retention / deletion policy for personal data (erasure of documents, rows and derived vectors)",
+     r"(?i)retention|purge_|erase_|right_to_(be_forgotten|erasure)|anonymi[sz]e|gdpr|delete_after|expire_after",
+     r"(?i)retention|deletion|erasure|purge|gdpr|lifecycle", "pii"),
+    ("llm", "an evaluation / regression set for model-produced scores (known inputs with expected results)",
+     r"(?i)eval(uation)?_?(set|suite|dataset)|golden|ground_?truth|benchmark_|regression_?(set|test)|test_\w*scor",
+     r"(?i)evaluat|regression|golden|ground.truth|bias|fairness|accuracy", "scoring"),
+    ("llm", "human oversight of automated decisions (review / override before a model score rejects someone)",
+     r"(?i)human_?review|manual_?review|override_?(score|decision)|approved_by|reviewed_by|requires_approval",
+     r"(?i)human|oversight|override|automated decision", "scoring"),
+    ("observability", "backups / disaster recovery for the database, vector store and uploaded files",
+     r"(?i)pg_dump|pg_basebackup|\bbackup|snapshot_?(policy|schedule)|restic|velero|barman|wal-g|pgbackrest|disaster.recovery",
+     r"(?i)backup|disaster|recover|durab", "stateful"),
     ("inputs", "per-user / per-IP upload or job quotas",
      r"(?i)quota|max_?uploads|upload_?limit|max_?files_?per|max_?jobs|jobs_?per_?user|daily_?limit",
      r"(?i)quota|per[- ]user|job[- ]creation|limit on (jobs|uploads)", "uploads"),
@@ -201,6 +216,8 @@ class RuntimeSignals:
     weak_tests: list[Signal] = field(default_factory=list)  # tests that cannot fail, credentials in test scripts
     supply_chain: list[Signal] = field(default_factory=list)  # missing lockfiles, unpinned base images
     naive_datetimes: list[Signal] = field(default_factory=list)
+    data_processors: list[Signal] = field(default_factory=list)  # third-party services that receive app data
+    pipeline_hygiene: list[Signal] = field(default_factory=list)  # CI/deploy script practices
 
     @property
     def ci_without_checks(self) -> list[CiPipeline]:
@@ -532,16 +549,28 @@ def _structure_signals(files, live: set[str], routes, signals: RuntimeSignals) -
     signals.progress_channels = [(key, tuple(rows)) for key, rows in sorted(groups.items()) if len(rows) > 1]
 
 
-def _absent_controls(files, live: set[str], routes, signals: RuntimeSignals) -> None:
+_PII_WORDS = re.compile(r"(?i)\b(email|phone|resume|cv_text|candidate|applicant|patient|customer|date_of_birth|national_id)\b")
+_SCORING = re.compile(r"(?i)\bdef\s+\w*(score|rank|rerank|shortlist|rating|evaluate_candidate)\w*\s*\(")
+_STATEFUL = re.compile(r"(?i)sqlalchemy|psycopg|asyncpg|chromadb|pymongo|redis|create_engine|qdrant|faiss")
+_INFRA_FILE = re.compile(r"(?i)(dockerfile|jenkins|\.nomad$|\.hcl$|compose\.ya?ml$|\.gitlab-ci|\.github/workflows/|(^|/)k8s/|"
+                         r"(^|/)helm/|(^|/)deploy/|(^|/)infra/|\.sh$|\.tf$)")
+
+
+def _absent_controls(files, live: set[str], routes, signals: RuntimeSignals, infra: list[str] | None = None) -> None:
     corpus = [py.text for py in files if not live or py.path in live]
     applies = {
+        "pii": sum(len(_PII_WORDS.findall(text)) for text in corpus) >= 5,
+        "scoring": (signals.model_call_files > 0 or bool(signals.model_clients_at_import))
+        and any(_SCORING.search(text) for text in corpus),
+        "stateful": any(_STATEFUL.search(text) for text in corpus),
         "llm": signals.model_call_files > 0 or bool(signals.model_clients_at_import),
         "uploads": any(getattr(r, "accepts_upload", False) for r in routes),
         "jobs": any(getattr(r, "accepts_upload", False) for r in routes) or signals.model_call_files > 0,
         "env": any("getenv" in text or "environ" in text for text in corpus),
     }
+    searched = corpus + list(infra or ())  # infrastructure files count as evidence (backups live there)
     for lane, label, evidence, mention, when in _CONTROLS:
-        if applies.get(when) and not any(re.search(evidence, text) for text in corpus):
+        if applies.get(when) and not any(re.search(evidence, text) for text in searched):
             signals.absent_controls.append((lane, label, mention))
 
 
@@ -601,6 +630,72 @@ def _artifact_signals(repo_path: Path, manifest: RepositoryManifest, signals: Ru
                 image = match.group(1)
                 if image.lower() != "scratch" and "@sha256:" not in image and (":" not in image.split("/")[-1] or image.endswith(":latest")):
                     signals.supply_chain.append(Signal(path, n, f"base image `{image}` is not pinned to a version/digest"))
+
+
+_PROCESSORS = (
+    (r"^(openai|langchain_openai)\b", "OpenAI"),
+    (r"^(anthropic|langchain_anthropic)\b", "Anthropic"),
+    (r"^(ibm_watsonx_ai|ibm_watson_machine_learning|langchain_ibm)\b", "IBM watsonx"),
+    (r"^(google\.generativeai|google\.genai|langchain_google_genai|vertexai)\b", "Google Gemini / Vertex"),
+    (r"^(cohere|langchain_cohere)\b", "Cohere"),
+    (r"^(mistralai|langchain_mistralai)\b", "Mistral"),
+    (r"^(tavily|langchain_community\.tools\.tavily)", "Tavily (web search)"),
+    (r"^(msal|msgraph|O365)\b", "Microsoft Graph / Entra"),
+    (r"^(boto3|botocore)\b", "AWS"),
+    (r"^(azure)\b", "Azure"),
+    (r"^(sendgrid|mailgun|postmarker)\b", "Email provider"),
+    (r"^(twilio)\b", "Twilio"),
+    (r"^(stripe)\b", "Stripe"),
+    (r"^(sentry_sdk)\b", "Sentry"),
+    (r"^(smtplib|aiosmtplib)\b", "SMTP server"),
+)
+_PIPELINE_SMELLS = (
+    (r"(?m)^\s*[^#\n]*\bsudo\s", "runs commands with sudo in the pipeline"),
+    (r"(?i)curl[^\n|]*\|\s*(ba|z)?sh\b", "pipes a downloaded script straight into a shell"),
+    (r"(?i)\bchmod\s+(-R\s+)?777\b", "chmod 777"),
+    (r"(?i)echo\s+[^\n]*\$\{?\w*(PASSWORD|TOKEN|SECRET|API_?KEY)", "echoes a secret into the build log"),
+    (r"(?i)(image\s*[:=]\s*\S+:latest|docker\s+(pull|run)\s+\S+:latest)", "deploys an image by the mutable :latest tag"),
+    (r"(?i)--privileged\b", "runs a container with --privileged"),
+    (r"(?i)sed\s+-i[^\n]*(password|secret|token|key)", "edits secrets into files with sed"),
+)
+
+
+def _processor_signals(files, live: set[str], signals: RuntimeSignals) -> None:
+    seen: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    for py in files:
+        if py.path not in live:
+            continue
+        for node in ast.walk(py.tree):
+            modules = []
+            if isinstance(node, ast.Import):
+                modules = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                modules = [node.module]
+            for module in modules:
+                for pattern, vendor in _PROCESSORS:
+                    if re.match(pattern, module):
+                        seen[vendor].append((py.path, node.lineno))
+    for vendor, sites in sorted(seen.items()):
+        path, line = sites[0]
+        files_n = len({p for p, _ in sites})
+        signals.data_processors.append(Signal(path, line, f"{vendor} — used in {files_n} live module(s)"))
+
+
+def _pipeline_hygiene(repo_path: Path, manifest: RepositoryManifest, signals: RuntimeSignals) -> None:
+    for entry in manifest.files:
+        if not _INFRA_FILE.search(entry.path) or "node_modules" in entry.path:
+            continue
+        text = _read(repo_path, entry.path)
+        for pattern, what in _PIPELINE_SMELLS:
+            match = re.search(pattern, text)
+            if match:
+                line = text.count("\n", 0, match.start()) + 1
+                signals.pipeline_hygiene.append(Signal(entry.path, line, what))
+
+
+def _infra_texts(repo_path: Path, manifest: RepositoryManifest) -> list[str]:
+    return [_read(repo_path, f.path, 100_000) for f in manifest.files
+            if _INFRA_FILE.search(f.path) and "node_modules" not in f.path][:200]
 
 
 def _deploy_env_signals(repo_path: Path, manifest: RepositoryManifest, signals: RuntimeSignals) -> None:
@@ -948,7 +1043,9 @@ def build_runtime_signals(
         ("dependencies", lambda: _dependency_signals(files, live if dead else set(), deps, signals)),
         ("parallel_implementations", lambda: _parallel_implementations(files, live, signals)),
         ("structure", lambda: _structure_signals(files, live, routes, signals)),
-        ("controls", lambda: _absent_controls(files, live, routes, signals)),
+        ("processors", lambda: _processor_signals(files, live, signals)),
+        ("pipeline_hygiene", lambda: _pipeline_hygiene(repo_path, manifest, signals)),
+        ("controls", lambda: _absent_controls(files, live, routes, signals, _infra_texts(repo_path, manifest))),
         ("artifacts", lambda: _artifact_signals(repo_path, manifest, signals)),
         ("deploy_env", lambda: _deploy_env_signals(repo_path, manifest, signals)),
         ("production", lambda: _production_signals(files, live, edges, repo_path, manifest, signals)),
@@ -1022,6 +1119,9 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
     lines += block("Tests that cannot fail / credentials in test scripts", [s.row for s in signals.weak_tests])
     lines += block("Supply chain: missing lockfiles, unpinned base images", [s.row for s in signals.supply_chain])
     lines += block("Naive datetimes (no timezone)", [s.row for s in signals.naive_datetimes])
+    lines += block("Third-party services that receive application data (processors)",
+                   [s.row for s in signals.data_processors])
+    lines += block("Deployment pipeline hygiene", [s.row for s in signals.pipeline_hygiene])
     lines += block("Parallel implementations (same operation, names differ by a modifier; bodies differ)",
                    [f"{name}: " + "; ".join(s.row for s in sites) for name, sites in signals.parallel_implementations], 20)
     return "\n".join(lines)

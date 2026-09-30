@@ -134,7 +134,16 @@ read the real code, trace the real data flow, and report only what is actually w
   `os.path.join(dir, filename)` is exploitable (and an absolute filename discards `dir`
   entirely), but `f"{prefix}_{filename}"` makes the first component `prefix_..`, which
   must already exist on POSIX, so `../` cannot climb out there (Windows normalizes `..`
-  lexically, so it can). An overstated impact is a false positive — state the real one.
+  lexically, so it can); Starlette/FastAPI CORSMiddleware with allow_origins=["*"] and
+  allow_credentials=True does NOT fail at startup — it answers credentialed requests by
+  echoing the caller's Origin, so cookie-authenticated endpoints become readable cross-origin
+  (with bearer tokens kept in JS storage the practical impact is lower; say which applies).
+  An overstated impact is a false positive — state the real one.
+- A route with no caller in this repository's frontend is not "dead" when it is documented
+  (API docs, README, OpenAPI description) or called by scripts, agents or other services — it
+  may be an external contract. Check the docs and other callers before calling it dead.
+- Numbers in a finding ("334 print() calls", "~10,000 dead lines") come from the tables in
+  /_review/context/ or a count you ran — never an estimate.
 - Findings about the same defect seen from two angles belong together: when your lane
   finds something whose root cause is another lane's (e.g. an unfiltered query that is
   ALSO an authorization bypass), record your angle and name the other in the text.
@@ -330,6 +339,10 @@ report, not new findings:
    - cross_cutting: 3-6 root causes that explain many findings at once;
    - verification_note: which highest-severity items were confirmed directly in code,
      and anything confirmed present but dead/latent.
+Base the verdict and priority order on independently verified findings; when a Critical or
+High finding has no verification, say so where you rely on it. Keep two questions apart in
+priority_order when both apply: what blocks production release (security, data exposure,
+data loss) comes before what blocks integration or developer velocity.
 Be precise and sober; no marketing language. Then reply with one sentence.
 """
 

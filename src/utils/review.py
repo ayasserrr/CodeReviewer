@@ -169,6 +169,7 @@ class Verification(BaseModel):
     verdict: VerificationVerdict
     original_severity: Severity
     note: str
+    independent: bool = True  # False: only a deterministic severity cap was applied, no verifier ran
 
 
 class ReviewFinding(BaseModel):
@@ -207,6 +208,10 @@ class ReviewFinding(BaseModel):
     verification: Verification | None = None
     duplicate_of: str | None = None
     exposure: Exposure = "live"
+
+    @property
+    def independently_verified(self) -> bool:
+        return self.verification is not None and self.verification.independent
 
 
 class KpiAssessment(BaseModel):

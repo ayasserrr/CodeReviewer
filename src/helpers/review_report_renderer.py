@@ -68,6 +68,8 @@ def _verification_line(finding: ReviewFinding) -> str:
     if finding.verification is None:
         return "*Verification:* not independently verified."
     v = finding.verification
+    if not v.independent:
+        return f"*Verification:* not independently verified. {v.note}"
     if v.verdict == "adjusted" and v.original_severity != finding.severity:
         return f"*Verification:* severity adjusted {v.original_severity} → {finding.severity} — {v.note}"
     return f"*Verification:* confirmed — {v.note}"
@@ -113,6 +115,16 @@ def render_report(report: DeepReviewReport) -> str:
         f"({report.statistics.findings_rejected_by_verifier} rejected as unsupported, "
         f"{report.statistics.findings_merged_as_duplicates} merged as duplicates)."
     )
+    unverified = Counter(
+        f.severity for f in report.findings if not f.independently_verified and f.severity in ("Critical", "High")
+    )
+    if unverified:
+        out.append("")
+        out.append(
+            "**Not independently verified:** "
+            + ", ".join(f"{n} {sev}" for sev, n in sorted(unverified.items(), key=lambda kv: SEVERITY_ORDER.index(kv[0])))
+            + " — marked *unverified* below; treat them as the specialist's claim until a reviewer confirms them."
+        )
     out.append("")
     if summary.verdict:
         out.append(f"**Verdict:** {summary.verdict}")
@@ -180,7 +192,8 @@ def render_report(report: DeepReviewReport) -> str:
                 out.append("No findings in this category.")
             out.append("")
         for finding in findings:
-            out.append(f"### [{finding.severity}] {finding_numbers[finding.id]} {finding.title}")
+            tag = finding.severity if finding.independently_verified else f"{finding.severity} · unverified"
+            out.append(f"### [{tag}] {finding_numbers[finding.id]} {finding.title}")
             out.append("")
             out.append(finding.description)
             out.append("")

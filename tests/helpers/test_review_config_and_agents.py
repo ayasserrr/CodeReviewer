@@ -476,3 +476,37 @@ def test_lane_reads_are_tracked_per_agent_including_explorers():
     finally:
         _LANE_READS.reset(lane_token)
         REVIEW_READS.reset(shared_token)
+
+
+
+async def test_a_model_call_never_outlives_the_lane_clock():
+    import asyncio as _asyncio
+    import time as _time
+
+    from helpers.review_agents import (
+        _CALL_MARGIN_SECONDS,
+        _RUN_BUDGET,
+        _BudgetNudgeMiddleware,
+        _RunBudget,
+    )
+
+    budget = _RunBudget(limit=100, deadline=_time.monotonic() + _CALL_MARGIN_SECONDS + 0.3, timeout=900)
+    token = _RUN_BUDGET.set(budget)
+
+    class _Req:
+        def __init__(self):
+            self.messages, self.state = [], {}
+
+        def override(self, messages):
+            return self
+
+    async def slow_handler(request):
+        await _asyncio.sleep(5)  # a rate-limited judge call
+
+    try:
+        started = _time.monotonic()
+        result = await _BudgetNudgeMiddleware(limit=100).awrap_model_call(_Req(), slow_handler)
+        assert _time.monotonic() - started < 2
+        assert "Wall-clock budget" in result.content and budget.time_capped
+    finally:
+        _RUN_BUDGET.reset(token)

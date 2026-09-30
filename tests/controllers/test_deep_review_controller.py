@@ -187,7 +187,10 @@ async def test_full_review_with_scripted_agents(repo: Path, scripted_models, mon
     # Every category ran (plus the KPI assessor), verification only where findings existed.
     agents = {r.agent: r.status for r in report.agent_runs}
     assert agents["specialist:security-kpis"] == "completed"
-    assert agents["verifier:security"] == "completed" and "verifier:auth" not in agents
+    # Critical/High and Medium/Low findings are verified in separate batches (judge vs base model).
+    security_verifiers = sorted(a for a in agents if a.startswith("verifier:security"))
+    assert security_verifiers and all(agents[a] == "completed" for a in security_verifiers)
+    assert "verifier:auth" not in agents
 
     # Coverage is computed from the manifest/graph/tool results and rendered as its own section.
     assert report.coverage is not None

@@ -421,17 +421,20 @@ class DeepReviewController(BaseController):
         if not pending:
             return
         # One verifier per batch: a lane with many findings used to hand one verifier more than it
-        # could re-check before its time cap. Each batch has its own budget and clock.
-        batches = [pending[i : i + _VERIFY_BATCH] for i in range(0, len(pending), _VERIFY_BATCH)]
+        # could re-check before its time cap. Critical/High go to the judge model; Medium/Low to the
+        # faster base model, which keeps the judge's (slower, rate-limited) capacity for what matters.
+        severe = [f for f in pending if f.severity in ("Critical", "High")]
+        minor = [f for f in pending if f.severity not in ("Critical", "High")]
+        batches = [(severe[i : i + _VERIFY_BATCH], False) for i in range(0, len(severe), _VERIFY_BATCH)]
+        batches += [(minor[i : i + _VERIFY_BATCH], True) for i in range(0, len(minor), _VERIFY_BATCH)]
 
-        async def verify(index: int, batch: list) -> None:
+        async def verify(label: str, batch: list, light: bool) -> None:
             ids = {f.id for f in batch}
             kickoff = "Verify each of these findings:\n\n" + "\n\n".join(workspace.render_finding(f) for f in batch)
-            suffix = f"-{index + 1}" if len(batches) > 1 else ""
             async with semaphore:
                 runs.append(
                     await self._run(
-                        f"verifier:{category.id}{suffix}",
+                        f"verifier:{category.id}{label}",
                         role="verifier",
                         repo_path=repo_path,
                         system_prompt=verifier_prompt(category, brief),
@@ -441,10 +444,23 @@ class DeepReviewController(BaseController):
                         kickoff=kickoff,
                         files=files,
                         completion_check=lambda: _unverified_nudge(workspace, category.id, ids),
+                        light=light,
                     )
                 )
 
-        await asyncio.gather(*(verify(i, b) for i, b in enumerate(batches)))
+        await asyncio.gather(*(
+            verify(f"-{i + 1}" if len(batches) > 1 else "", batch, light) for i, (batch, light) in enumerate(batches)
+        ))
+        # Whatever a batch could not finish (provider slowness, time cap) gets one more pass on the
+        # base model with a fresh clock; anything still open is reported as not independently verified.
+        leftover = workspace.findings_to_verify(category.id)
+        if leftover:
+            logger.info("deep_review_verification_retry", category=category.id, findings=len(leftover))
+            await asyncio.gather(*(
+                verify(f"-retry{'-' + str(i + 1) if len(leftover) > _VERIFY_BATCH else ''}",
+                       leftover[i : i + _VERIFY_BATCH], True)
+                for i in range(0, len(leftover), _VERIFY_BATCH)
+            ))
 
     async def _run_synthesizer(
         self, workspace: ReviewWorkspace, brief: str, files: dict[str, dict], repo_path: Path
@@ -486,6 +502,7 @@ class DeepReviewController(BaseController):
         completion_check=None,
         strong: bool = False,
         timeout_seconds: int | None = None,
+        light: bool = False,
     ) -> AgentRunStats:
         progress = getattr(self, "_progress", None)
         if progress is not None:
@@ -503,6 +520,7 @@ class DeepReviewController(BaseController):
             completion_check=completion_check,
             strong=strong,
             timeout_seconds=timeout_seconds,
+            light=light,
         )
         if progress is not None:
             await progress.agent_finished(stats)
@@ -523,6 +541,7 @@ class DeepReviewController(BaseController):
         completion_check=None,
         strong: bool = False,
         timeout_seconds: int | None = None,
+        light: bool = False,
     ) -> AgentRunStats:
         try:
             agent = build_agent(
@@ -535,6 +554,7 @@ class DeepReviewController(BaseController):
                 explorer_tools=explorer_tools,
                 model_calls=model_calls,
                 strong=strong,
+                light=light,
             )
         except DeepReviewError:
             raise

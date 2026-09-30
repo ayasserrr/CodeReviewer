@@ -325,6 +325,9 @@ def current_lane_reads() -> set[str]:
     return set(_LANE_READS.get() or ())
 """Every repository file any agent of the current review opened (shared by all lanes, live)."""
 
+_CALL_MARGIN_SECONDS = 10.0
+"""A model call is cut this long before the lane's hard cap, so the run always ends cleanly."""
+
 _STOP_GRACE_SECONDS = 45.0
 """An agent (and every explorer it launched) stops this long before its wall-clock cap.
 
@@ -405,7 +408,22 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
         return handler(self._nudge(request))
 
     async def awrap_model_call(self, request: ModelRequest, handler):
-        return await handler(self._nudge(request))
+        parent = _RUN_BUDGET.get()
+        if parent is None:
+            return await handler(self._nudge(request))
+        # One model call (with the client's own retries on 429/5xx) may never outlive the lane's
+        # clock: a slow or rate-limited judge call used to run past the cap and get the whole
+        # agent cancelled ("timed out") with its last verdicts unrecorded.
+        allowed = parent.seconds_left() - _CALL_MARGIN_SECONDS
+        if allowed <= 0:
+            parent.time_capped = True
+            return AIMessage(content="Wall-clock budget for this review lane is spent.")
+        try:
+            return await asyncio.wait_for(handler(self._nudge(request)), timeout=allowed)
+        except TimeoutError:
+            parent.time_capped = True
+            logger.warning("deep_review_model_call_time_capped", agent=_AGENT_NAME.get(), seconds=round(allowed))
+            return AIMessage(content="Wall-clock budget for this review lane is spent.")
 
 
 # Recording tools' results are tiny and carry ids the agent must remember.
@@ -563,13 +581,16 @@ def build_agent(
     explorer_tools: list,
     model_calls: int,
     strong: bool = False,
+    light: bool = False,
 ):
     """One configured deep agent (see module docstring for the stack)."""
     backend = build_backend(repo_path)
     middleware = [_filesystem_middleware(backend, settings), *_harness_middleware(model_calls, _fallback_model(settings))]
+    # ``strong`` puts a specialist on the judge model (deep-tracing lanes); ``light`` puts a
+    # verifier on the base model (Medium/Low batches: the judge is kept for Critical/High).
+    model_role = "verifier" if strong and role == "specialist" else "specialist" if light and role == "verifier" else role
     return create_deep_agent(
-        # ``strong`` puts a specialist on the judge model (deep-tracing lanes).
-        model=build_chat_model(settings, "verifier" if strong and role == "specialist" else role),
+        model=build_chat_model(settings, model_role),
         tools=[_plan_tool(), *tools] if role == "specialist" else tools,
         system_prompt=system_prompt,
         middleware=middleware,

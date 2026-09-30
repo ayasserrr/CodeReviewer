@@ -113,7 +113,26 @@ def _is_script_or_test(path: str, scripts: set[str], unreachable: set[str]) -> b
     return is_test or path in scripts or ("scripts" in parts[:-1] and path in unreachable)
 _AUTHISH_PATH = re.compile(r"(?i)(auth|security|jwt|token|otp|session|password|login)")
 _LEAD_LINE_TOLERANCE = 15
+_SCOPE_REASON = re.compile(r"(?i)(brief|checklist|baseline|prompt|instructions?|review scope|lead list)s?\b[^.]{0,40}"
+                           r"\b(does not|doesn't|do not|never) (list|include|mention|require|cover)")
 _SEVERE_STATIC = {"critical", "high"}  # security tools only; pyright/radon use "error" for ordinary hits
+_PERSISTED_STATE = re.compile(r"(?i)\block(ed)?\b|\bflag\b|in[_ -]?progress|background work|\bjob\b|\blease\b|semaphore")
+_CLEANUP_ONLY = re.compile(r"(?i)\bfinally\b|\bexcept\b|context manager|\bwith\b block|cleaned up|clears? the|releases?")
+# A named recovery MECHANISM, not a scenario word: "safe even on crashes" is exactly the wrong claim.
+_PROCESS_DEATH = re.compile(r"(?i)stale|\bttl\b|expir|startup|on start|heartbeat|\bowner|\blease\b|timeout|"
+                            r"not persisted|in[- ]memory only|reset (on|at|when)|reaper|watchdog|advisory lock|"
+                            r"transaction[- ]scoped|rolled back")
+
+
+def _cleanup_only_reason(claim: str, note: str) -> str | None:
+    """A lock/flag/job that survives the process is not made safe by cleanup code: ``finally`` and
+    ``except`` do not run when the process is killed, restarted or redeployed mid-job."""
+    if _PERSISTED_STATE.search(claim) and _CLEANUP_ONLY.search(note) and not _PROCESS_DEATH.search(note):
+        return ("NOT RECORDED — the reason relies on cleanup code (finally/except/release), which does not run when "
+                "the process is killed, restarted or redeployed mid-job. Say what happens to this lock/flag/job "
+                "then — is it persisted (DB row, file, cache key) and what clears it: an expiry/TTL, a startup reset, "
+                "a heartbeat or owner check? If nothing does, it is a finding: record it.")
+    return None
 _NON_REASON = re.compile(
     r"(?i)\b(budget|out of time|no time|time ran|ran out|partially|not (fully )?(investigated|checked|traced|reviewed)|"
     r"did not (check|trace|review)|covered (by|in|under) (finding|another)|see finding|already (recorded|reported|covered)|"
@@ -1185,8 +1204,10 @@ class ReviewWorkspace:
                 "mid-way. Where is state left inconsistent, a lock or record stuck, work duplicated or lost?",
                 [(x.file, x.row) for x in sig.hotspots])
         if category_id == "security":
-            add("Route handlers with the most powerful side effects — who can call each (authn/authz), what "
-                "caller input reaches the file, network, subprocess or database effect, and is it constrained?",
+            add("Route handlers with the most powerful side effects — who can call each (authn AND authz: is any "
+                "logged-in user allowed?), what caller input reaches the file, network, subprocess or database "
+                "effect, and is it constrained? For outbound messaging: who may send to whom, with what content "
+                "(an open relay or phishing from the organisation's own sender)?",
                 [(x.file, x.row) for x in sig.hotspots if "route handler" in x.text])
         if category_id in ("integration", "auth"):
             add("Credentials accepted in the query string (proxy/server logs, browser history, referrers)",
@@ -1441,6 +1462,8 @@ class ReviewWorkspace:
                 "cite one, the row is a finding: record it."
             )
         needle = args.lead.strip().lower()
+        if (refused := _cleanup_only_reason(args.lead, args.reason)) is not None:
+            return refused
         if len(needle) < 4:
             return "NOT RECORDED — pass a distinctive part of the lead row (e.g. its file:line) or the group label."
         self.lane_leads(category.id)  # refresh the row index
@@ -1528,6 +1551,8 @@ class ReviewWorkspace:
                 return "NOT RECORDED — confirmed needs the id of the finding you recorded for it."
         elif not self._cites_repository(args.note) or _NON_REASON.search(args.note):
             return "NOT RECORDED — ruled_out needs the code that shows it is safe (a repository path:line in the note)."
+        elif (refused := _cleanup_only_reason(record["statement"], args.note)) is not None:
+            return refused
         elif not self._note_matches(args.note, record["statement"], record["files"]):
             return (
                 f"NOT RECORDED — this note does not address {args.hypothesis_id} ('{record['statement'][:100]}'). "
@@ -1571,6 +1596,8 @@ class ReviewWorkspace:
             return f"Unknown or already judged item '{args.ref}'."
         if not self._cites_repository(args.note):
             return "NOT RECORDED — upholding needs the code you checked (a repository path:line in the note)."
+        if (refused := _cleanup_only_reason(item["claim"], args.note)) is not None:
+            return refused
         with self._lock:
             self.negative_audit[args.ref] = f"upheld: {args.note.strip()[:300]}"
         return f"{args.ref}: upheld."
@@ -1960,6 +1987,11 @@ class ReviewWorkspace:
                     "NOT RECORDED — a rejection must cite the code that disproves the claim (a repository "
                     "`path:line` in the note, e.g. the guard, caller or config you found). If you could not find "
                     "such code, the claim stands: confirm it, or adjust its severity/title/impact."
+                )
+            if args.verdict == "rejected" and _SCOPE_REASON.search(args.note):
+                return (
+                    "NOT RECORDED — whether a checklist, brief or baseline lists this is not a reason it is not a "
+                    "defect. Reject only on what the code does; otherwise confirm or adjust."
                 )
             verification = Verification(verdict=args.verdict, original_severity=finding.severity, note=args.note.strip()[:1500])
             self.verifications[finding.id] = verification

@@ -123,6 +123,10 @@ read the real code, trace the real data flow, and report only what is actually w
   allow_credentials=True does NOT fail at startup — it answers credentialed requests by
   echoing the caller's Origin, so cookie-authenticated endpoints become readable cross-origin
   (with bearer tokens kept in JS storage the practical impact is lower; say which applies).
+  Build-time frontend variables (VITE_*, NEXT_PUBLIC_*, REACT_APP_*, import.meta.env.*) are
+  compiled into the JavaScript every visitor downloads: a key or token read that way is
+  public whatever value the example/template file shows — an empty .env.example does not
+  disprove it; the question is what the real deployed value can do.
   An overstated impact is a false positive — state the real one.
 - A route with no caller in this repository's frontend is not "dead" when it is documented
   (API docs, README, OpenAPI description) or called by scripts, agents or other services — it

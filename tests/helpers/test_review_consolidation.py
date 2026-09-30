@@ -542,3 +542,25 @@ def test_severe_true_positives_must_reach_a_finding(workspace):
     assert len(rows) == 1 and rows[0].startswith("sf-cve")
     record(ws, "dependencies", "Vulnerable multipartlib pinned for the upload API", "High", ("app/main.py", 1, 2))
     assert ws.unrecorded_true_positives("dependencies") == []
+
+
+def test_cleanup_code_does_not_make_persisted_locks_safe():
+    from helpers.review_workspace import _cleanup_only_reason
+
+    claim = "`run_pipeline` (background work, db write, lock) (app/services/orders_service.py:40)"
+    assert _cleanup_only_reason(claim, "the lock is released in the finally block at app/services/orders_service.py:90")
+    assert _cleanup_only_reason(
+        claim, "released in finally at app/services/orders_service.py:90; a stale lock expires after 10 min "
+               "(app/services/orders_service.py:12)") is None
+    assert _cleanup_only_reason("JWT claims are validated", "the except at app/routers/auth.py:9 rejects it") is None
+
+
+def test_rejection_must_be_about_the_code_not_the_checklist(workspace):
+    from helpers.review_workspace import _VerifyArgs
+
+    ws = workspace
+    fid = record(ws, "inputs", "No way to cancel a running processing job", "Medium", ("app/main.py", 20, 22))
+    out = ws.submit_verification("inputs", _VerifyArgs(
+        finding_id=fid, verdict="rejected",
+        note="The review brief does not list job cancellation; jobs start at app/main.py:20."))
+    assert out.startswith("NOT RECORDED")

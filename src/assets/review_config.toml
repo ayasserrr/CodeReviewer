@@ -322,6 +322,10 @@ Does THIS system produce correct results and keep its data consistent — not on
 - Entry points and scripts that cannot work as written; reliance on private library APIs.
 - Triage pyright in bulk first (triage_static_rule); a type complaint is at most Low unless
   you show the runtime path that fails.
+- Locks, "in progress" flags, claimed jobs and leases that live outside the process (DB row,
+  file, cache key): what clears them if the process is killed or redeployed mid-work? A
+  finally block does not run then; without an expiry, startup reset or owner check the
+  resource stays stuck.
 """
 
 [[categories]]

@@ -146,6 +146,9 @@ _MIN_HYPOTHESES = 6
 _GENERIC_NOTE_WORDS = frozenset({"code", "file", "function", "line", "this", "that", "with", "because", "safe",
                                  "defect", "issue", "application", "system", "data", "value", "check", "used"})
 _EACH_ROW_MAX_KEYS = 25
+# A hypothesis names the code it suspects: an identifier, a call, a route, a file, or `quoted` code.
+_CODE_ELEMENT = re.compile(r"`[^`]+`|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|\b[A-Z][a-z0-9]+[A-Z]\w*\b|\b\w+\(\)|"
+                           r"(^|\s)/[\w{}.-]+/?[\w{}/.-]*|\b[\w-]+\.(py|js|ts|tsx|sql|sh|ya?ml|toml|json|html)\b")
 _ROW_SYMBOL = re.compile(r"^`?([A-Za-z_][A-Za-z0-9_]{3,})`?\s*\(")
 """Lead groups up to this many distinct locations are tracked row by row, not as a whole."""
 # High-signal bundled semgrep rules the security lane must rule on one by one.
@@ -1541,8 +1544,16 @@ class ReviewWorkspace:
         for n, item in enumerate(args.hypotheses, start=1):
             files = [self._normalize_path(f) for f in item.files]
             missing = [f for f in files if f not in known]
-            if len(item.statement.strip()) < 30:
+            statement = item.statement.strip()
+            twin = self._similar_hypothesis(category.id, statement, [a for a, _ in accepted])
+            if len(statement) < 30:
                 errors.append(f"hypothesis {n}: state the suspected defect concretely")
+            elif not (_CODE_ELEMENT.search(statement) or any(
+                    PurePosixPath(f).stem.lower() in statement.lower() for f in files)):
+                errors.append(f"hypothesis {n}: name the code you suspect (function, class, route or file) — "
+                              "one concrete suspicion, not a category of risks")
+            elif twin:
+                errors.append(f"hypothesis {n}: duplicates {twin} — record a different suspicion")
             elif missing:
                 errors.append(f"hypothesis {n}: not repository files: {', '.join(missing)}")
             else:
@@ -1573,6 +1584,12 @@ class ReviewWorkspace:
             finding = self.findings.get(args.finding_id or "")
             if finding is None or finding.category_id != category.id:
                 return "NOT RECORDED — confirmed needs the id of the finding you recorded for it."
+            if not self._same_subject(record["statement"], f"{finding.title} {finding.description}"):
+                return (
+                    f"NOT RECORDED — {finding.id} ('{finding.title[:90]}') is about a different defect than "
+                    f"{args.hypothesis_id}. Confirm it with the finding that reports THIS suspicion (record one if "
+                    "it is real), or rule it out citing the code."
+                )
         elif not self._cites_repository(args.note) or _NON_REASON.search(args.note):
             return "NOT RECORDED — ruled_out needs the code that shows it is safe (a repository path:line in the note)."
         elif (refused := _cleanup_only_reason(record["statement"], args.note)) is not None:
@@ -1585,6 +1602,24 @@ class ReviewWorkspace:
         with self._lock:
             record.update(outcome=args.outcome, finding_id=args.finding_id, note=args.note.strip()[:600])
         return f"{args.hypothesis_id}: {args.outcome}."
+
+    @staticmethod
+    def _key_words(text: str) -> set[str]:
+        return set(re.findall(r"[a-z][a-z0-9_]{3,}", text.lower())) - _TITLE_STOPWORDS - _GENERIC_NOTE_WORDS
+
+    def _same_subject(self, statement: str, finding_text: str) -> bool:
+        """A finding confirms a hypothesis only when it talks about the same thing (2+ key words in common)."""
+        return len(self._key_words(statement) & self._key_words(finding_text)) >= 2
+
+    def _similar_hypothesis(self, lane: str, statement: str, pending: list[str]) -> str | None:
+        words = self._key_words(statement)
+        others = [(hid, h["statement"]) for hid, h in self.hypotheses.items() if h["lane"] == lane]
+        others += [(f"hypothesis '{p[:40]}...'", p) for p in pending]
+        for ref, other in others:
+            theirs = self._key_words(other)
+            if words and theirs and len(words & theirs) / len(words | theirs) >= 0.7:
+                return ref
+        return None
 
     def _note_matches(self, note: str, statement: str, files) -> bool:
         """A note closes a hypothesis/lead only if it talks about it (shares its files or key words)."""
@@ -1639,12 +1674,12 @@ class ReviewWorkspace:
             return out
         fid = out.split()[1]
         with self._lock:
+            # Not marked verified: an overturn is a new claim and goes through independent verification
+            # like every other finding (observed: an audit "overturn" asserting a wrong library default).
             finding = self.findings[fid]
-            self.findings[fid] = finding.model_copy(update={"verification": Verification(
-                verdict="confirmed", original_severity=finding.severity,
-                note=f"Found by the verifier: the specialist's {item['kind']} was wrong — {args.why_wrong.strip()[:600]}",
-            )})
-            self.verifications[fid] = self.findings[fid].verification
+            self.findings[fid] = finding.model_copy(update={"description": (
+                f"{finding.description}\n\nRaised by the audit of a dismissed conclusion ({args.ref}): "
+                f"{args.why_wrong.strip()[:600]}")})
             self.negative_audit[args.ref] = f"overturned -> {fid}"
             if args.ref in self.hypotheses:
                 self.hypotheses[args.ref].update(outcome="confirmed", finding_id=fid,
@@ -1653,7 +1688,7 @@ class ReviewWorkspace:
                 # Kept (not deleted) so the other D- refs stay stable while the audit runs.
                 for key in [k for k in self.dismissed_leads if k[0] == category.id and k[1] == item["claim"]]:
                     self.dismissed_leads[key] = f"dismissal overturned by the verifier → {fid}"
-        return f"{args.ref}: overturned; recorded {fid} (verified)."
+        return f"{args.ref}: overturned; recorded {fid} (it will be independently verified)."
 
     def open_hypotheses(self, category_id: str) -> list[str]:
         return [f"{hid}: {h['statement'][:160]}" for hid, h in self.hypotheses.items()

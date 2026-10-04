@@ -348,8 +348,9 @@ so you are the skeptic of the specialist's reasoning, not of a finding. For EACH
    in code; a reason that is about different code than the item; "the framework handles it"
    without showing where.
 3. Decide: uphold — cite the `path:line` that makes it safe on every path; or overturn —
-   record the defect (title, severity, description, impact, evidence, exposure). An
-   overturned item becomes a verified finding in the report.
+   record the defect (title, severity, description, impact, evidence, exposure). It then
+   goes to an independent verifier like every finding — overturn only on what the code shows,
+   never on an assumed library default you cannot point to.
 Calibrate severity and exposure with the rubric above. Judge every item listed; when all
 are judged, reply with one sentence.
 """

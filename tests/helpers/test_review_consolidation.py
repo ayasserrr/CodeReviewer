@@ -409,6 +409,17 @@ def test_report_counts_a_lead_covered_by_another_lane(workspace):
     assert label not in dict(ws.unaddressed_leads("inputs", any_lane=True))  # but the report shows it covered
 
 
+_SPECIFIC_HYPOTHESES = [
+    ("`startup` in app/main.py registers routers before the auth middleware", "app/main.py"),
+    ("`get_current_user` in auth.py trusts the identity header sent by the client", "app/routers/auth.py"),
+    ("`list_orders` in orders_service.py returns orders of every customer", "app/services/orders_service.py"),
+    ("`approve_item` lets any caller change the state of another user's item", "app/routers/item_actions.py"),
+    ("`save_document` joins the client filename into the storage path", "app/services/documents_service.py"),
+    ("`extract_text` in extract_docx_txt.py drops tables and footnotes from documents",
+     "src/utils/extract_docx_txt.py"),
+]
+
+
 def test_hypotheses_need_a_system_model_real_files_and_a_cited_resolution(workspace):
     from helpers.review_workspace import (
         _HypothesesArgs,
@@ -421,12 +432,9 @@ def test_hypotheses_need_a_system_model_real_files_and_a_cited_resolution(worksp
     model = ("The API in app/main.py serves routers under app/routers; services in app/services hold the data "
              "access. Identity arrives from request headers and file uploads are stored on local disk.")
     few = ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=[
-        _HypothesisInput(statement="Upload service joins client filenames into disk paths", files=["app/main.py"])]))
+        _HypothesisInput(statement="`upload` in main.py joins client filenames into disk paths", files=["app/main.py"])]))
     assert few.startswith("NOT RECORDED") and "at least 6" in few
-    hyps = [_HypothesisInput(statement=f"Suspected defect number {i} in the routing and service layer", files=[f])
-            for i, f in enumerate(["app/main.py", "app/routers/auth.py", "app/services/orders_service.py",
-                                   "app/routers/item_actions.py", "app/services/documents_service.py",
-                                   "src/utils/extract_docx_txt.py"], start=1)]
+    hyps = [_HypothesisInput(statement=text, files=[f]) for text, f in _SPECIFIC_HYPOTHESES]
     out = ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=hyps))
     assert out.startswith("Recorded H-SEC-1, H-SEC-2, H-SEC-3, H-SEC-4, H-SEC-5, H-SEC-6")
     assert len(ws.open_hypotheses("security")) == 6
@@ -495,11 +503,8 @@ def test_verifier_audits_the_lanes_safe_conclusions(workspace):
     security = ws.config.category("security")
     model = ("The API in app/main.py serves routers under app/routers; services in app/services hold the data "
              "access. Identity arrives from request headers and file uploads are stored on local disk.")
-    files = ["app/main.py", "app/routers/auth.py", "app/services/orders_service.py", "app/routers/item_actions.py",
-             "app/services/documents_service.py", "src/utils/extract_docx_txt.py"]
     ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=[
-        _HypothesisInput(statement=f"Suspected defect number {i} in the routing and service layer", files=[f])
-        for i, f in enumerate(files, start=1)]))
+        _HypothesisInput(statement=text, files=[f]) for text, f in _SPECIFIC_HYPOTHESES]))
     # A note about other code is refused even when it cites a line.
     crossed = ws.resolve_hypothesis(security, _ResolveHypothesisArgs(
         hypothesis_id="H-SEC-3", outcome="ruled_out", note="bcrypt hashing is offloaded at app/routers/auth.py:19"))
@@ -519,7 +524,9 @@ def test_verifier_audits_the_lanes_safe_conclusions(workspace):
         evidence=[{"file": "app/services/orders_service.py", "line_start": 1, "line_end": 2}]))
     assert "overturned" in out
     fid = out.split("recorded ")[1].split()[0]
-    assert ws.findings[fid].verification.verdict == "confirmed"
+    # An overturn is a new claim: it waits for independent verification instead of being pre-confirmed.
+    assert ws.findings[fid].verification is None
+    assert fid in {f.id for f in ws.findings_to_verify("security")}
     assert ws.hypotheses["H-SEC-3"]["outcome"] == "confirmed"
     assert ws.negatives_to_audit("security") == []
 
@@ -564,3 +571,32 @@ def test_rejection_must_be_about_the_code_not_the_checklist(workspace):
         finding_id=fid, verdict="rejected",
         note="The review brief does not list job cancellation; jobs start at app/main.py:20."))
     assert out.startswith("NOT RECORDED")
+
+
+def test_hypotheses_must_be_concrete_distinct_and_confirmed_by_their_own_finding(workspace):
+    from helpers.review_workspace import (
+        _HypothesesArgs,
+        _HypothesisInput,
+        _ResolveHypothesisArgs,
+    )
+
+    ws = workspace
+    auth = ws.config.category("auth")
+    model = ("The API in app/main.py serves routers under app/routers; services in app/services hold the data "
+             "access. Sessions are cookies issued at login by app/routers/auth.py and checked by a dependency.")
+    vague = ws.record_hypotheses(auth, _HypothesesArgs(system_model=model, hypotheses=[
+        _HypothesisInput(statement="Session management might be insecure, potentially weak or not rotated",
+                         files=["app/routers/auth.py"])]))
+    assert "name the code you suspect" in vague
+    hyps = [_HypothesisInput(statement=text, files=[f]) for text, f in _SPECIFIC_HYPOTHESES]
+    hyps.append(_HypothesisInput(statement="`get_current_user` in auth.py trusts the identity header the client sent",
+                                 files=["app/routers/auth.py"]))
+    out = ws.record_hypotheses(auth, _HypothesesArgs(system_model=model, hypotheses=hyps))
+    assert "duplicates" in out and len([h for h in ws.hypotheses.values() if h["lane"] == "auth"]) == 6
+    cookie = record(ws, "auth", "Session cookie set without the HttpOnly flag", "Medium", ("app/routers/auth.py", 5, 6))
+    unrelated = ws.resolve_hypothesis(auth, _ResolveHypothesisArgs(
+        hypothesis_id="H-AUTH-2", outcome="confirmed", finding_id=cookie))
+    assert unrelated.startswith("NOT RECORDED") and "different defect" in unrelated
+    header = record(ws, "auth", "Identity header trusted by get_current_user", "High", ("app/routers/auth.py", 5, 6))
+    assert ws.resolve_hypothesis(auth, _ResolveHypothesisArgs(
+        hypothesis_id="H-AUTH-2", outcome="confirmed", finding_id=header)) == "H-AUTH-2: confirmed."

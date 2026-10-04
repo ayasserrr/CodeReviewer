@@ -456,6 +456,9 @@ class DeepReviewController(BaseController):
 
         await self._verify_findings(category, workspace, brief, files, repo_path, semaphore, runs)
         await self._audit_negatives(category, workspace, brief, files, repo_path, semaphore, runs)
+        # Findings the audit raised are new claims: they get the same independent verification.
+        if workspace.findings_to_verify(category.id):
+            await self._verify_findings(category, workspace, brief, files, repo_path, semaphore, runs)
 
     async def _audit_negatives(self, category, workspace, brief, files, repo_path, semaphore, runs) -> None:
         """A second agent checks the lane's "this is safe" conclusions, the way findings are checked."""

@@ -324,7 +324,8 @@ class DeepReviewController(BaseController):
         kickoff = (
             f"Begin the {category.title} review of this repository. Work in this order:\n"
             "1. UNDERSTAND: read /_review/context/system_overview.md, agents_md.md if present, and the entry points "
-            "and core modules that matter for your lane. Work out how THIS system works: its purpose, main flows, data, "
+            "and core modules that matter for your lane. Work out how THIS system works: its purpose, main flows, "
+            "data, "
             "trust boundaries and where failure would hurt most. Write down its invariants for your lane — what must "
             "always be true (each record has one owner, a job runs once, a caller only sees their own data, a value "
             "keeps its meaning from input to output, a lock is always released).\n"
@@ -341,10 +342,12 @@ class DeepReviewController(BaseController):
         scope = workspace.lane_scopes().get(category.id, [])
         if scope:
             kickoff += (
-                f"\n\nYour file scope: {len(scope)} files (listed under '{category.id}' in /_review/context/scopes.md). "
+                f"\n\nYour file scope: {len(scope)} files (listed under '{category.id}' in "
+                "/_review/context/scopes.md). "
                 "Open every one of them for your lane's concerns before you finish — read the small ones yourself in "
                 "parallel batches, and hand the rest to code-explorer sweeps (several `task` calls in ONE turn, 8-12 "
-                "files each, each asked to report every defect relevant to your lane with file:line). Their reads count "
+                "files each, each asked to report every defect relevant to your lane with file:line). Their reads "
+                "count "
                 "toward your scope."
             )
         leads = workspace.lane_leads(category.id)

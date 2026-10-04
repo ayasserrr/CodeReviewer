@@ -303,7 +303,8 @@ def render_report(report: DeepReviewReport) -> str:
         )
         docs = ", ".join(f"`{d}`" for d in cov.system_docs)
         out.append(
-            f"| System description | {'AGENTS.md used as the intended logic: ' + docs if docs else 'no AGENTS.md in the repository'} |"
+            "| System description | "
+            f"{'AGENTS.md used as the intended logic: ' + docs if docs else 'no AGENTS.md in the repository'} |"
         )
         pct = round(100 * cov.source_files_opened_by_agents / cov.source_files) if cov.source_files else 0
         out.append(

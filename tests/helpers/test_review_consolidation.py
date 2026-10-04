@@ -777,7 +777,7 @@ def test_uncited_note_about_another_finding_is_refused(workspace):
 def test_declared_runtimes_are_reported(workspace, tmp_path):
     (workspace.repo_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.14,<4.0"\n')
     workspace.manifest = workspace.manifest.model_copy(
-        update={"files": workspace.manifest.files + (FileEntry(path="pyproject.toml", language="TOML", size_bytes=40),)}
+        update={"files": (*workspace.manifest.files, FileEntry(path="pyproject.toml", language="TOML", size_bytes=40))}
     )
     assert workspace.declared_runtimes() == ["pyproject.toml: requires-python >=3.14,<4.0"]
     assert "requires-python >=3.14" in workspace.render_system_overview()
@@ -992,7 +992,7 @@ def test_syntax_claims_are_checked_against_the_code_and_declared_runtime(workspa
     (ws.repo_path / "app/routers/auth.py").write_text("try:\n    pass\nexcept A, B:\n    pass\n")
     (ws.repo_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.99"\n')
     ws.manifest = ws.manifest.model_copy(
-        update={"files": ws.manifest.files + (FileEntry(path="pyproject.toml", language="TOML", size_bytes=40),)}
+        update={"files": (*ws.manifest.files, FileEntry(path="pyproject.toml", language="TOML", size_bytes=40))}
     )
     out = ws.record_finding(
         ws.config.category("correctness"),

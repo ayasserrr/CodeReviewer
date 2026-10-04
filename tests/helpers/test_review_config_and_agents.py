@@ -42,7 +42,8 @@ class TestReviewConfig:
             (b"not = [valid", "invalid TOML"),
             (b'[[categories]]\nid = "a"\ntitle = "A"\ncode = "AA"\nfocus = "x"\n' * 2, "duplicate category ids"),
             (
-                b'[static_analysis.owners]\nruff = "nope"\n[[categories]]\nid = "a"\ntitle = "A"\ncode = "AA"\nfocus = "x"\n',
+                b'[static_analysis.owners]\nruff = "nope"\n'
+                b'[[categories]]\nid = "a"\ntitle = "A"\ncode = "AA"\nfocus = "x"\n',
                 "unknown categories",
             ),
         ],

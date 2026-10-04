@@ -9,11 +9,11 @@ SRC_DIR = Path(__file__).resolve().parents[2]
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from alembic import context
-from sqlalchemy import engine_from_config, pool
+from alembic import context  # noqa: E402 — after the sys.path setup above
+from sqlalchemy import engine_from_config, pool  # noqa: E402
 
-from config import settings
-from data.models import Base
+from config import settings  # noqa: E402
+from data.models import Base  # noqa: E402
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

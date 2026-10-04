@@ -102,7 +102,9 @@ def extract_doc(path):
     "svc/app/__init__.py": "from app import extract\n",
     "svc/legacy/old_rag.py": "import chromadb\nimport PyPDF2\n",
     "svc/tests/test_units.py": "def test_x():\n    assert 1\n",
-    "svc/requirements.txt": "fastapi\nPyPDF2==3.0\npypdf\nPyMuPDF\npsycopg2-binary\nasyncpg\nchromadb\ntavily-python\ndocx2pdf\n",
+    "svc/requirements.txt": (
+        "fastapi\nPyPDF2==3.0\npypdf\nPyMuPDF\npsycopg2-binary\nasyncpg\nchromadb\ntavily-python\ndocx2pdf\n"
+    ),
     "svc/deploy/jenkins/jenkins-dev": "pipeline { stages { stage('Build Image') { } stage('Deploy Image') { } } }\n",
     ".gitlab-ci.yml": "stages:\n  - test\nunit:\n  stage: test\n  script: pytest -q\n",
 }
@@ -433,7 +435,9 @@ def test_processors_pipeline_hygiene_and_governance_controls(tmp_path: Path):
             "def score_order(order, email, phone, address):\n    return llm.invoke(order)\n"
             "def rank(order, email, phone):\n    return 1\n"
         ),
-        "svc/deploy/jenkins/jenkins-dev": "pipeline { stages { stage('Deploy') { steps { sh 'sudo docker pull app:latest' } } } }\n",
+        "svc/deploy/jenkins/jenkins-dev": (
+            "pipeline { stages { stage('Deploy') { steps { sh 'sudo docker pull app:latest' } } } }\n"
+        ),
         "svc/README.md": "Call GET /api/v1/items to list items.\n",
     }
     entries = []

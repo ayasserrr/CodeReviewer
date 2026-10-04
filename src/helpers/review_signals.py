@@ -110,7 +110,8 @@ _CONTROLS = (
             r"(?i)\bBaseSettings\b|validate_(settings|config|env)|raise\s+\w*Error\(.{0,80}(not set|missing|required)|"
             r"sys\.exit\(.{0,40}(env|config)"
         ),
-        r"(?i)startup validation|validat\w* (at|on) (startup|boot)|refuse\w* to (start|boot)|boots? (with|misconfigured)",
+        r"(?i)startup validation|validat\w* (at|on) (startup|boot)|refuse\w* to (start|boot)|boots? "
+        r"(with|misconfigured)",
         "env",
     ),
     (
@@ -603,7 +604,7 @@ def _llm_signals(files, live: set[str], signals: RuntimeSignals) -> None:
         for name, sites in defs.items():
             if name in reaches or name in _GENERIC_NAMES:
                 continue
-            for path, fn in sites:
+            for _path, fn in sites:
                 if isinstance(fn, ast.AsyncFunctionDef):
                     continue
                 for node in _own_nodes(fn):
@@ -692,7 +693,8 @@ def _llm_signals(files, live: set[str], signals: RuntimeSignals) -> None:
                         Signal(
                             py.path,
                             node.lineno,
-                            f"loop re-sends the growing `{hit[0]}` list to the model every round (call at line {hit[1]})",
+                            f"loop re-sends the growing `{hit[0]}` list to the model every round (call at line "
+                            f"{hit[1]})",
                         )
                     )
             if isinstance(node, ast.Call) and _dotted(node.func).split(".")[-1] == "ToolMessage":
@@ -949,7 +951,10 @@ def _artifact_signals(repo_path: Path, manifest: RepositoryManifest, signals: Ru
             if re.match(r"(?i)^\s*(COPY|ADD)\s+(--\S+\s+)*\.\s", line):
                 missing = [pat for pat in (".env", "*.pdf", "uploads") if pat.strip("*") not in ignore]
                 if not ignore:
-                    what = "no .dockerignore — every file in the build context (.env files, user data, archives) is baked into the image"
+                    what = (
+                        "no .dockerignore — every file in the build context (.env files, user data, archives) "
+                        "is baked into the image"
+                    )
                 elif missing:
                     what = f".dockerignore does not exclude {', '.join(missing)} — they are baked into the image"
                 else:
@@ -1166,7 +1171,8 @@ def _production_signals(
                             Signal(
                                 py.path,
                                 node.lineno,
-                                f"startup runs {callee}() with no error handling — if it fails the whole API does not start",
+                                f"startup runs {callee}() with no error handling — if it fails the whole API does "
+                                "not start",
                             )
                         )
     live_clients = [s for s in signals.model_clients_at_import if s.file in live]
@@ -1223,7 +1229,8 @@ def _production_signals(
                     Signal(
                         entry.path,
                         1,
-                        f"no lockfile next to it; {len(unpinned)} of {len(reqs)} requirements unpinned, transitive versions float",
+                        f"no lockfile next to it; {len(unpinned)} of {len(reqs)} requirements unpinned, transitive "
+                        "versions float",
                     )
                 )
         elif name == "package.json" and "node_modules" not in entry.path:
@@ -1391,7 +1398,7 @@ def _parallel_implementations(files, live: set[str], signals: RuntimeSignals) ->
             if length >= 6 and len(tokens) >= 2:
                 groups[tokens].append((py.path, fn))
     rows = []
-    for tokens, members in groups.items():
+    for members in groups.values():
         names = {fn.name for _, fn in members}
         if len(members) < 2 or len({ast.dump(fn) for _, fn in members}) < 2:
             continue
@@ -1898,7 +1905,7 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
         out += [f"- {r}" for r in rows[:limit]] or ["- none"]
         if len(rows) > limit:
             out.append(f"- ... {len(rows) - limit} more")
-        return out + [""]
+        return [*out, ""]
 
     lines = [
         "# Runtime signals (static, heuristic — confirm each row in the code before recording)",

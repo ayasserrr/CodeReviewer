@@ -55,9 +55,12 @@ class TestVerifyToolsAvailable:
             tool = tool_by_binary.get(binary_name, binary_name)
             return None if tool in missing else "/usr/bin/" + binary_name
 
-        with patch("shutil.which", side_effect=fake_which), patch("os.path.isfile", return_value=False):
-            with pytest.raises(BootstrapError) as exc_info:
-                tool_bootstrap.verify_tools_available()
+        with (
+            patch("shutil.which", side_effect=fake_which),
+            patch("os.path.isfile", return_value=False),
+            pytest.raises(BootstrapError) as exc_info,
+        ):
+            tool_bootstrap.verify_tools_available()
 
         message = str(exc_info.value)
         for tool in missing:
@@ -69,11 +72,14 @@ class TestVerifyToolsAvailable:
         def fake_which(binary_name: str):
             return "/usr/bin/pip-audit" if binary_name == "pip-audit" else None
 
-        with patch("shutil.which", side_effect=fake_which), patch("os.path.isfile", return_value=True):
-            # gitleaks resolves via the bundled asset (isfile=True), everything
-            # else must resolve via the hyphenated "pip-audit" binary name.
-            with pytest.raises(BootstrapError) as exc_info:
-                tool_bootstrap.verify_tools_available()
+        # gitleaks resolves via the bundled asset (isfile=True), everything
+        # else must resolve via the hyphenated "pip-audit" binary name.
+        with (
+            patch("shutil.which", side_effect=fake_which),
+            patch("os.path.isfile", return_value=True),
+            pytest.raises(BootstrapError) as exc_info,
+        ):
+            tool_bootstrap.verify_tools_available()
         assert "pip_audit" not in str(exc_info.value)
 
     def test_success_is_cached_and_not_rechecked(self):
@@ -87,9 +93,12 @@ class TestVerifyToolsAvailable:
         assert mock_which.call_count == len(tool_bootstrap.REQUIRED_TOOLS) - 1
 
     def test_failure_is_not_cached_and_retried(self):
-        with patch("shutil.which", return_value=None), patch("os.path.isfile", return_value=False):
-            with pytest.raises(BootstrapError):
-                tool_bootstrap.verify_tools_available()
+        with (
+            patch("shutil.which", return_value=None),
+            patch("os.path.isfile", return_value=False),
+            pytest.raises(BootstrapError),
+        ):
+            tool_bootstrap.verify_tools_available()
 
         # resolve_gitleaks_bin() never raises (missing just means it returns
         # None), so functools.cache *does* memoize that outcome permanently —

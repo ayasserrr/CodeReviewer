@@ -191,7 +191,9 @@ def normalize_pip_audit(raw_data: dict[str, Any]) -> list[dict[str, Any]]:
                     "line": dep.get("source_line"),
                     "severity": severity,
                     "category": vuln.get("id", "cve"),
-                    "message": f"{dep.get('name')} {dep.get('version')}: {vuln.get('description') or vuln.get('id', '')}",
+                    "message": (
+                        f"{dep.get('name')} {dep.get('version')}: {vuln.get('description') or vuln.get('id', '')}"
+                    ),
                 }
             )
     return normalized

@@ -12,9 +12,84 @@ from config import settings
 
 pytestmark = pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")
 
-_PYTHON = 'import jwt, tarfile, zipfile, shutil, sqlite3, logging, hmac\nfrom fastapi.responses import RedirectResponse\nfrom sqlalchemy.orm import sessionmaker\nlogger = logging.getLogger(__name__)\nSessionLocal = sessionmaker()\ndb = SessionLocal()                                   # BAD module-level session\nconn = sqlite3.connect("x.db")                        # BAD\n\ndef update_user(user, payload):\n    for key, value in payload.dict(exclude_unset=True).items():   # BAD mass assignment\n        setattr(user, key, value)\n\ndef create(payload):\n    return User(**payload.model_dump())               # BAD mass assignment\n\ndef go(request):\n    return RedirectResponse(request.query_params.get("next"))   # BAD open redirect\n\ndef delete(user, item):\n    assert user.id == item.owner_id, "forbidden"      # BAD assert guard\n    assert len(item.name) < 100                        # ok (not a guard word)\n\ndef login(resp, token):\n    resp.set_cookie("session", token)                  # BAD\n    resp.set_cookie("session", token, httponly=True, secure=True)   # ok\n\ndef verify(token, key):\n    jwt.decode(token, key)                             # BAD\n    jwt.decode(token, key, algorithms=["HS256"])       # ok\n\ndef check(api_key, provided):\n    if provided == api_key:                            # hmm: $A is provided -> not matched\n        return True\n    if api_key == provided:                            # BAD\n        return True\n    if api_key == None:                                # ok\n        return False\n    return hmac.compare_digest(api_key, provided)\n\ndef unpack(path):\n    tarfile.open(path).extractall("/tmp/x")            # BAD\n    tarfile.open(path).extractall("/tmp/x", filter="data")   # ok\n    zipfile.ZipFile(path).extractall("/tmp/x")         # BAD\n\ndef log_it(password, user):\n    logger.info(f"login {user} with {password}")       # BAD\n    logger.info("user %s", user)                       # ok\n\ndef fetch():\n    try:\n        risky()\n    except Exception:\n        pass                                           # BAD\n\ndef acc(items=[]):                                    # BAD\n    items.append(1)\n\ndef bill():\n    total_price = float("1.10")                        # BAD\n    ratio = float("0.5")                               # ok\n\ndef more(user, form, settings):\n    if user.password == form.password:                 # BAD plaintext\n        return 1\n    if form.token_type == "bearer":                    # ok\n        return 2\n    if settings.api_key != request_key:                # BAD\n        return 3\n'
+_PYTHON = """\
+import jwt, tarfile, zipfile, shutil, sqlite3, logging, hmac
+from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import sessionmaker
+logger = logging.getLogger(__name__)
+SessionLocal = sessionmaker()
+db = SessionLocal()                                   # BAD module-level session
+conn = sqlite3.connect("x.db")                        # BAD
 
-_TS = 'const params = new URLSearchParams(window.location.search);\nwindow.location.href = params.get("next");\nparent.postMessage({token}, "*");\nwindow.addEventListener("message", (e) => { doIt(e.data); });\nwindow.addEventListener("message", (e) => { if (e.origin !== ORIGIN) return; doIt(e.data); });\n'
+def update_user(user, payload):
+    for key, value in payload.dict(exclude_unset=True).items():   # BAD mass assignment
+        setattr(user, key, value)
+
+def create(payload):
+    return User(**payload.model_dump())               # BAD mass assignment
+
+def go(request):
+    return RedirectResponse(request.query_params.get("next"))   # BAD open redirect
+
+def delete(user, item):
+    assert user.id == item.owner_id, "forbidden"      # BAD assert guard
+    assert len(item.name) < 100                        # ok (not a guard word)
+
+def login(resp, token):
+    resp.set_cookie("session", token)                  # BAD
+    resp.set_cookie("session", token, httponly=True, secure=True)   # ok
+
+def verify(token, key):
+    jwt.decode(token, key)                             # BAD
+    jwt.decode(token, key, algorithms=["HS256"])       # ok
+
+def check(api_key, provided):
+    if provided == api_key:                            # hmm: $A is provided -> not matched
+        return True
+    if api_key == provided:                            # BAD
+        return True
+    if api_key == None:                                # ok
+        return False
+    return hmac.compare_digest(api_key, provided)
+
+def unpack(path):
+    tarfile.open(path).extractall("/tmp/x")            # BAD
+    tarfile.open(path).extractall("/tmp/x", filter="data")   # ok
+    zipfile.ZipFile(path).extractall("/tmp/x")         # BAD
+
+def log_it(password, user):
+    logger.info(f"login {user} with {password}")       # BAD
+    logger.info("user %s", user)                       # ok
+
+def fetch():
+    try:
+        risky()
+    except Exception:
+        pass                                           # BAD
+
+def acc(items=[]):                                    # BAD
+    items.append(1)
+
+def bill():
+    total_price = float("1.10")                        # BAD
+    ratio = float("0.5")                               # ok
+
+def more(user, form, settings):
+    if user.password == form.password:                 # BAD plaintext
+        return 1
+    if form.token_type == "bearer":                    # ok
+        return 2
+    if settings.api_key != request_key:                # BAD
+        return 3
+"""
+
+_TS = """\
+const params = new URLSearchParams(window.location.search);
+window.location.href = params.get("next");
+parent.postMessage({token}, "*");
+window.addEventListener("message", (e) => { doIt(e.data); });
+window.addEventListener("message", (e) => { if (e.origin !== ORIGIN) return; doIt(e.data); });
+"""
 
 
 @pytest.fixture(scope="module")

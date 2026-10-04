@@ -17,7 +17,7 @@ import pytest
 
 from controllers.ingestion_controller import IngestionController
 from enums import SourceType
-from utils import DiskError, RepoNotFoundError
+from utils import DiskError, InvalidInputError, RepoNotFoundError
 
 
 def _fake_clone_factory(local_git_repo: Path):
@@ -133,7 +133,7 @@ async def test_ingest_propagates_invalid_input_before_any_network_call(patched_r
     resolve_mock = AsyncMock()
     with patch("controllers.ingestion_controller.resolve_project", new=resolve_mock):
         controller = IngestionController(db_session=MagicMock())
-        with pytest.raises(Exception):  # InvalidInputError, imported indirectly via utils
+        with pytest.raises(InvalidInputError):
             await controller.ingest(
                 gitlab_url="not-a-valid-url",
                 access_token="fake-token",

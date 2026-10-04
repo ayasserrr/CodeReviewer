@@ -57,9 +57,11 @@ class TestNormalize:
 
 class TestRunAnalysisSync:
     def test_raises_bootstrap_error_before_touching_repo(self, tmp_path):
-        with patch("services.static_analysis.verify_tools_available", side_effect=BootstrapError("missing: ruff")):
-            with pytest.raises(BootstrapError):
-                _run_analysis_sync(tmp_path, _make_manifest())
+        with (
+            patch("services.static_analysis.verify_tools_available", side_effect=BootstrapError("missing: ruff")),
+            pytest.raises(BootstrapError),
+        ):
+            _run_analysis_sync(tmp_path, _make_manifest())
 
     def test_assembles_findings_from_both_tracks(self, tmp_path):
         fake_static_result = {
@@ -166,7 +168,7 @@ class TestAnalyzePersistence:
         ):
             db_session = MagicMock()
             manifest = _make_manifest()
-            findings, tool_results = await analyze(tmp_path, manifest, db_session)
+            _findings, _tool_results = await analyze(tmp_path, manifest, db_session)
 
         MockRepo.assert_called_once_with(db_session)
         mock_save.assert_awaited_once()

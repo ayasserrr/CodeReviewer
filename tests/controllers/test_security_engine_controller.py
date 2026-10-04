@@ -34,8 +34,9 @@ class TestRunPipAudit:
 
         def fake_run(command, **kwargs):
             req = command[command.index("-r") + 1]
-            seen.append((command, open(req).read()))
-            name = open(req).read().split("==")[0]
+            text = Path(req).read_text()
+            seen.append((command, text))
+            name = text.split("==")[0]
             payload = {
                 "dependencies": [{"name": name, "version": "x", "vulns": [{"id": "PYSEC-1", "fix_versions": []}]}]
             }

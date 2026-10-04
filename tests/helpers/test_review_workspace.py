@@ -385,7 +385,8 @@ class TestMapsIntegration:
         assert leads[0][0].startswith("Routes taking a user identity") and leads[0][1] == frozenset({"app/main.py"})
         assert [label for label, _ in mapped.unaddressed_leads("security")] == [
             leads[0][0],
-            "Baseline with no trace anywhere in the code: HTTP security headers (HSTS, CSP, X-Content-Type-Options, ...)",
+            "Baseline with no trace anywhere in the code: HTTP security headers (HSTS, CSP, X-Content-Type-Options, "
+            "...)",
         ]
         mapped.record_finding(mapped.config.category("security"), _finding(title="Header identity"))
         mapped.record_finding(mapped.config.category("security"), _finding(title="No security headers (HSTS, CSP)"))

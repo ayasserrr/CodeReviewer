@@ -64,9 +64,11 @@ class TestCloneRepositoryMocked:
 
     def test_timeout_raises_network_error(self, tmp_path: Path):
         dest = tmp_path / "clone-dest"
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=5)):
-            with pytest.raises(NetworkError, match="timed out"):
-                clone_repository("https://gitlab.example.com", "group/project", "main", "token", dest, 5)
+        with (
+            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=5)),
+            pytest.raises(NetworkError, match="timed out"),
+        ):
+            clone_repository("https://gitlab.example.com", "group/project", "main", "token", dest, 5)
 
     def test_auth_failure_detected_and_raises_authentication_error(self, tmp_path: Path):
         dest = tmp_path / "clone-dest"
@@ -96,9 +98,11 @@ class TestCloneRepositoryMocked:
             stdout="",
             stderr="fatal: could not read Username for 'https://super-secret-token@gitlab.example.com'",
         )
-        with patch("subprocess.run", return_value=fake_result):
-            with pytest.raises((AuthenticationError, NetworkError)) as exc_info:
-                clone_repository("https://gitlab.example.com", "group/project", "main", "super-secret-token", dest, 30)
+        with (
+            patch("subprocess.run", return_value=fake_result),
+            pytest.raises((AuthenticationError, NetworkError)) as exc_info,
+        ):
+            clone_repository("https://gitlab.example.com", "group/project", "main", "super-secret-token", dest, 30)
         assert "super-secret-token" not in str(exc_info.value)
 
 
@@ -109,7 +113,7 @@ class TestVerifyCloneIntegrity:
     def test_missing_git_dir_raises(self, tmp_path: Path):
         empty_dir = tmp_path / "not-a-repo"
         empty_dir.mkdir()
-        with pytest.raises(DiskError, match=".git directory"):
+        with pytest.raises(DiskError, match=r"\.git directory"):
             verify_clone_integrity(empty_dir)
 
     def test_missing_head_raises(self, tmp_path: Path):
@@ -131,9 +135,11 @@ class TestGetHeadSha:
         assert get_head_sha(local_git_repo, timeout_seconds=30) == expected
 
     def test_timeout_raises_network_error(self, local_git_repo: Path):
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=5)):
-            with pytest.raises(NetworkError):
-                get_head_sha(local_git_repo, timeout_seconds=5)
+        with (
+            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=5)),
+            pytest.raises(NetworkError),
+        ):
+            get_head_sha(local_git_repo, timeout_seconds=5)
 
     def test_malformed_output_raises_disk_error(self, local_git_repo: Path):
         fake_result = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="not-a-sha\n", stderr="")

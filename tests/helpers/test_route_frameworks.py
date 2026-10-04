@@ -114,7 +114,9 @@ def test_drf_default_permission_and_starlette(tmp_path):
     maps = _maps(
         tmp_path,
         {
-            "api/settings.py": 'REST_FRAMEWORK = {"DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"]}\n',
+            "api/settings.py": (
+                'REST_FRAMEWORK = {"DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"]}\n'
+            ),
             "api/urls.py": """
 from rest_framework.routers import DefaultRouter
 from api.views import UserViewSet, OpenViewSet

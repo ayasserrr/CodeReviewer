@@ -1652,7 +1652,8 @@ def render_route_map(maps: ReviewMaps) -> str:
     for r in maps.routes:
         lines.append(
             f"| {r.method} | {r.path} | {r.handler} ({r.file}:{r.line}) | {r.auth_label} | "
-            f"{', '.join(r.identity_inputs) or '-'} | {', '.join(r.flags) or '-'} | {', '.join(r.dependencies) or '-'} |"
+            f"{', '.join(r.identity_inputs) or '-'} | {', '.join(r.flags) or '-'} | "
+            f"{', '.join(r.dependencies) or '-'} |"
         )
     return "\n".join(lines)
 
@@ -1774,7 +1775,8 @@ def render_reachability(maps: ReviewMaps) -> str:
             lines.append(f"- {directory}/ ({len(names)}): {', '.join(sorted(names))}")
         lines.append("")
     lines.append(
-        f"## Background jobs (functions scheduled with add_task / create_task / executors) ({len(maps.background_jobs)})"
+        "## Background jobs (functions scheduled with add_task / create_task / executors) "
+        f"({len(maps.background_jobs)})"
     )
     lines += [
         f"- {job.function} ({job.file}:{job.line}) started at {job.started_at}"
@@ -1808,7 +1810,8 @@ def maps_brief(maps: ReviewMaps) -> list[str]:
     real_env = [f.file for f in maps.env_files if not f.is_template]
     dup_env = [f.file for f in maps.env_files if f.duplicates]
     lines.append(
-        f"- env_map.md: {len({r.key for r in maps.env_reads})} env keys read in {len({r.file for r in maps.env_reads})} files; "
+        f"- env_map.md: {len({r.key for r in maps.env_reads})} env keys read in "
+        f"{len({r.file for r in maps.env_reads})} files; "
         f"{len(divergent)} keys with divergent inline defaults; env files: {len(maps.env_files)} "
         f"(real: {', '.join(real_env) or 'none'}; with duplicate keys: {', '.join(dup_env) or 'none'})."
     )
@@ -1828,9 +1831,11 @@ def maps_brief(maps: ReviewMaps) -> list[str]:
         f"- runtime_signals.md: {len(sig.blocking_in_async)} sync model calls reached from async code; "
         f"{len(sig.agent_loops)} agent loops re-sending their message list; {len(sig.usage_never_read)} of "
         f"{sig.model_call_files} model-calling files never read token usage; {sum(n for _, n in sig.print_live)} "
-        f"print() calls in live modules; {len(sig.static_health)} static health checks; {len(sig.test_files)} test files "
+        f"print() calls in live modules; {len(sig.static_health)} static health checks; {len(sig.test_files)} test "
+        "files "
         f"({len(sig.route_tests)} drive the API); CI pipelines without a test/lint/scan step: "
-        f"{', '.join(p.file for p in sig.ci_without_checks) or 'none'}; {len(sig.duplicate_libraries)} duplicate-library "
+        f"{', '.join(p.file for p in sig.ci_without_checks) or 'none'}; {len(sig.duplicate_libraries)} "
+        "duplicate-library "
         f"families; {len(sig.parallel_implementations)} parallel implementations."
     )
     lines.append(

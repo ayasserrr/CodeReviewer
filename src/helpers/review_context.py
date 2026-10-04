@@ -132,9 +132,11 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
         f"- Languages: {languages}",
         f"- Frameworks: {frameworks}",
         f"- Source roots: {source_roots}",
-        f"- Files scanned: {stats.total_files_scanned} ({stats.total_lines} lines); parse errors: {stats.total_parse_errors}",
+        f"- Files scanned: {stats.total_files_scanned} ({stats.total_lines} lines); parse errors: "
+        f"{stats.total_parse_errors}",
         (
-            f"- Real .env file present in the repo: {'YES — never open it; its existence alone is evidence' if manifest.env_file_exists else 'no'}"
+            "- Real .env file present in the repo: "
+            f"{'YES — never open it; its existence alone is evidence' if manifest.env_file_exists else 'no'}"
             " (env_map.md lists every .env* file's key names, duplicate keys and flags — never values)"
         ),
         (
@@ -144,7 +146,8 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
         "",
         *_system_doc_brief(workspace),
         "",
-        f"## Directory map ({min(total_dirs, _BRIEF_TREE_DIRS)} of {total_dirs} directories; full list: /_review/context/file_tree.md)",
+        f"## Directory map ({min(total_dirs, _BRIEF_TREE_DIRS)} of {total_dirs} directories; full list: "
+        "/_review/context/file_tree.md)",
         *tree,
         "",
         f"## Entrypoints ({len(entrypoints)})",
@@ -152,7 +155,8 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
         "",
         *maps_brief(workspace.maps),
         "",
-        f"## HTTP endpoints ({len(endpoints)}; full table with dependencies: /_review/context/route_map.md or list_endpoints)",
+        f"## HTTP endpoints ({len(endpoints)}; full table with dependencies: /_review/context/route_map.md or "
+        "list_endpoints)",
         *(
             endpoints[:_BRIEF_ENDPOINTS]
             or ["- none detected (Discovery only detects Python frameworks — grep for others)"]
@@ -182,7 +186,8 @@ def build_context_files(workspace: ReviewWorkspace, brief: str) -> dict[str, dic
         "endpoints.md": "\n".join(
             ["# Detected HTTP endpoints"]
             + [
-                f"{e.method} {e.path} -> {e.handler} ({e.file}:{e.line}) [{e.framework}]{' [DUPLICATE]' if e.duplicate else ''}"
+                f"{e.method} {e.path} -> {e.handler} ({e.file}:{e.line}) "
+                f"[{e.framework}]{' [DUPLICATE]' if e.duplicate else ''}"
                 for e in manifest.endpoints
             ]
         ),

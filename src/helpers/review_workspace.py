@@ -164,7 +164,8 @@ def _cleanup_only_reason(claim: str, note: str) -> str | None:
 
 _NON_REASON = re.compile(
     r"(?i)\b(budget|out of time|no time|time ran|ran out|partially|not (fully )?(investigated|checked|traced|reviewed)|"
-    r"did not (check|trace|review)|covered (by|in|under) (finding|another)|see finding|already (recorded|reported|covered)|"
+    r"did not (check|trace|review)|covered (by|in|under) (finding|another)|see finding|already "
+    r"(recorded|reported|covered)|"
     r"will (check|review) later|skipp?ed)\b"
 )
 _ANCHOR_TERMS = frozenset(
@@ -442,7 +443,9 @@ class _EndpointArgs(BaseModel):
 class _HotspotArgs(BaseModel):
     kind: Literal["fan_in", "fan_out", "size", "complexity"] = Field(
         "fan_in",
-        description="fan_in = most-called functions; size = largest functions; complexity = static complexity findings.",
+        description=(
+            "fan_in = most-called functions; size = largest functions; complexity = static complexity findings."
+        ),
     )
     limit: int = Field(20, ge=1, le=100)
 
@@ -885,7 +888,8 @@ class ReviewWorkspace:
             location = f"{finding.file}:{finding.line}" if finding.line else finding.file
             message = " ".join(finding.message.split())[:220]
             lines.append(
-                f"{finding.id} | {finding.tool} | {finding.severity} | {finding.category} | {location} | {state} | {message}"
+                f"{finding.id} | {finding.tool} | {finding.severity} | {finding.category} | {location} | {state} | "
+                f"{message}"
             )
         if offset + len(page) < len(matches):
             lines.append(f"... more: call again with offset={offset + len(page)}")
@@ -905,7 +909,8 @@ class ReviewWorkspace:
         for cls in self.classes.values():
             if needle in cls.qualname.lower():
                 rows.append(
-                    f"class | {cls.id} | {cls.file}:{cls.start_line}-{cls.end_line} | methods={cls.method_count} | loc={cls.loc}"
+                    f"class | {cls.id} | {cls.file}:{cls.start_line}-{cls.end_line} | methods={cls.method_count} | "
+                    f"loc={cls.loc}"
                 )
         if not rows:
             return f"No function or class matching '{name}' in the dependency graph (only Python is indexed)."
@@ -1182,7 +1187,8 @@ class ReviewWorkspace:
         if category.owns_security_kpis:
             missing = [k.id for k in self.config.security_kpis if k.id not in assessed]
             lines.append(
-                f"KPIs assessed: {len(assessed)}/{len(self.config.security_kpis)}; missing: {', '.join(missing) or 'none'}"
+                f"KPIs assessed: {len(assessed)}/{len(self.config.security_kpis)}; missing: "
+                f"{', '.join(missing) or 'none'}"
             )
         owned = [t for t, owner in self.config.static_tool_owners.items() if owner == category.id]
         if owned:
@@ -1212,7 +1218,8 @@ class ReviewWorkspace:
         parts = [f"Triaged {accepted} as {args.verdict}."]
         if foreign:
             parts.append(
-                f"Ignored {len(foreign)} owned by another category (you triage only: {', '.join(sorted(owned)) or 'none'})."
+                f"Ignored {len(foreign)} owned by another category (you triage only: "
+                f"{', '.join(sorted(owned)) or 'none'})."
             )
         if unknown:
             parts.append(f"Unknown ids: {', '.join(unknown[:10])}.")
@@ -1405,7 +1412,8 @@ class ReviewWorkspace:
                     files |= self._reachable_files(file, function, depth=2)
                 groups.append(
                     (
-                        "Core pipelines to trace end to end (upload handlers and background jobs; their callees are in scope)",
+                        "Core pipelines to trace end to end (upload handlers and background jobs; their callees are "
+                        "in scope)",
                         frozenset(files),
                         [row for _, _, row in entry_points],
                     )
@@ -1656,7 +1664,8 @@ class ReviewWorkspace:
             if sig.print_live:
                 total = sum(n for _, n in sig.print_live)
                 add(
-                    f"print() used as logging in LIVE modules ({total} calls in {len(sig.print_live)} files) — cite these, "
+                    f"print() used as logging in LIVE modules ({total} calls in {len(sig.print_live)} files) — cite "
+                    "these, "
                     "not scripts",
                     [(f, f"{f}: {n} print() calls") for f, n in sig.print_live[:15]],
                 )
@@ -1788,7 +1797,8 @@ class ReviewWorkspace:
         if category_id == "testing" and sig.ci_pipelines and not any(p.runs_scans for p in sig.ci_pipelines):
             leads.append(
                 (
-                    "No CI/deploy pipeline runs a security or dependency scan (bandit/semgrep/pip-audit/npm audit/trivy/...)",
+                    "No CI/deploy pipeline runs a security or dependency scan (bandit/semgrep/pip-audit/npm "
+                    "audit/trivy/...)",
                     r"(?i)scan|security (test|check)|dependency (audit|check)|sast",
                 )
             )
@@ -1796,7 +1806,8 @@ class ReviewWorkspace:
             leads.append(
                 (
                     (
-                        f"No test drives the HTTP API ({len(sig.test_files)} test files, none uses TestClient/httpx/supertest): "
+                        f"No test drives the HTTP API ({len(sig.test_files)} test files, none uses "
+                        "TestClient/httpx/supertest): "
                         "auth, authorization, uploads and the frontend/backend contract are untested"
                     ),
                     r"(?i)(integration|route|api|endpoint|contract|auth).{0,60}test|test.{0,60}(integration|route|api|endpoint|contract)",
@@ -2033,7 +2044,10 @@ class ReviewWorkspace:
                 }
                 ids.append(hid)
         suffix = f" Not recorded: {'; '.join(errors)}." if errors else ""
-        return f"Recorded {', '.join(ids) or 'no'} hypotheses.{suffix} Investigate each and resolve it with resolve_hypothesis."
+        return (
+            f"Recorded {', '.join(ids) or 'no'} hypotheses.{suffix} "
+            "Investigate each and resolve it with resolve_hypothesis."
+        )
 
     def resolve_hypothesis(self, category: ReviewCategory, args: _ResolveHypothesisArgs) -> str:
         with self._lock:
@@ -2342,7 +2356,9 @@ class ReviewWorkspace:
         return None
 
     def declared_runtimes(self) -> list[str]:
-        """Interpreter / runtime versions the project declares (pyproject, .python-version, Dockerfiles, package.json)."""
+        """Interpreter / runtime versions the project declares.
+
+        Read from pyproject, .python-version, Dockerfiles and package.json."""
         found: list[str] = []
         patterns = (
             (r"(?im)^\s*requires-python\s*=\s*[\"']([^\"']+)", "requires-python {}"),
@@ -2664,7 +2680,8 @@ class ReviewWorkspace:
         hint = f" It matches {other.id} ('{other.title[:80]}') — did you mean that id?" if other else ""
         return (
             f"NOT RECORDED — this note cites {', '.join(sorted(cited))}, but {finding.id} is about "
-            f"'{finding.title[:100]}' ({', '.join(sorted(own)) or 'no files'}).{hint} Re-check which finding you are judging."
+            f"'{finding.title[:100]}' ({', '.join(sorted(own)) or 'no files'}).{hint} Re-check which finding you are "
+            "judging."
         )
 
     def submit_verification(self, category_id: str, args: _VerifyArgs) -> str:
@@ -3028,7 +3045,8 @@ class ReviewWorkspace:
             _tool(
                 self.static_overview,
                 "static_analysis_overview",
-                "Summary of the static-analysis pass: per tool status, finding counts, severities, top rules, owner category.",
+                "Summary of the static-analysis pass: per tool status, finding counts, severities, top rules, owner "
+                "category.",
             ),
             _tool(
                 self.query_static_findings,
@@ -3039,7 +3057,8 @@ class ReviewWorkspace:
             _tool(
                 self.find_symbol,
                 "find_symbol",
-                "Locate Python functions/classes by name in the dependency graph: file:line span, params, decorators, caller count.",
+                "Locate Python functions/classes by name in the dependency graph: file:line span, params, "
+                "decorators, caller count.",
                 _FindSymbolArgs,
             ),
             _tool(
@@ -3052,7 +3071,8 @@ class ReviewWorkspace:
             _tool(
                 self.call_relations,
                 "get_call_relations",
-                "Callers and callees of a Python function (resolved call graph with call-site lines). Use to trace reachability.",
+                "Callers and callees of a Python function (resolved call graph with call-site lines). Use to trace "
+                "reachability.",
                 _CallRelationArgs,
             ),
             _tool(
@@ -3065,14 +3085,16 @@ class ReviewWorkspace:
             _tool(
                 self.list_endpoints,
                 "list_endpoints",
-                "HTTP routes with full paths, the auth dependencies that actually apply (app/router/route, transitive), "
+                "HTTP routes with full paths, the auth dependencies that actually apply (app/router/route, "
+                "transitive), "
                 "identity inputs taken from the request, and flags. Filter with flagged_only=true for the risky ones.",
                 _EndpointArgs,
             ),
             _tool(
                 self.hotspots,
                 "get_hotspots",
-                "Ranked hot spots: most-called functions (fan_in), most-calling (fan_out), largest (size), most complex (complexity).",
+                "Ranked hot spots: most-called functions (fan_in), most-calling (fan_out), largest (size), most "
+                "complex (complexity).",
                 _HotspotArgs,
             ),
         ]
@@ -3088,7 +3110,8 @@ class ReviewWorkspace:
             _tool(
                 lambda **kw: self.record_finding(category, _RecordFindingArgs(**kw)),
                 "record_finding",
-                "Record one verified finding for your category. Validates every file:line citation against the repository.",
+                "Record one verified finding for your category. Validates every file:line citation against the "
+                "repository.",
                 _RecordFindingArgs,
             ),
             _tool(
@@ -3145,13 +3168,15 @@ class ReviewWorkspace:
             _tool(
                 lambda **kw: self.triage_static(category, _TriageArgs(**kw)),
                 "triage_static_findings",
-                "Give a verdict on static-analysis findings from the tools your category owns. Batch ids that share a verdict.",
+                "Give a verdict on static-analysis findings from the tools your category owns. Batch ids that share "
+                "a verdict.",
                 _TriageArgs,
             ),
             _tool(
                 lambda **kw: self.triage_rule(category, _TriageRuleArgs(**kw)),
                 "triage_static_rule",
-                "Apply one verdict to ALL untriaged findings of one (tool, rule) group — after sampling a few instances "
+                "Apply one verdict to ALL untriaged findings of one (tool, rule) group — after sampling a few "
+                "instances "
                 "with query_static_findings and reading the code. The fast way through large lint rule groups.",
                 _TriageRuleArgs,
             ),
@@ -3211,7 +3236,8 @@ class ReviewWorkspace:
             _tool(
                 lambda **kw: self.submit_summary(_SummaryArgs(**kw)),
                 "submit_executive_summary",
-                "Record the report's scope, verdict, priority order, cross-cutting root causes and verification note. Call once, last.",
+                "Record the report's scope, verdict, priority order, cross-cutting root causes and verification "
+                "note. Call once, last.",
                 _SummaryArgs,
             ),
         ]

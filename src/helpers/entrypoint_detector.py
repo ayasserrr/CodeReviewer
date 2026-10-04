@@ -24,12 +24,15 @@ def _has_main_guard(tree: ast.Module) -> bool:
         if not (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)):
             continue
         left = node.test.left
-        if isinstance(left, ast.Name) and left.id == "__name__":
-            if any(
+        if (
+            isinstance(left, ast.Name)
+            and left.id == "__name__"
+            and any(
                 isinstance(comparator, ast.Constant) and comparator.value == "__main__"
                 for comparator in node.test.comparators
-            ):
-                return True
+            )
+        ):
+            return True
     return False
 
 

@@ -394,7 +394,7 @@ class DeepReviewReport(BaseModel):
     open_leads: tuple[str, ...] = Field(default_factory=tuple)
     hypotheses: tuple[str, ...] = Field(default_factory=tuple)  # "lane — H-X-n: statement [outcome]"
     system_models: tuple[str, ...] = Field(default_factory=tuple)  # "lane: the agent's model of the system"
-    own_investigation: int = 0  # findings not sitting on any static lead or tool hit  # "lane — lead: rows" left neither recorded nor dismissed
+    own_investigation: int = 0  # findings not sitting on any static lead or tool hit
     merged_findings: tuple[MergedFinding, ...] = Field(default_factory=tuple)
     inventory: tuple[InventorySection, ...] = Field(default_factory=tuple)
     coverage: ReviewCoverage | None = None

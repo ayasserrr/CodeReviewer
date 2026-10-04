@@ -588,6 +588,10 @@ def test_hypotheses_must_be_concrete_distinct_and_confirmed_by_their_own_finding
         _HypothesisInput(statement="Session management might be insecure, potentially weak or not rotated",
                          files=["app/routers/auth.py"])]))
     assert "name the code you suspect" in vague
+    hedged = ws.record_hypotheses(auth, _HypothesesArgs(system_model=model, hypotheses=[
+        _HypothesisInput(statement="`login` in auth.py might configure sessions insecurely, potentially fixation",
+                         files=["app/routers/auth.py"])]))
+    assert "one concrete suspicion" in hedged
     hyps = [_HypothesisInput(statement=text, files=[f]) for text, f in _SPECIFIC_HYPOTHESES]
     hyps.append(_HypothesisInput(statement="`get_current_user` in auth.py trusts the identity header the client sent",
                                  files=["app/routers/auth.py"]))

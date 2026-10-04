@@ -486,3 +486,35 @@ def create_order(session, body):
     # The handler's db write lives in orders.create_order (resolved by module, not the other.py namesake).
     assert [h.row for h in hotspots] == [
         "`place_order` (db write, messaging, route handler; 4 lines) (app/routes.py:7)"]
+
+
+def test_identity_written_into_an_unrenewed_session_is_flagged(tmp_path: Path):
+    files = {
+        "app/main.py": "from aiohttp import web\napp = web.Application()\n",
+        "app/views.py": '''
+from aiohttp_session import get_session, new_session
+
+async def login(request, user):
+    session = await get_session(request)
+    session["user_id"] = user.id
+
+async def safe_login(request, user):
+    session = await new_session(request)
+    session["user_id"] = user.id
+
+async def visit(request):
+    session = await get_session(request)
+    session["last_visited"] = "now"
+''',
+    }
+    entries = []
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+        entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+    )
+    rows = [s.row for s in build_review_maps(tmp_path, manifest).signals.session_fixation]
+    assert rows == ["`login` sets session['user_id'] without renewing the session (app/views.py:6)"]

@@ -213,6 +213,7 @@ class RuntimeSignals:
     weak_tests: list[Signal] = field(default_factory=list)  # tests that cannot fail, credentials in test scripts
     supply_chain: list[Signal] = field(default_factory=list)  # missing lockfiles, unpinned base images
     naive_datetimes: list[Signal] = field(default_factory=list)
+    session_fixation: list[Signal] = field(default_factory=list)  # identity put into a session that is never renewed
     data_processors: list[Signal] = field(default_factory=list)  # third-party services that receive app data
     pipeline_hygiene: list[Signal] = field(default_factory=list)  # CI/deploy script practices
     # Functions combining several kinds of side effect (db write, network, files, subprocess,
@@ -1063,6 +1064,34 @@ def _effects(func: ast.AST, model_names: set[str]) -> set[str]:
     return kinds
 
 
+_SESSION_IDENTITY_KEY = re.compile(r"(?i)^(user|uid|account|login|auth|member|customer|principal|role|is_admin)\w*$")
+_SESSION_RENEW = {"new_session", "regenerate", "regenerate_id", "cycle_key", "clear", "invalidate", "flush",
+                  "rotate", "renew", "login", "login_user", "remember", "set_session_id"}
+
+
+def _session_fixation(files, live: set[str], signals: RuntimeSignals) -> None:
+    """A function that writes an identity into the session it received, without renewing or clearing
+    that session first: whoever planted the session id before login is logged in too (fixation)."""
+    for py in files:
+        if py.path not in live:
+            continue
+        for func in _functions(py.tree):
+            writes, renewed = [], False
+            for node in _own_nodes(func):
+                if isinstance(node, ast.Call) and _dotted(node.func).split(".")[-1] in _SESSION_RENEW:
+                    renewed = True
+                targets = node.targets if isinstance(node, ast.Assign) else []
+                for target in targets:
+                    if (isinstance(target, ast.Subscript) and "session" in _dotted(target.value).lower()
+                            and isinstance(target.slice, ast.Constant) and isinstance(target.slice.value, str)
+                            and _SESSION_IDENTITY_KEY.match(target.slice.value)):
+                        writes.append((node.lineno, target.slice.value))
+            if writes and not renewed:
+                line, key = writes[0]
+                signals.session_fixation.append(Signal(
+                    py.path, line, f"`{func.name}` sets session['{key}'] without renewing the session"))
+
+
 def _risk_hotspots(files, live: set[str], routes, signals: RuntimeSignals, limit: int = 15) -> None:
     """Rank live functions by how many KINDS of side effect they combine — no rule list, so it
     finds the functions worth tracing in any codebase: a failure between two effects leaves
@@ -1147,6 +1176,7 @@ def build_runtime_signals(
         ("deploy_env", lambda: _deploy_env_signals(repo_path, manifest, signals)),
         ("production", lambda: _production_signals(files, live, edges, repo_path, manifest, signals)),
         ("hotspots", lambda: _risk_hotspots(files, live, routes, signals)),
+        ("session_fixation", lambda: _session_fixation(files, live, signals)),
     ):
         try:
             step()
@@ -1216,6 +1246,8 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
     lines += block("Tests that cannot fail / credentials in test scripts", [s.row for s in signals.weak_tests])
     lines += block("Supply chain: missing lockfiles, unpinned base images", [s.row for s in signals.supply_chain])
     lines += block("Naive datetimes (no timezone)", [s.row for s in signals.naive_datetimes])
+    lines += block("Identity written into a session that is never renewed (session fixation)",
+                   [s.row for s in signals.session_fixation])
     lines += block("Third-party services that receive application data (processors)",
                    [s.row for s in signals.data_processors])
     lines += block("Deployment pipeline hygiene", [s.row for s in signals.pipeline_hygiene])

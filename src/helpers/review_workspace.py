@@ -146,6 +146,14 @@ _MIN_HYPOTHESES = 6
 _GENERIC_NOTE_WORDS = frozenset({"code", "file", "function", "line", "this", "that", "with", "because", "safe",
                                  "defect", "issue", "application", "system", "data", "value", "check", "used"})
 _EACH_ROW_MAX_KEYS = 25
+_HEDGE = re.compile(r"(?i)\b(might|may|potentially|possibly|could|perhaps|likely)\b")
+# Words every security/auth text shares; they say nothing about WHICH defect a text is about.
+_GENERIC_RISK_WORDS = frozenset({
+    "session", "sessions", "user", "users", "access", "attacker", "attack", "attacks", "security", "secure",
+    "insecure", "vulnerable", "vulnerability", "unauthorized", "sensitive", "leading", "allowing", "allows",
+    "hijacking", "bypass", "risk", "issues", "improper", "properly", "potentially", "might", "could",
+    "application", "request", "requests", "endpoint", "endpoints", "cookie", "cookies", "data", "server",
+})
 # A hypothesis names the code it suspects: an identifier, a call, a route, a file, or `quoted` code.
 _CODE_ELEMENT = re.compile(r"`[^`]+`|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|\b[A-Z][a-z0-9]+[A-Z]\w*\b|\b\w+\(\)|"
                            r"(^|\s)/[\w{}.-]+/?[\w{}/.-]*|\b[\w-]+\.(py|js|ts|tsx|sql|sh|ya?ml|toml|json|html)\b")
@@ -1250,6 +1258,8 @@ class ReviewWorkspace:
                 "minimized, documented and covered by the users' consent (one grouped finding)",
                 rows(sig.data_processors))
         if category_id == "auth":
+            add("Identity written into the session without renewing it — can an id planted before login stay "
+                "valid after it (session fixation)?", rows(sig.session_fixation))
             add("Naive datetimes in token / OTP / session code (expiry and iat computed without a timezone)",
                 rows([x for x in sig.naive_datetimes if _AUTHISH_PATH.search(x.file)]))
         if category_id == "integration":
@@ -1552,6 +1562,9 @@ class ReviewWorkspace:
                     PurePosixPath(f).stem.lower() in statement.lower() for f in files)):
                 errors.append(f"hypothesis {n}: name the code you suspect (function, class, route or file) — "
                               "one concrete suspicion, not a category of risks")
+            elif len(_HEDGE.findall(statement)) >= 2 or (_HEDGE.search(statement) and re.search(r"\bor\b", statement)):
+                errors.append(f"hypothesis {n}: one concrete suspicion, not a hedged list of risks ('might … "
+                              "potentially … X or Y'). State what you think the code does wrong and where")
             elif twin:
                 errors.append(f"hypothesis {n}: duplicates {twin} — record a different suspicion")
             elif missing:
@@ -1608,8 +1621,10 @@ class ReviewWorkspace:
         return set(re.findall(r"[a-z][a-z0-9_]{3,}", text.lower())) - _TITLE_STOPWORDS - _GENERIC_NOTE_WORDS
 
     def _same_subject(self, statement: str, finding_text: str) -> bool:
-        """A finding confirms a hypothesis only when it talks about the same thing (2+ key words in common)."""
-        return len(self._key_words(statement) & self._key_words(finding_text)) >= 2
+        """A finding confirms a hypothesis only when it talks about the same thing: 2+ key words in
+        common, generic risk vocabulary ("session", "hijacking", "unauthorized") not counted."""
+        shared = (self._key_words(statement) & self._key_words(finding_text)) - _GENERIC_RISK_WORDS
+        return len(shared) >= 2
 
     def _similar_hypothesis(self, lane: str, statement: str, pending: list[str]) -> str | None:
         words = self._key_words(statement)

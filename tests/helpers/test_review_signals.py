@@ -490,7 +490,7 @@ def create_order(session, body):
 
 def test_identity_written_into_an_unrenewed_session_is_flagged(tmp_path: Path):
     files = {
-        "app/main.py": "from aiohttp import web\napp = web.Application()\n",
+        "app/main.py": "from aiohttp import web\nfrom app import views\napp = web.Application()\n",
         "app/views.py": '''
 from aiohttp_session import get_session, new_session
 

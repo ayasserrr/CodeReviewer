@@ -34,16 +34,17 @@ import ast
 import re
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 
-from helpers.ast_analyzer import parse_quietly
+from helpers.ast_analyzer import parse_tolerant
 from helpers.fs_scanner import IGNORED_DIR_NAMES
 from helpers.review_signals import (
     RuntimeSignals,
     build_runtime_signals,
     render_runtime_signals,
 )
+from helpers.route_frameworks import collect_framework_routes
 from system import get_logger
 from utils import InventorySection, RepositoryManifest
 
@@ -86,7 +87,8 @@ _JS_LANGUAGES = {"TypeScript", "JavaScript"}
 _AUTH_ENTRY_PATH = re.compile(
     r"(?i)(^|[/_-])(login|logout|signin|sign-in|signup|sign-up|register|otp|password|passwd|token|refresh|forgot|reset|oauth|callback|verify)([/_-]|$)"
 )
-_ENTRY_APP = re.compile(r"\b(FastAPI|Flask|Starlette|Quart|Sanic|Celery|get_asgi_application|get_wsgi_application)\s*\(")
+_ENTRY_APP = re.compile(r"\b(FastAPI|Flask|Starlette|Quart|Sanic|Celery|Litestar|get_asgi_application|"
+                        r"get_wsgi_application|web\.Application|execute_from_command_line|web\.run_app)\s*\(")
 
 
 # ----------------------------------------------------------------------
@@ -445,7 +447,7 @@ def _python_files(repo_path: Path, manifest: RepositoryManifest) -> list[_PyFile
             continue
         try:
             text = (repo_path / entry.path).read_text(encoding="utf-8-sig", errors="replace")
-            files.append(_PyFile(entry.path, parse_quietly(text, entry.path), text))
+            files.append(_PyFile(entry.path, parse_tolerant(text, entry.path), text))
         except (OSError, SyntaxError, ValueError):
             continue
     return files
@@ -547,6 +549,11 @@ def _build_import_graph(files: list[_PyFile]) -> tuple[dict[str, set[str]], tupl
 _LAUNCH_CMD = re.compile(r"\b(?:uvicorn|gunicorn|hypercorn|daphne|granian)\b[^\n]*?\b([A-Za-z_][\w.]*):([A-Za-z_]\w*)")
 _PY_SCRIPT_CMD = re.compile(r"\bpython[0-9.]*\s+(?:-\w\s+)*([\w./-]+\.py)\b")
 _PY_MODULE_CMD = re.compile(r"\bpython[0-9.]*\s+-m\s+([A-Za-z_][\w.]*)")
+# Frameworks whose app/server objects are often imported by bare name (`from aiohttp.web import Application`).
+_SERVER_IMPORT = re.compile(r"(?m)^\s*(from|import)\s+(aiohttp|tornado|falcon|bottle|pyramid|litestar|sanic|quart|"
+                            r"gevent|waitress|cheroot|werkzeug|hypercorn|uvicorn|gunicorn)\b")
+_SERVER_START = re.compile(r"\b(Application|run_app|App|Bottle|Configurator|Litestar|Sanic|Quart|run_simple|"
+                           r"make_server|WSGIServer|serve|listen|run)\s*\(")
 _APP_FACTORY_ASSIGN = re.compile(r"(?m)^(app|application|api|server)\s*(?::[^=]+)?=\s*[A-Za-z_][\w.]*\(")
 
 
@@ -590,10 +597,12 @@ def _reachability(
     launch_texts = list(launch_texts)
     servers, launched_scripts = _launched(files, [*launch_texts, *(py.text for py in files)])
     app_roots = sorted(
-        {py.path for py in files if _ENTRY_APP.search(py.text) and not _is_test_path(py.path)}
+        {py.path for py in files if (_ENTRY_APP.search(py.text) or (
+            _SERVER_IMPORT.search(py.text) and _SERVER_START.search(py.text))) and not _is_test_path(py.path)}
         | {py.path for py in files if _APP_FACTORY_ASSIGN.search(py.text) and not _is_test_path(py.path)
            and edges.get(py.path)}
         | servers
+        | _runtime_loaded_modules(files)
     )
     reverse: dict[str, set[str]] = defaultdict(set)
     for src, targets in edges.items():
@@ -631,6 +640,47 @@ def _reachability(
         if standalone and not reverse.get(py.path) and not _is_test_path(py.path) and py.path not in app_roots:
             orphan_scripts.append(py.path)
     return tuple(app_roots), sorted(unreachable), sorted(orphan_scripts)
+
+
+_WORKER_DECORATOR = re.compile(r"(?m)^\s*@[\w.]*\b(task|shared_task|actor|periodic_task|scheduled_job|job|agent|"
+                               r"consumer|subscriber|on_message|cron|repeat_every|receiver)\b")
+_DOTTED_STRING = re.compile(r"^[A-Za-z_]\w*(\.\w+)+(:\w+)?$")
+_DJANGO_APP_MODULES = ("models", "admin", "apps", "signals", "tasks", "urls", "views", "serializers", "forms",
+                       "receivers", "handlers", "context_processors", "middleware", "templatetags")
+
+
+def _runtime_loaded_modules(files: list[_PyFile]) -> set[str]:
+    """Modules a framework loads by NAME rather than by import: dotted strings (Celery include,
+    Django include/ROOT_URLCONF/INSTALLED_APPS, importlib, "pkg.mod:app"), worker task / schedule /
+    consumer modules, Django management commands and the conventional modules of installed apps."""
+    by_dotted: dict[str, str] = {}
+    for py in files:
+        parts = PurePosixPath(py.path).with_suffix("").parts
+        if parts and parts[-1] == "__init__":
+            parts = parts[:-1]
+        for start in range(len(parts)):  # source roots: "src/shop/urls.py" is also "shop.urls"
+            by_dotted.setdefault(".".join(parts[start:]), py.path)
+    names: set[str] = set()
+    installed: set[str] = set()
+    for py in files:
+        if _is_test_path(py.path):
+            continue
+        for node in ast.walk(py.tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and _DOTTED_STRING.match(node.value):
+                names.add(node.value.split(":")[0])
+        if "INSTALLED_APPS" in py.text:
+            installed |= {m.group(1).split(".")[0] for m in re.finditer(r"['\"]([A-Za-z_][\w.]*)['\"]", py.text)}
+    loaded = {by_dotted[n] for n in names if n in by_dotted}
+    for py in files:
+        if _is_test_path(py.path):
+            continue
+        parts = PurePosixPath(py.path).parts
+        worker = bool(_WORKER_DECORATOR.search(py.text)) or "/management/commands/" in f"/{py.path}"
+        django_app = bool(installed) and PurePosixPath(py.path).stem in _DJANGO_APP_MODULES and any(
+            p in installed for p in parts)
+        if worker or django_app:
+            loaded.add(py.path)
+    return loaded
 
 
 def _is_test_path(path: str) -> bool:
@@ -796,6 +846,24 @@ def _resolve_child(
     return candidates[0] if len(candidates) == 1 else (candidates[0] if candidates else None)
 
 
+def _dependency_aliases(files: list[_PyFile]) -> dict[str, list[str]]:
+    """``CurrentUser = Annotated[User, Depends(get_current_user)]`` style aliases -> their Depends targets."""
+    aliases: dict[str, list[str]] = {}
+    for py in files:
+        for node in py.tree.body:
+            target = node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1 else (
+                node.target if isinstance(node, ast.AnnAssign) else None)
+            value = node.value if isinstance(node, (ast.Assign, ast.AnnAssign)) else None
+            if isinstance(target, ast.Name) and isinstance(value, ast.Subscript) and "Annotated" in _dotted(value.value):
+                found = _depends_targets(value)
+                if found:
+                    aliases[target.id] = found
+    return aliases
+
+
+_ALIASES: dict[str, list[str]] = {}
+
+
 def _handler_inputs(
     handler: ast.FunctionDef | ast.AsyncFunctionDef, models: dict[str, list[str]]
 ) -> tuple[list[str], list[str], list[str]]:
@@ -815,6 +883,10 @@ def _handler_inputs(
             continue
         if isinstance(arg.annotation, ast.Subscript) and "Annotated" in _dotted(arg.annotation.value):
             deps.extend(_depends_targets(arg.annotation))
+        alias = annotation.split(".")[-1]
+        if alias in _ALIASES:  # current_user: CurrentUser
+            deps.extend(_ALIASES[alias])
+            continue
         if wrapper == "Header":
             alias = _literal(_kw(default, "alias")) or arg.arg.replace("_", "-")
             headers.append(alias)
@@ -838,8 +910,15 @@ def _handler_inputs(
 
 def _build_routes(files: list[_PyFile]) -> tuple[list[RouteInfo], list[MountInfo]]:
     routers, includes, raw_routes, mounts, functions, models, imports_by_file = _collect_fastapi(files)
+    _ALIASES.clear()
+    _ALIASES.update(_dependency_aliases(files))
+    # A decorator on an object that is not a FastAPI app/APIRouter (a Flask blueprint, an aiohttp
+    # RouteTableDef) belongs to the framework collector, which knows that framework's prefixes.
+    raw_routes = [r for r in raw_routes if (r.file, r.router_var.split(".")[-1]) in routers]
+    covered = {(r.file, r.handler.name) for r in raw_routes}
+    other = [RouteInfo(**asdict(r)) for r in collect_framework_routes(files, skip=lambda f, n: (f, n) in covered)]
     if not raw_routes:
-        return [], mounts
+        return sorted(other, key=lambda r: (r.path, r.method)), mounts
 
     parents: dict[tuple[str, str], list[tuple[tuple[str, str], str, tuple[str, ...]]]] = defaultdict(list)
     for include in includes:
@@ -940,6 +1019,7 @@ def _build_routes(files: list[_PyFile]) -> tuple[list[RouteInfo], list[MountInfo
                     paginated=paginated(raw.handler),
                 )
             )
+    routes += other
     routes.sort(key=lambda r: (r.path, r.method))
     return routes, mounts
 
@@ -1302,6 +1382,11 @@ def _background_jobs(files: list[_PyFile]) -> list[BackgroundJob]:
                 target = node.args[1]
             elif callee == "to_thread" and node.args:
                 target = node.args[0]
+            elif callee in ("add_job", "schedule", "every", "basic_consume", "subscribe") and (node.args or node.keywords):
+                target = next((k.value for k in node.keywords if k.arg in ("func", "on_message_callback", "callback")),
+                              node.args[0] if node.args else None)
+            elif callee in ("delay", "apply_async", "send", "enqueue", "kiq") and isinstance(node.func, ast.Attribute):
+                target = node.func.value if callee != "enqueue" else (node.args[0] if node.args else None)
             if target is None or isinstance(target, ast.Lambda):
                 continue
             name = _dotted(target).split(".")[-1]
@@ -1309,6 +1394,13 @@ def _background_jobs(files: list[_PyFile]) -> list[BackgroundJob]:
                 continue
             file, line = locate(name, py.path)
             starts[(name, file, line)].append(f"{py.path}:{node.lineno}")
+    for py in files:  # worker tasks, schedules and consumers declared with a decorator
+        for node in ast.walk(py.tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                    re.search(r"\b(task|shared_task|actor|periodic_task|scheduled_job|job|agent|consumer|subscriber|"
+                              r"on_message|cron|repeat_every)\b", _dotted(d)) for d in node.decorator_list):
+                starts.setdefault((node.name, py.path, node.lineno), []).append(f"{py.path}:{node.lineno} (decorated)")
+    starts = {k: v for k, v in starts.items() if k[1] and k[0] not in ("send", "self")}
     return sorted(
         (BackgroundJob(name, file, line, ", ".join(sorted(set(where))[:3])) for (name, file, line), where in starts.items()),
         key=lambda job: (job.file, job.function),

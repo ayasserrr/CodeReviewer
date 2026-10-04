@@ -630,7 +630,7 @@ def test_client_only_evidence_is_outside_a_backend_review(workspace):
     ws.manifest = ws.manifest.model_copy(update={"files": ws.manifest.files + tuple(
         FileEntry(path=p, language="TypeScript", size_bytes=100, lines=10)
         for p in ("frontend/package.json", "frontend/src/api.ts", "frontend/.env.example"))})
-    assert not ws.frontend_in_scope
+    ws.frontend_in_scope = False  # the frontend lane switched off: backend-only review
     out = ws.record_finding(ws.config.category("testing"), _RecordFindingArgs(
         title="Weak password in browser tests", severity="Low", confidence="high", description="d", impact="i",
         evidence=[EvidenceInput(file="frontend/src/api.ts", line_start=2)]))

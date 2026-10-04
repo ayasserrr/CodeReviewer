@@ -157,9 +157,11 @@ id = "frontend"
 title = "Frontend & Client Security"
 code = "WEB"
 effort = 2
-# Off: the review is backend-first. Browser code is then only context (which routes it calls,
-# what the backend hands it) and is in no lane's scope. Set true to review the client too.
-enabled = false
+# On: the browser client in the repository is reviewed by this lane. Set to false to stop
+# reviewing it — the review is then backend-only: client code is context for the other lanes
+# (which routes it calls, what the backend hands it), in no lane's scope, and findings that
+# cite only client code are refused.
+enabled = true
 focus = """
 Only applicable if the repository contains a browser client. If not, record nothing and
 say "not applicable".

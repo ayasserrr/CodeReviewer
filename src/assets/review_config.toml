@@ -103,6 +103,15 @@ Think like an attacker who has read this code: who can reach what, as whom, with
 - Injection and unsafe processing: SQL/NoSQL built from strings, command execution with
   untrusted args, path traversal through client filenames, SSRF, template/HTML/header
   injection, unsafe deserialization, eval/exec.
+- Business-logic abuse: values the server should own but takes from the client (price,
+  quantity, discount, status, owner, role — mass assignment through update schemas),
+  negative or huge quantities, steps of a workflow that can be skipped or replayed,
+  limits checked in the client only.
+- Multi-tenant / multi-user isolation: every query and file path scoped to the caller's
+  tenant/owner, including list, search, export, background jobs and caches.
+- Server-side requests (SSRF) and inbound integrations: URLs, hosts or files fetched on a
+  client's behalf; webhooks/callbacks accepted without a signature check or replay
+  protection; redirects to request-supplied targets.
 - Model/agent features (when present): untrusted content fed to models that decide or
   act (prompt injection), model output rendered as HTML or executed, tools with write
   access driven by model output.
@@ -128,6 +137,8 @@ Can an attacker become someone else, stay someone after they should not, or gues
 - Credential flows: password hashing and comparison, reset/OTP/verification flows (entropy,
   expiry, attempt limits, storage), account creation that skips verification, privilege
   escalation through self-service endpoints, API keys compared non-constant-time.
+- Secrets and tokens generated with a non-cryptographic RNG (random, uuid1, time-based),
+  predictable reset/verification links, sessions not rotated after login or privilege change.
 - Abuse resistance: rate limiting and lockout on every AUTH ENTRY POINT (route_map.md),
   user enumeration through messages or timing.
 - Fail-closed startup for auth-critical settings; client-side guards that render
@@ -238,6 +249,8 @@ What happens to THIS system under real load and real data growth, and with more 
   pagination, whole collections reloaded or reprocessed per event (O(n) per event, O(n^2)
   overall), whole files rewritten per event, N+1 queries, missing indexes.
 - External calls: timeouts, backoff, circuit breakers, bounded concurrency.
+- Memory: in-process caches, dicts or buffers keyed by user/session/job that only grow;
+  whole files or result sets loaded into memory; connection pools sized for one worker.
 - Startup: heavy resources loaded synchronously, clients built at import time, one failing
   dependency taking the whole service down.
 - Use the dependency graph's fan-in for hot paths; architecture.md and runtime_signals.md
@@ -314,6 +327,17 @@ Does THIS system produce correct results and keep its data consistent — not on
 - Data integrity: values silently rewritten or "corrected", lossy or inconsistent
   normalization between code paths, the same data processed twice or in two different
   shapes, identifiers that can collide or whose shape is treated as meaning.
+- Cleaning and normalization that destroys information: for every text/data cleaning,
+  parsing or truncation step on a core flow, list what it removes or rewrites (emails,
+  URLs, numbers, non-ASCII, case, whitespace, fields past a length) and check whether any
+  LATER step — matching, deduplication, contact, scoring, display — needs what was lost.
+- Check-then-act races: "if not exists: insert", read-modify-write counters and balances,
+  uniqueness enforced in code but not by a database constraint; cascades that delete too
+  much or leave orphans; retried operations (jobs, webhooks, client retries) that are not
+  idempotent and apply twice.
+- Results that lie: errors reported as success (HTTP 200 with an error body, empty list on
+  failure), defaults substituted for missing data, cached values served after the source
+  changed with no invalidation, unstable ordering under pagination.
 - State: flags/locks/claims released only on the happy path (stuck after a crash or
   deploy), transactions with partial writes, missing rollbacks, sessions shared across
   tasks, naive vs aware datetimes, money as float.
@@ -359,6 +383,8 @@ Can the team rebuild exactly what runs in production, and is anything it ships k
 - Known vulnerabilities (triage pip-audit): is the vulnerable code path used, is a fix available?
 - Reproducibility: unpinned or half-pinned runtime dependencies, missing lockfiles, base
   images not pinned to a version or digest.
+- Runtime and framework lifecycle: language versions, base images and major framework
+  versions past end of life or end of security support; deprecated APIs the code relies on.
 - Weight and surface: several libraries doing the same job, packages declared but never
   imported or used only by dead code (runtime_signals.md), heavyweight packages for a
   small use, imported-but-undeclared packages.
@@ -406,30 +432,30 @@ traces returned to clients, unsafe_allow_html in demo UIs.
 
 [[security_kpis]]
 id = "KPI-04"
-title = "Excel Formula Injection via LLM Chat"
-description = "Model-generated or chat-derived content written to spreadsheets/CSV must neutralize formula prefixes (=, +, -, @, tab, CR)."
+title = "Spreadsheet/CSV Formula Injection in Generated Content"
+description = "Any content the system generates or derives (model output, chat, imports, user input) and writes to spreadsheets/CSV must neutralize formula prefixes (=, +, -, @, tab, CR)."
 look_for = """
 Any CSV/XLSX export (openpyxl, xlsxwriter, pandas.to_excel/to_csv, csv
 module, SheetJS/xlsx, exceljs, papaparse unparse) whose cell values come from
-LLM output or chat messages. Is there escaping (prefix with ') of values
+anything not written by the developers: model output, chat, imports, user input. Is there escaping (prefix with ') of values
 starting with = + - @ \\t \\r?
 """
 
 [[security_kpis]]
 id = "KPI-05"
-title = "Stored XSS via LLM Chat Workflow"
-description = "LLM/chat output that is stored and later rendered must never reach the DOM as raw HTML."
+title = "Stored XSS from User or Model-Generated Content"
+description = "Stored content that a user, an import or a model produced (comments, profiles, documents, chat or model output) must never reach the DOM as raw HTML when rendered later."
 look_for = """
 dangerouslySetInnerHTML, v-html, innerHTML, markdown renderers with raw HTML
 enabled (rehype-raw, marked without sanitize), iframes with srcdoc and
 sandbox="allow-scripts allow-same-origin", Jinja |safe / Markup() on model
 output, streamlit unsafe_allow_html, HTML emails built from model output
-without escaping. Trace stored chat/model output to its render sites.
+without escaping. Trace each stored user/import/model field to its render sites.
 """
 
 [[security_kpis]]
 id = "KPI-06"
-title = "IDOR on Image/File Serving Endpoint"
+title = "Unauthorized Access to Served Files (IDOR)"
 description = "Every file/image download or static mount serving user content must enforce authentication and object-level authorization; paths must not be guessable."
 look_for = """
 StaticFiles/app.mount/send_file/FileResponse/serve_static of upload
@@ -494,7 +520,7 @@ no body-size limit at app or proxy level.
 
 [[security_kpis]]
 id = "KPI-12"
-title = "Stored XSS in Excel Exports"
+title = "Unsafe Content in Stored-Data Exports"
 description = "Stored user/customer/LLM fields exported to .xlsx/.csv must be neutralized for formulas and control characters, and HTML exports must be escaped."
 look_for = """
 Export code paths that read stored records (DB rows, saved chat, profiles)

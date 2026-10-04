@@ -50,6 +50,7 @@ from helpers import (
     kpi_prompt,
     load_review_config,
     model_identity,
+    negative_audit_prompt,
     render_report,
     run_agent,
     specialist_prompt,
@@ -310,10 +311,13 @@ class DeepReviewController(BaseController):
             f"Begin the {category.title} review of this repository. Work in this order:\n"
             "1. UNDERSTAND: read /_review/context/system_overview.md, agents_md.md if present, and the entry points "
             "and core modules that matter for your lane. Work out how THIS system works: its purpose, main flows, data, "
-            "trust boundaries and where failure would hurt most.\n"
+            "trust boundaries and where failure would hurt most. Write down its invariants for your lane — what must "
+            "always be true (each record has one owner, a job runs once, a caller only sees their own data, a value "
+            "keeps its meaning from input to output, a lock is always released).\n"
             "2. HYPOTHESIZE: call record_hypotheses with your system model and at least 6 suspicions specific to this "
-            "repository — things an expert would check here because of how this system is built, not generic "
-            "categories and not copies of the leads below.\n"
+            "repository — for each invariant, the concrete path that could break it (an error path, a second caller, "
+            "a concurrent request, a restart, an unusual input). Not generic categories and not copies of the leads "
+            "below.\n"
             "3. INVESTIGATE: prove or disprove each hypothesis in the code (resolve_hypothesis), sweep your file "
             "scope, and follow anything else you notice — your own findings beyond the leads are the most valuable "
             "part of the review.\n"
@@ -477,7 +481,7 @@ class DeepReviewController(BaseController):
         async with semaphore:
             runs.append(await self._run(
                 f"verifier:{category.id}-negatives", role="verifier", repo_path=repo_path,
-                system_prompt=verifier_prompt(category, brief), tools=workspace.negative_audit_tools(category),
+                system_prompt=negative_audit_prompt(category, brief), tools=workspace.negative_audit_tools(category),
                 explorer_tools=workspace.query_tools(), model_calls=self.config.DEEP_REVIEW_VERIFIER_MODEL_CALLS,
                 kickoff=kickoff, files=files, completion_check=pending,
             ))

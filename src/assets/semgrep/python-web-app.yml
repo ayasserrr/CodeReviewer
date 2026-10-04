@@ -1,0 +1,278 @@
+# Bundled Semgrep rules: web-application defects common to any Python service
+# (FastAPI / Flask / Django / Starlette / plain scripts). Project-owned, offline.
+#
+# Each rule marks a place an expert reviewer would open — authorization of writes,
+# redirects, cookies, archives, error handling, shared state. They are leads for the
+# deep-review agents, who confirm each one in the code; keep them precise.
+
+rules:
+  # ---------------------------------------------------------- authorization
+  - id: python-mass-assignment
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Every field of a client payload is copied onto a stored object. Unless the input schema excludes
+      privileged fields (role, owner/user id, is_admin, price, status, tenant), a caller can set them.
+    metadata: {category: security, cwe: "CWE-915: Mass Assignment", confidence: MEDIUM}
+    pattern-either:
+      - pattern: |
+          for $K, $V in $IN.$D(...).items():
+              ...
+              setattr($OBJ, $K, $V)
+      - pattern: |
+          for $K, $V in $IN.items():
+              ...
+              setattr($OBJ, $K, $V)
+      - pattern: $OBJ.__dict__.update($IN.$D(...))
+      - pattern: $MODEL(**$IN.dict(...))
+      - pattern: $MODEL(**$IN.model_dump(...))
+      - pattern: $MODEL(**await $REQ.json())
+      - pattern: $MODEL(**$REQ.json)
+      - pattern: $MODEL(**$REQ.get_json(...))
+      - pattern: $MODEL.objects.create(**$REQ.data)
+
+  - id: python-open-redirect
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Redirect target taken from the request (query, form, header). Without an allow-list of hosts/paths
+      the site becomes a phishing and token-leak redirector.
+    metadata: {category: security, cwe: "CWE-601: Open Redirect", confidence: MEDIUM}
+    pattern-either:
+      - pattern: RedirectResponse($REQ.query_params.get(...), ...)
+      - pattern: RedirectResponse($REQ.query_params[...], ...)
+      - pattern: RedirectResponse(url=$REQ.query_params.get(...), ...)
+      - pattern: redirect($REQ.args.get(...), ...)
+      - pattern: redirect($REQ.args[...], ...)
+      - pattern: redirect($REQ.GET.get(...), ...)
+      - pattern: redirect($REQ.headers.get("Referer"), ...)
+      - pattern: HttpResponseRedirect($REQ.GET.get(...), ...)
+
+  - id: python-assert-as-guard
+    languages: [python]
+    severity: WARNING
+    message: >-
+      assert used to enforce an access, ownership or validation rule. Python drops assert statements under
+      -O / PYTHONOPTIMIZE, so the check silently disappears in optimized deployments.
+    metadata: {category: security, cwe: "CWE-617: Reachable Assertion", confidence: MEDIUM}
+    patterns:
+      - pattern: assert $COND, ...
+      - metavariable-regex:
+          metavariable: $COND
+          regex: (?i).*(user|owner|role|admin|permission|auth|token|tenant|is_staff|is_superuser|allowed).*
+    paths:
+      exclude: ["**/tests/**", "**/test_*.py", "**/*_test.py", "**/conftest.py"]
+
+  # ------------------------------------------------------------- sessions/auth
+  - id: python-cookie-missing-flags
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Cookie set without httponly=True and secure=True. A session or auth cookie without them can be read
+      by injected script or sent over plain HTTP.
+    metadata: {category: security, cwe: "CWE-614: Sensitive Cookie Without Secure Flag", confidence: MEDIUM}
+    patterns:
+      - pattern: $RESP.set_cookie(...)
+      - pattern-not: $RESP.set_cookie(..., httponly=True, ..., secure=True, ...)
+      - pattern-not: $RESP.set_cookie(..., secure=True, ..., httponly=True, ...)
+
+  - id: python-jwt-decode-without-algorithms
+    languages: [python]
+    severity: WARNING
+    message: >-
+      jwt.decode() without an explicit algorithms= list. Older libraries then accept whatever algorithm the
+      token names (alg confusion: "none" or HS256 signed with the public key).
+    metadata: {category: security, cwe: "CWE-347: Improper Verification of Cryptographic Signature", confidence: MEDIUM}
+    patterns:
+      - pattern: jwt.decode($TOKEN, $KEY, ...)
+      - pattern-not: jwt.decode($TOKEN, $KEY, ..., algorithms=$A, ...)
+      - pattern-not: jwt.decode($TOKEN, $KEY, $ALGS, ...)
+      - pattern-not: 'jwt.decode(..., options={..., "verify_signature": False, ...}, ...)'
+
+  - id: python-secret-compared-with-equality
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A secret (password, token, API key, signature, OTP) compared with == / !=. The comparison time leaks
+      how many leading characters match, and a plaintext password comparison means it is stored unhashed.
+      Use hmac.compare_digest / secrets.compare_digest, and a password hasher for passwords.
+    metadata: {category: security, cwe: "CWE-208: Observable Timing Discrepancy", confidence: LOW}
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: $A == $B
+                  - pattern: $A != $B
+              - metavariable-regex:
+                  metavariable: $A
+                  regex: (?i)^[\w.]*(password|passwd|secret|api_?key|token|signature|otp|digest)$
+          - patterns:
+              - pattern-either:
+                  - pattern: $A == $B
+                  - pattern: $A != $B
+              - metavariable-regex:
+                  metavariable: $B
+                  regex: (?i)^[\w.]*(password|passwd|secret|api_?key|token|signature|otp|digest)$
+      - pattern-not: $A == None
+      - pattern-not: $A != None
+      - pattern-not: $A == "..."
+      - pattern-not: $A != "..."
+      - pattern-not: '"..." == $B'
+      - pattern-not: '"..." != $B'
+      # an ORM/query filter is a database lookup, not an in-process secret check
+      - pattern-not-inside: $Q.where(...)
+      - pattern-not-inside: $Q.filter(...)
+      - pattern-not-inside: $Q.filter_by(...)
+      - pattern-not-inside: $Q.exclude(...)
+    paths:
+      exclude: ["**/tests/**", "**/test_*.py", "**/*_test.py"]
+
+  # --------------------------------------------------------------- archives
+  - id: python-archive-extract-all
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Archive extracted without validating member paths. A crafted zip/tar ("zip slip") writes outside the
+      target directory (../ or absolute names, symlinks in tar). Use tarfile's filter="data" (3.12+) or
+      check each member's resolved path, and cap member count and total size (decompression bombs).
+    metadata: {category: security, cwe: "CWE-22: Path Traversal", confidence: MEDIUM}
+    pattern-either:
+      - patterns:
+          - pattern: $T.extractall(...)
+          - pattern-not: $T.extractall(..., filter="data", ...)
+          - pattern-not: $T.extractall(..., filter="tar", ...)
+      - pattern: shutil.unpack_archive(...)
+
+  # ------------------------------------------------------------ data exposure
+  - id: python-secret-written-to-log
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A credential or token is interpolated into a log message or print(). Logs are shipped, retained and
+      read by more people than the secret should be.
+    metadata: {category: security, cwe: "CWE-532: Insertion of Sensitive Information into Log File", confidence: LOW}
+    patterns:
+      - pattern-either:
+          - pattern: $LOG.$LVL(f"...{$V}...", ...)
+          - pattern: $LOG.$LVL("..." % $V, ...)
+          - pattern: $LOG.$LVL("...", ..., $V, ...)
+          - pattern: print(..., $V, ...)
+          - pattern: print(f"...{$V}...", ...)
+      - metavariable-regex:
+          metavariable: $LVL
+          regex: ^(debug|info|warning|warn|error|exception|critical|log)$
+      - metavariable-regex:
+          metavariable: $V
+          regex: (?i)^[\w.\[\]'"]*(password|passwd|secret|api_?key|access_?token|refresh_?token|auth_?token|private_?key|bearer|credentials?)[\w\[\]'"]*$
+
+  # ------------------------------------------------------- error handling
+  - id: python-exception-swallowed
+    languages: [python]
+    severity: INFO
+    message: >-
+      A broad exception is caught and discarded (pass / continue / return a default) with no logging. The
+      failure becomes invisible: callers see success or an empty result, and nobody can diagnose it.
+    metadata: {category: correctness, cwe: "CWE-390: Detection of Error Condition Without Action", confidence: MEDIUM}
+    pattern-either:
+      - pattern: |
+          try:
+              ...
+          except:
+              pass
+      - pattern: |
+          try:
+              ...
+          except Exception:
+              pass
+      - pattern: |
+          try:
+              ...
+          except Exception as $E:
+              pass
+      - pattern: |
+          try:
+              ...
+          except BaseException:
+              pass
+      - pattern: |
+          try:
+              ...
+          except Exception:
+              continue
+      - pattern: |
+          try:
+              ...
+          except Exception:
+              return $DEFAULT
+    paths:
+      exclude: ["**/tests/**", "**/test_*.py", "**/*_test.py"]
+
+  # ------------------------------------------------------------ shared state
+  - id: python-mutable-default-argument
+    languages: [python]
+    severity: INFO
+    message: >-
+      Mutable default argument: the list/dict/set is created once and shared by every call (and every
+      request), so data from one call leaks into the next.
+    metadata: {category: correctness, cwe: "CWE-1188: Initialization of a Resource with an Insecure Default", confidence: HIGH}
+    pattern-either:
+      - pattern: |
+          def $F(..., $ARG=[], ...):
+              ...
+      - pattern: |
+          def $F(..., $ARG={}, ...):
+              ...
+      - pattern: |
+          def $F(..., $ARG=set(), ...):
+              ...
+      - pattern: |
+          async def $F(..., $ARG=[], ...):
+              ...
+      - pattern: |
+          async def $F(..., $ARG={}, ...):
+              ...
+
+  - id: python-module-level-db-session
+    languages: [python]
+    severity: WARNING
+    message: >-
+      A database session/connection created once at import time and shared by the whole process. Concurrent
+      requests interleave on it (mixed transactions, "another operation is in progress"), and a broken
+      connection is never replaced. Create one per request/unit of work.
+    metadata: {category: correctness, confidence: MEDIUM}
+    patterns:
+      - pattern-not-inside: |
+          def $F(...):
+              ...
+      - pattern-not-inside: |
+          async def $F(...):
+              ...
+      - pattern-not-inside: |
+          class $C:
+              ...
+      - pattern-either:
+          - pattern: $S = $FACTORY()
+          - pattern: $S = sqlite3.connect(...)
+          - pattern: $S = psycopg2.connect(...)
+          - pattern: $S = pymysql.connect(...)
+          - pattern: $S = Session($ENGINE)
+      - metavariable-regex:
+          metavariable: $S
+          regex: (?i)^(db|session|db_session|conn|connection|cursor|cur)$
+
+  # ---------------------------------------------------------------- money/time
+  - id: python-float-for-money
+    languages: [python]
+    severity: INFO
+    message: >-
+      A monetary amount handled as float. Binary floating point cannot represent most decimal amounts, so
+      sums and comparisons drift by cents. Use Decimal (or integer minor units) end to end.
+    metadata: {category: correctness, cwe: "CWE-681: Incorrect Conversion between Numeric Types", confidence: LOW}
+    patterns:
+      - pattern-either:
+          - pattern: $X = float(...)
+          - pattern: '$X: float = $V'
+          - pattern: '$X: float'
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?i)^(\w+_)?(price|amount|balance|total|cost|fee|salary|payment|refund|subtotal|tax|discount|invoice_total)$

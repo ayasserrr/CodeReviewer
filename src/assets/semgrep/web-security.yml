@@ -117,3 +117,46 @@ rules:
           - pattern: eval($X)
           - pattern: new Function(...)
       - pattern-not: eval("...")
+
+  - id: web-postmessage-any-origin
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      postMessage to "*" sends the data to whatever page is in the target window, and a message listener
+      without an event.origin check acts on messages from any site.
+    metadata: {category: security, cwe: "CWE-345: Insufficient Verification of Data Authenticity", confidence: MEDIUM}
+    pattern-either:
+      - pattern: $W.postMessage($DATA, "*")
+      - patterns:
+          - pattern: window.addEventListener("message", ($E) => { ... })
+          - pattern-not: |
+              window.addEventListener("message", ($E) => {
+                ...
+                $E.origin
+                ...
+              })
+          - pattern-not: |
+              window.addEventListener("message", ($E) => {
+                ...
+                if (<... $E.origin ...>) $S;
+                ...
+              })
+
+  - id: web-redirect-from-url-param
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      Navigation target read from the URL (query string / hash). Without an allow-list this is an open
+      redirect, and a javascript: URL turns it into XSS.
+    metadata: {category: security, cwe: "CWE-601: Open Redirect", confidence: MEDIUM}
+    patterns:
+      - pattern-either:
+          - pattern: window.location.href = $P.get(...)
+          - pattern: window.location = $P.get(...)
+          - pattern: location.href = $P.get(...)
+          - pattern: window.location.assign($P.get(...))
+          - pattern: window.location.replace($P.get(...))
+          - pattern: navigate($P.get(...))
+      - pattern-inside: |
+          $P = new URLSearchParams(...);
+          ...

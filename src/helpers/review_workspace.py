@@ -160,6 +160,28 @@ _SECURITY_LEAD_RULES: dict[str, str] = {
     "python-tls-verification-disabled": "TLS verification disabled",
     "python-jwt-verification-disabled": "JWT verification disabled",
     "python-exception-text-returned-to-client": "raw exception text returned to clients",
+    "python-mass-assignment": "client payload copied field-by-field onto stored objects (privileged fields settable?)",
+    "python-open-redirect": "redirect target taken from the request",
+    "python-assert-as-guard": "assert used as an access/validation check (removed under -O)",
+    "python-archive-extract-all": "archive extracted without member-path checks (zip slip)",
+    "web-postmessage-any-origin": "postMessage to any origin / message listener without origin check",
+    "web-redirect-from-url-param": "browser navigation target read from the URL",
+}
+# Rules whose judgement belongs to another lane (security still triages every semgrep hit).
+_LANE_RULE_LEADS: dict[str, dict[str, str]] = {
+    "auth": {
+        "python-cookie-missing-flags": "cookies set without HttpOnly/Secure",
+        "python-jwt-decode-without-algorithms": "jwt.decode without an algorithms allow-list",
+        "python-secret-compared-with-equality": "secrets/tokens compared with == (timing, plaintext storage)",
+    },
+    "observability": {"python-secret-written-to-log": "credentials or tokens written to logs"},
+    "inputs": {"python-archive-extract-all": "archives extracted without member count/size/path limits"},
+    "correctness": {
+        "python-exception-swallowed": "broad exceptions swallowed without logging (failure looks like success)",
+        "python-mutable-default-argument": "mutable default arguments shared across calls",
+        "python-module-level-db-session": "one database session/connection shared by the whole process",
+        "python-float-for-money": "money handled as float",
+    },
 }
 _TITLE_STOPWORDS = {
     "with", "from", "into", "that", "this", "missing", "lack", "lacks", "using", "used", "without", "the", "and",
@@ -1184,6 +1206,8 @@ class ReviewWorkspace:
                   + (f"; duplicates: {', '.join(k for k, _ in f.duplicates)}" if f.duplicates else ""))
                  for f in self.maps.env_files if f.flags or f.duplicates])
             add("Insecure secret defaults (semgrep)", static_rows("python-insecure-secret-default"))
+        for rule, label in _LANE_RULE_LEADS.get(category_id, {}).items():
+            add(f"{label} (semgrep {rule})", static_rows(rule))
         self._signal_leads(category_id, add)
         for label, _ in self._absence_leads(category_id):
             groups.append((label, frozenset(), ["confirm the absence (the static search found nothing) and record it"]))

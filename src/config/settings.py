@@ -179,7 +179,7 @@ class Settings(BaseSettings):
         description="Review categories + security KPIs; bundled at src/assets/review_config.toml",
     )
     DEEP_REVIEW_ENGINE_VERSION: str = Field(
-        "1.16.0", min_length=1, description="Version of the review prompts/orchestration; part of the cache key"
+        "1.17.0", min_length=1, description="Version of the review prompts/orchestration; part of the cache key"
     )
     DEEP_REVIEW_MAX_CONCURRENCY: int = Field(
         6, gt=0, description="Max review agents running at once (bounded by the provider's rate limits)"

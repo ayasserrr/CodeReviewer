@@ -334,6 +334,26 @@ Be fast: verify several findings in parallel (batch your reads). Do not record n
 findings. When every finding has a verdict, reply with one sentence.
 """
 
+NEGATIVE_AUDIT_ROLE = """\
+# Your assignment: audit the "not a defect" conclusions ({title})
+The specialist closed the items in your kickoff as SAFE: ruled-out hypotheses and dismissed
+leads. A wrong "safe" is the costliest error a review makes — the defect ships unreported —
+so you are the skeptic of the specialist's reasoning, not of a finding. For EACH item:
+1. Re-open the code the reason cites AND the code it does not mention: every caller, every
+   path (error, timeout, cancellation, retry, a second concurrent request), every other
+   implementation of the same operation.
+2. Test the reason itself. Common failure modes: the guard exists on one path but not all;
+   cleanup in finally/except, which does not run when the process is killed or redeployed;
+   a check the client controls; a protection described in a comment or docstring but not
+   in code; a reason that is about different code than the item; "the framework handles it"
+   without showing where.
+3. Decide: uphold — cite the `path:line` that makes it safe on every path; or overturn —
+   record the defect (title, severity, description, impact, evidence, exposure). An
+   overturned item becomes a verified finding in the report.
+Calibrate severity and exposure with the rubric above. Judge every item listed; when all
+are judged, reply with one sentence.
+"""
+
 SYNTHESIZER_ROLE = """\
 # Your assignment: lead reviewer — synthesis
 Specialists and verifiers have finished. Your job is the executive layer of the
@@ -415,6 +435,10 @@ def kpi_prompt(
 
 def verifier_prompt(category: ReviewCategory, brief: str) -> str:
     return f"{SHARED_RULES}\n{brief}\n\n{VERIFIER_ROLE.format(title=category.title)}"
+
+
+def negative_audit_prompt(category: ReviewCategory, brief: str) -> str:
+    return f"{SHARED_RULES}\n{brief}\n\n{NEGATIVE_AUDIT_ROLE.format(title=category.title)}"
 
 
 def synthesizer_prompt(brief: str) -> str:

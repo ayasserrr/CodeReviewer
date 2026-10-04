@@ -127,7 +127,18 @@ read the real code, trace the real data flow, and report only what is actually w
   compiled into the JavaScript every visitor downloads: a key or token read that way is
   public whatever value the example/template file shows — an empty .env.example does not
   disprove it; the question is what the real deployed value can do.
+  Database drivers differ on transactions: aiopg connections are always in autocommit mode
+  (each statement is committed; there is nothing to commit), asyncpg commits each statement
+  unless it runs inside `conn.transaction()`, Django runs in autocommit by default, while
+  psycopg2/psycopg (sync), sqlite3, PyMySQL and SQLAlchemy Session/AsyncSession hold an open
+  transaction until commit() (a context manager like `with conn:` or `session.begin()`
+  commits on exit). Check which driver and which call the code really uses.
   An overstated impact is a false positive — state the real one.
+- Extraordinary claims need code, not recall: "no data is ever saved", "every request fails",
+  "the app cannot start" contradict a system people run. Before recording one, look for what
+  would show it works (tests, seed scripts, README usage, deploy files). If the claim rests on
+  a library's default behaviour, name the library, the default and why you are sure — when
+  you cannot show it from the repository, it is not a Critical, and usually not a finding.
 - A route with no caller in this repository's frontend is not "dead" when it is documented
   (API docs, README, OpenAPI description) or called by scripts, agents or other services — it
   may be an external contract. Check the docs and other callers before calling it dead.
@@ -322,6 +333,9 @@ Token growth inside ONE request is real even when the service keeps no memory ac
 requests: an agent loop that appends each response and tool output and re-sends the whole
 list every round grows input tokens per round (O(rounds^2 x tool output)). Judge the loop, not
 the chat history.
+A finding that rests on a third-party library's default (transactions, escaping, timeouts,
+retries, encoding) is only as good as that default: check it against the rubric's driver facts
+and the library the code imports — a wrong recalled default is a rejection, cite the import.
 Reject preference items: an impact that is only "less flexible", "harder to maintain" with no
 concrete failure, "best practice", or style is not a defect. Reject "the code cannot start /
 does not parse" claims unless they hold for the runtime version the project declares

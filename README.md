@@ -360,7 +360,7 @@ Review runs on four repositories, with the default models (`gemini-2.5-flash` wi
 
 | Repository | Type | Findings (C / H / M / L) |
 | --- | --- | --- |
-| Internal talent-acquisition system | FastAPI + LLM backend with a React client | 123 (9 / 45 / 53 / 16) |
+| Internal talent-acquisition system | FastAPI + LLM backend with a React client | 130 (10 / 52 / 61 / 7) |
 | [dvpwa](https://github.com/anxolerd/dvpwa) | aiohttp application with documented vulnerabilities | 57 (6 / 10 / 35 / 6) |
 | [FastAPI full-stack template](https://github.com/fastapi/full-stack-fastapi-template) | Reference FastAPI project | 53 (0 / 8 / 37 / 8) |
 | [Damn Vulnerable RESTaurant API](https://github.com/theowni/Damn-Vulnerable-RESTaurant-API-Game) | FastAPI API with documented vulnerabilities | 56 (12 / 14 / 25 / 5) |
@@ -370,11 +370,14 @@ review of the same code:
 
 - user identity taken from client-controlled headers without verification;
 - a screening lock that stays set after a process restart;
-- an email endpoint that sends arbitrary content to arbitrary recipients;
+- an email endpoint that sends unsanitized HTML to arbitrary recipients (phishing);
 - a migration script that runs `alembic stamp head` instead of `upgrade`;
 - known vulnerabilities in `python-multipart`;
 - path traversal in an upload handler;
 - CV text cleaning that rewrites `_`, `@` and `:` and so corrupts e-mail addresses.
+
+The same run also reviewed the React client (frontend lane), reporting among others an API key
+exposed in the browser bundle and unsanitized HTML rendered in an iframe.
 
 **dvpwa.** The project documents five vulnerabilities:
 

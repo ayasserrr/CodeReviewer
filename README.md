@@ -356,15 +356,14 @@ review without any other step.
 ## Results
 
 Review runs on four repositories, with the default models (`gemini-2.5-flash` with
-`gemini-3.1-pro-preview` as judge). Finding counts are after independent verification. Run time
-is the deep-review stage.
+`gemini-3.1-pro-preview` as judge). Finding counts are after independent verification.
 
-| Repository | Type | Engine | Findings (C / H / M / L) | Run time |
-| --- | --- | --- | --- | --- |
-| Internal talent-acquisition system | FastAPI + LLM backend with a React client | 1.21.0 | 123 (9 / 45 / 53 / 16) | ~23 min |
-| [dvpwa](https://github.com/anxolerd/dvpwa) | aiohttp application with documented vulnerabilities | 1.21.0 | 57 (6 / 10 / 35 / 6) | ~9 min |
-| [FastAPI full-stack template](https://github.com/fastapi/full-stack-fastapi-template) | Reference FastAPI project | 1.21.0 | 53 (0 / 8 / 37 / 8) | ~15 min |
-| [Damn Vulnerable RESTaurant API](https://github.com/theowni/Damn-Vulnerable-RESTaurant-API-Game) | FastAPI API with documented vulnerabilities | 1.14.0 | 56 (12 / 14 / 25 / 5) | — |
+| Repository | Type | Findings (C / H / M / L) |
+| --- | --- | --- |
+| Internal talent-acquisition system | FastAPI + LLM backend with a React client | 123 (9 / 45 / 53 / 16) |
+| [dvpwa](https://github.com/anxolerd/dvpwa) | aiohttp application with documented vulnerabilities | 57 (6 / 10 / 35 / 6) |
+| [FastAPI full-stack template](https://github.com/fastapi/full-stack-fastapi-template) | Reference FastAPI project | 53 (0 / 8 / 37 / 8) |
+| [Damn Vulnerable RESTaurant API](https://github.com/theowni/Damn-Vulnerable-RESTaurant-API-Game) | FastAPI API with documented vulnerabilities | 56 (12 / 14 / 25 / 5) |
 
 **Internal talent-acquisition system.** The run reported the issues raised in the team's manual
 review of the same code:
@@ -385,7 +384,7 @@ review of the same code:
 | Weak password storage (MD5) | Reported (Critical) |
 | Stored XSS | Reported (Critical) |
 | Session fixation | Reported (High) |
-| CSRF protection disabled | Not reported. Earlier runs reported it. A detector for security controls that are defined but never applied was added in engine 1.22.0 and flags this case; it has not yet been through a full run. |
+| CSRF protection disabled | Not reported in this run; reported in earlier runs. A detector for security controls that are defined but never applied has since been added and flags this case. |
 
 The run also reported routes that read and modify data without authentication.
 
@@ -398,7 +397,7 @@ The run also reported routes that read and modify data without authentication.
 - e-mail sending has no timeout;
 - a committed `.env` with weak default secrets.
 
-**Damn Vulnerable RESTaurant API** (engine 1.14.0). The run reported the documented
+**Damn Vulnerable RESTaurant API.** The run reported the documented
 vulnerabilities:
 
 - SQL injection;

@@ -30,12 +30,13 @@ the same repository (TypeScript/JavaScript). Frontend review can be switched off
 5. [The report](#the-report)
 6. [Frontend review](#frontend-review)
 7. [Data handling](#data-handling)
-8. [Project structure](#project-structure)
-9. [Setup and configuration](#setup)
-10. [API flow](#api-flow)
-11. [Describing your system (`AGENTS.md`)](#describing-your-system-agentsmd)
-12. [Tuning and extending the review](#tuning-and-extending-the-review)
-13. [Testing](#testing)
+8. [Results](#results)
+9. [Project structure](#project-structure)
+10. [Setup and configuration](#setup)
+11. [API flow](#api-flow)
+12. [Describing your system (`AGENTS.md`)](#describing-your-system-agentsmd)
+13. [Tuning and extending the review](#tuning-and-extending-the-review)
+14. [Testing](#testing)
 
 ---
 
@@ -351,6 +352,64 @@ review without any other step.
   locally, and the values never leave the process. `DEEP_REVIEW_INSPECT_ENV_FILES=false` skips them
   entirely.
 - All data is scoped to the signed-in user; other users' ids return 404.
+
+## Results
+
+Review runs on four repositories, with the default models (`gemini-2.5-flash` with
+`gemini-3.1-pro-preview` as judge). Finding counts are after independent verification. Run time
+is the deep-review stage.
+
+| Repository | Type | Engine | Findings (C / H / M / L) | Run time |
+| --- | --- | --- | --- | --- |
+| Internal talent-acquisition system | FastAPI + LLM backend with a React client | 1.21.0 | 123 (9 / 45 / 53 / 16) | ~23 min |
+| [dvpwa](https://github.com/anxolerd/dvpwa) | aiohttp application with documented vulnerabilities | 1.21.0 | 57 (6 / 10 / 35 / 6) | ~9 min |
+| [FastAPI full-stack template](https://github.com/fastapi/full-stack-fastapi-template) | Reference FastAPI project | 1.21.0 | 53 (0 / 8 / 37 / 8) | ~15 min |
+| [Damn Vulnerable RESTaurant API](https://github.com/theowni/Damn-Vulnerable-RESTaurant-API-Game) | FastAPI API with documented vulnerabilities | 1.14.0 | 56 (12 / 14 / 25 / 5) | — |
+
+**Internal talent-acquisition system.** The run reported the issues raised in the team's manual
+review of the same code:
+
+- user identity taken from client-controlled headers without verification;
+- a screening lock that stays set after a process restart;
+- an email endpoint that sends arbitrary content to arbitrary recipients;
+- a migration script that runs `alembic stamp head` instead of `upgrade`;
+- known vulnerabilities in `python-multipart`;
+- path traversal in an upload handler;
+- CV text cleaning that rewrites `_`, `@` and `:` and so corrupts e-mail addresses.
+
+**dvpwa.** The project documents five vulnerabilities:
+
+| Vulnerability | Run result |
+| --- | --- |
+| SQL injection | Reported (Critical) |
+| Weak password storage (MD5) | Reported (Critical) |
+| Stored XSS | Reported (Critical) |
+| Session fixation | Reported (High) |
+| CSRF protection disabled | Not reported. Earlier runs reported it. A detector for security controls that are defined but never applied was added in engine 1.22.0 and flags this case; it has not yet been through a full run. |
+
+The run also reported routes that read and modify data without authentication.
+
+**FastAPI full-stack template.** No Critical findings. The main High findings:
+
+- the new-account e-mail contains the password in plain text;
+- password-reset tokens can be reused until they expire;
+- no rate limiting on authentication;
+- JWTs are not revoked on logout or password change;
+- e-mail sending has no timeout;
+- a committed `.env` with weak default secrets.
+
+**Damn Vulnerable RESTaurant API** (engine 1.14.0). The run reported the documented
+vulnerabilities:
+
+- SQL injection;
+- command injection through `subprocess` with `shell=True`;
+- JWT signature verification disabled, and a low-entropy default JWT secret;
+- privilege escalation through the role-update endpoint;
+- IDOR on order retrieval;
+- mass assignment;
+- SSRF in image fetching;
+- a privileged container;
+- `sudo NOPASSWD` privilege escalation in the image.
 
 ## Project structure
 

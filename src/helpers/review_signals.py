@@ -219,6 +219,7 @@ class RuntimeSignals:
     sensitive_response_fields: list[Signal] = field(default_factory=list)  # response models carrying secrets
     leaky_session_dependencies: list[Signal] = field(default_factory=list)  # yielded sessions with no finally/close
     tables_without_migration: list[Signal] = field(default_factory=list)  # ORM tables no migration creates
+    lossy_text_cleaning: list[Signal] = field(default_factory=list)  # cleaners that rewrite identifier characters
     data_processors: list[Signal] = field(default_factory=list)  # third-party services that receive app data
     pipeline_hygiene: list[Signal] = field(default_factory=list)  # CI/deploy script practices
     # Functions combining several kinds of side effect (db write, network, files, subprocess,
@@ -1191,6 +1192,36 @@ def _backend_signals(files, live: set[str], repo_path: Path, manifest: Repositor
                     path, line, f"table `{table}` is defined in the models but no migration creates it"))
 
 
+_CLEANER_NAME = re.compile(r"(?i)(clean|normali[sz]e|sanitiz|preprocess|prepare_?text|scrub|tidy|correct)")
+# Characters emails, URLs, usernames, ids and dates are made of.
+_IDENTIFIER_CHARS = re.compile(r"^(\\?[_.@+\-:/#]|\[[_.@+\-:/#\\]+\]|\\d.*|\d{4}.*|.*\\d\{4\}.*)$")
+
+
+def _lossy_text_cleaning(files, live: set[str], signals: RuntimeSignals) -> None:
+    """Text "cleaning" that rewrites characters identifiers are made of: an email, URL, username
+    or date inside the cleaned text no longer matches what the user wrote (silent data change)."""
+    for py in files:
+        if py.path not in live:
+            continue
+        for func in _functions(py.tree):
+            # Filename/path/slug sanitizers rewrite those characters on purpose (that is the safety).
+            if not _CLEANER_NAME.search(func.name) or re.search(r"(?i)file_?name|path|slug|key|url|header|sql",
+                                                                 func.name):
+                continue
+            for node in _own_nodes(func):
+                if not isinstance(node, ast.Call):
+                    continue
+                callee = _dotted(node.func)
+                is_sub = callee in ("re.sub", "re.subn", "regex.sub") and bool(node.args)
+                is_replace = callee.endswith(".replace") and len(node.args) == 2
+                first = node.args[0] if node.args else None
+                pattern = first.value if (is_sub or is_replace) and isinstance(first, ast.Constant) else None
+                if isinstance(pattern, str) and _IDENTIFIER_CHARS.match(pattern) and not re.fullmatch(r"\\s\+?", pattern):
+                    signals.lossy_text_cleaning.append(Signal(
+                        py.path, node.lineno, f"`{func.name}` rewrites {pattern[:40]!r} in the text it cleans "
+                        "(emails, URLs, ids or dates inside it change)"))
+
+
 def _risk_hotspots(files, live: set[str], routes, signals: RuntimeSignals, limit: int = 15) -> None:
     """Rank live functions by how many KINDS of side effect they combine — no rule list, so it
     finds the functions worth tracing in any codebase: a failure between two effects leaves
@@ -1277,6 +1308,7 @@ def build_runtime_signals(
         ("hotspots", lambda: _risk_hotspots(files, live, routes, signals)),
         ("session_fixation", lambda: _session_fixation(files, live, signals)),
         ("backend", lambda: _backend_signals(files, live, repo_path, manifest, signals)),
+        ("lossy_text_cleaning", lambda: _lossy_text_cleaning(files, live, signals)),
     ):
         try:
             step()
@@ -1354,6 +1386,7 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
     lines += block("Response models that return secrets", [s.row for s in signals.sensitive_response_fields])
     lines += block("Session/connection dependencies that leak on error", [s.row for s in signals.leaky_session_dependencies])
     lines += block("ORM tables no migration creates", [s.row for s in signals.tables_without_migration])
+    lines += block("Text cleaners that rewrite identifier characters", [s.row for s in signals.lossy_text_cleaning])
     lines += block("Third-party services that receive application data (processors)",
                    [s.row for s in signals.data_processors])
     lines += block("Deployment pipeline hygiene", [s.row for s in signals.pipeline_hygiene])

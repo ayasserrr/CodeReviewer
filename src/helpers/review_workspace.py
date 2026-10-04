@@ -31,6 +31,7 @@ lock.
 
 import fnmatch
 import re
+import sys
 import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
@@ -117,6 +118,9 @@ _SCOPE_REASON = re.compile(r"(?i)(brief|checklist|baseline|prompt|instructions?|
                            r"\b(does not|doesn't|do not|never) (list|include|mention|require|cover)")
 _CLIENT_FILE = re.compile(r"(?i)\.(tsx?|jsx?|vue|svelte|mjs|cjs)$|(^|/)(vite|webpack|next|nuxt|tailwind|postcss|babel)"
                           r"\.config\.|(^|/)(package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|tsconfig[^/]*\.json)$")
+_SYNTAX_CLAIM = re.compile(r"(?i)syntax ?error|invalid syntax|does not (parse|compile|import)|cannot (be )?(parsed|"
+                           r"imported|import|parse|compile)|fails? to (parse|compile|import)|import[- ]time (crash|error)")
+_ENV_TEMPLATE = re.compile(r"(?i)(^|/)\.env[^/]*(example|sample|template|dist)")
 _SEVERE_STATIC = {"critical", "high"}  # security tools only; pyright/radon use "error" for ordinary hits
 _PERSISTED_STATE = re.compile(r"(?i)\block(ed)?\b|\bflag\b|in[_ -]?progress|background work|\bjob\b|\blease\b|semaphore")
 _CLEANUP_ONLY = re.compile(r"(?i)\bfinally\b|\bexcept\b|context manager|\bwith\b block|cleaned up|clears? the|releases?")
@@ -908,6 +912,10 @@ class ReviewWorkspace:
             errors += doc_errors
         errors += self._check_links(args.kpi_ids, args.static_finding_ids)
         errors += self._check_dead_module_claim(args.title, refs)
+        errors += self._check_backend_scope(category, refs)
+        syntax = self._check_syntax_claim(f"{args.title} {args.description} {args.impact}", [r.file for r in refs])
+        if syntax:
+            errors.append(syntax.removeprefix("NOT RECORDED — "))
         if errors or not refs:
             with self._lock:
                 self.invalid_evidence_bounces += 1
@@ -1127,7 +1135,8 @@ class ReviewWorkspace:
             add("Environment keys with divergent inline defaults",
                 [(r.file, f"{key}: {r.default} @ {r.file}:{r.line}")
                  for key, reads in self.maps.env_divergent_defaults().items() for r in reads])
-            add("Frontend calls with no backend route", [(c.file, f"{c.path} ({c.file}:{c.line})")
+            add("Frontend calls with no backend route", [] if not self.frontend_in_scope else [
+                (c.file, f"{c.path} ({c.file}:{c.line})")
                                                          for c in self.maps.unmatched_client_calls()])
         elif category_id == "performance":
             add("Blocking calls inside async functions (semgrep)", static_rows("python-blocking-call-in-async-def"))
@@ -1269,6 +1278,9 @@ class ReviewWorkspace:
                 rows(sig.fire_and_forget_tasks))
             add("Session/connection dependencies with no cleanup on error (pool exhaustion)",
                 rows(sig.leaky_session_dependencies))
+            add("Text cleaning that rewrites identifier characters — follow the cleaned text to every later "
+                "use (matching, dedup, contact details, dates, scoring): what no longer matches the original?",
+                rows(sig.lossy_text_cleaning))
         if category_id == "security":
             add("Response models that hand secrets to the client (password hashes, tokens, keys)",
                 rows(sig.sensitive_response_fields))
@@ -1806,6 +1818,59 @@ class ReviewWorkspace:
         lines.append(f"## Dead-code candidates: {len(maps.unreachable)} modules no entry point imports (reachability.md)")
         return "\n".join(lines)
 
+    def _client_roots(self) -> list[str]:
+        if getattr(self, "_client_roots_cache", None) is None:
+            paths = [f.path for f in self.manifest.files]
+            roots = [str(PurePosixPath(p).parent) for p in paths if PurePosixPath(p).name == "package.json"]
+            self._client_roots_cache = [r for r in roots if r != "." and not any(
+                q.endswith(".py") and q.startswith(r + "/") for q in paths)]
+        return self._client_roots_cache
+
+    def is_client_path(self, path: str) -> bool:
+        """Browser-client code or build files (a client app folder, TS/JS sources, bundler config)."""
+        return bool(_CLIENT_FILE.search(path)) or any(path.startswith(r + "/") for r in self._client_roots())
+
+    def _check_backend_scope(self, category: ReviewCategory, refs) -> list[str]:
+        if self.frontend_in_scope or category.id == "frontend" or not refs:
+            return []
+        files = {r.file for r in refs}
+        if all(self.is_client_path(f) and not _ENV_TEMPLATE.search(f) for f in files):
+            return [("the evidence is only browser-client code, which is outside this backend review — cite the "
+                     "backend code involved (the route, the setting, the key it hands out), or drop it")]
+        return []
+
+    def _declared_python_floor(self) -> tuple[int, int] | None:
+        floors = []
+        for row in self.declared_runtimes():
+            m = re.search(r"(?:requires-python|python_requires)\s*>=?\s*(3)\.(\d+)|python:(3)\.(\d+)", row)
+            if m:
+                major, minor = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+                floors.append((int(major), int(minor)))
+        return max(floors) if floors else None
+
+    def _check_syntax_claim(self, text: str, files) -> str | None:
+        """A "cannot parse / import" claim is checked, not believed: the cited file must really fail to
+        compile, on an interpreter at least as new as the one the project declares."""
+        if not _SYNTAX_CLAIM.search(text or ""):
+            return None
+        floor = self._declared_python_floor()
+        for path in {f for f in files if f.endswith(".py")}:
+            try:
+                source = (self.repo_path / path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            try:
+                compile(source, path, "exec", dont_inherit=True)
+            except SyntaxError:
+                if floor and floor > sys.version_info[:2]:
+                    return (f"NOT RECORDED — {path} targets Python {floor[0]}.{floor[1]}+ (declared), newer than the "
+                            "parser available here; its syntax may be valid there (e.g. Python 3.14 accepts "
+                            "`except A, B:`). A syntax claim needs the failure on the declared version.")
+                continue
+            return (f"NOT RECORDED — {path} compiles: the syntax/import-failure claim is false. Describe what the "
+                    "code really does wrong, if anything.")
+        return None
+
     def declared_runtimes(self) -> list[str]:
         """Interpreter / runtime versions the project declares (pyproject, .python-version, Dockerfiles, package.json)."""
         found: list[str] = []
@@ -1944,11 +2009,7 @@ class ReviewWorkspace:
         if not self.frontend_in_scope:
             # Client build config, client tests and whole client apps (a folder with a package.json
             # and no Python) are not backend files; env templates stay (keys the backend hands out).
-            client_roots = [str(PurePosixPath(p).parent) for p in entries if PurePosixPath(p).name == "package.json"]
-            client_roots = [r for r in client_roots if r != "." and not any(
-                q.endswith(".py") and q.startswith(r + "/") for q in entries)]
-            live_or_config = {p for p in live_or_config if not _CLIENT_FILE.search(p) and (
-                p in templates or not any(p.startswith(r + "/") for r in client_roots))}
+            live_or_config = {p for p in live_or_config if p in templates or not self.is_client_path(p)}
         self._scopes = {lane: sorted(p for p in paths if p in live_or_config) for lane, paths in scopes.items()}
         return self._scopes
 
@@ -2097,6 +2158,12 @@ class ReviewWorkspace:
                     "NOT RECORDED — whether a checklist, brief or baseline lists this is not a reason it is not a "
                     "defect. Reject only on what the code does; otherwise confirm or adjust."
                 )
+            if args.verdict != "rejected":
+                claim = " ".join(filter(None, [args.note, getattr(args, "corrected_title", None),
+                                               getattr(args, "corrected_impact", None)]))
+                refused = self._check_syntax_claim(claim, [r.file for r in finding.evidence])
+                if refused:
+                    return refused + " Re-judge the finding on what the code does at runtime."
             verification = Verification(verdict=args.verdict, original_severity=finding.severity, note=args.note.strip()[:1500])
             self.verifications[finding.id] = verification
             if args.verdict == "rejected":

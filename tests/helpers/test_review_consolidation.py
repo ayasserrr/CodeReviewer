@@ -471,14 +471,14 @@ def test_uncited_note_about_another_finding_is_refused(workspace):
     from helpers.review_workspace import _VerifyArgs
 
     ws = workspace
-    fid = record(ws, "correctness", "Syntax error in exception handler prevents startup", "Critical",
+    fid = record(ws, "correctness", "Exception handler swallows token errors at startup", "Critical",
                  ("app/routers/auth.py", 36, 37))
     crossed = ws.submit_verification("correctness", _VerifyArgs(
         finding_id=fid, verdict="confirmed",
         note="Confirmed based on client_calls that 20 backend routes are never called by the frontend client."))
     assert crossed.startswith("NOT RECORDED")
     ok = ws.submit_verification("correctness", _VerifyArgs(
-        finding_id=fid, verdict="confirmed", note="The exception handler in auth.py fails to parse on 3.12."))
+        finding_id=fid, verdict="confirmed", note="The exception handler in auth.py swallows token errors."))
     assert ok == f"{fid}: confirmed."
 
 
@@ -604,3 +604,38 @@ def test_hypotheses_must_be_concrete_distinct_and_confirmed_by_their_own_finding
     header = record(ws, "auth", "Identity header trusted by get_current_user", "High", ("app/routers/auth.py", 5, 6))
     assert ws.resolve_hypothesis(auth, _ResolveHypothesisArgs(
         hypothesis_id="H-AUTH-2", outcome="confirmed", finding_id=header)) == "H-AUTH-2: confirmed."
+
+
+def test_syntax_claims_are_checked_against_the_code_and_declared_runtime(workspace):
+    ws = workspace
+    out = ws.record_finding(ws.config.category("correctness"), _RecordFindingArgs(
+        title="SyntaxError in auth.py prevents the app from starting", severity="Critical", confidence="high",
+        description="d", impact="i", evidence=[EvidenceInput(file="app/routers/auth.py", line_start=3)]))
+    assert out.startswith("NOT RECORDED") and "compiles" in out
+    (ws.repo_path / "app/routers/auth.py").write_text("try:\n    pass\nexcept A, B:\n    pass\n")
+    (ws.repo_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.99"\n')
+    ws.manifest = ws.manifest.model_copy(update={"files": ws.manifest.files + (
+        FileEntry(path="pyproject.toml", language="TOML", size_bytes=40),)})
+    out = ws.record_finding(ws.config.category("correctness"), _RecordFindingArgs(
+        title="SyntaxError in auth.py prevents the app from starting", severity="Critical", confidence="high",
+        description="d", impact="i", evidence=[EvidenceInput(file="app/routers/auth.py", line_start=3)]))
+    assert out.startswith("NOT RECORDED") and "targets Python 3.99+" in out
+
+
+def test_client_only_evidence_is_outside_a_backend_review(workspace):
+    ws = workspace
+    for rel in ("frontend/package.json", "frontend/src/api.ts", "frontend/.env.example"):
+        (ws.repo_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws.repo_path / rel).write_text("const x = 1\n" * 10)
+    ws.manifest = ws.manifest.model_copy(update={"files": ws.manifest.files + tuple(
+        FileEntry(path=p, language="TypeScript", size_bytes=100, lines=10)
+        for p in ("frontend/package.json", "frontend/src/api.ts", "frontend/.env.example"))})
+    assert not ws.frontend_in_scope
+    out = ws.record_finding(ws.config.category("testing"), _RecordFindingArgs(
+        title="Weak password in browser tests", severity="Low", confidence="high", description="d", impact="i",
+        evidence=[EvidenceInput(file="frontend/src/api.ts", line_start=2)]))
+    assert out.startswith("NOT RECORDED") and "browser-client" in out
+    ok = ws.record_finding(ws.config.category("secrets"), _RecordFindingArgs(
+        title="Backend API key handed to the browser through VITE_API_KEY", severity="High", confidence="high",
+        description="d", impact="i", evidence=[EvidenceInput(file="frontend/.env.example", line_start=2)]))
+    assert ok.startswith("Recorded ")

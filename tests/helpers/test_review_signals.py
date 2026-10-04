@@ -593,3 +593,31 @@ async def create(tasks: BackgroundTasks, db=Depends(get_db)):
     assert [s.text for s in sig.sensitive_response_fields] == ["response model UserOut returns field `hashed_password`"]
     assert [s.text.split("`")[1] for s in sig.leaky_session_dependencies] == ["get_db"]
     assert [s.text.split("`")[1] for s in sig.tables_without_migration] == ["refunds"]
+
+
+def test_text_cleaners_that_rewrite_identifier_characters(tmp_path: Path):
+    files = {
+        "app/main.py": "from fastapi import FastAPI\nfrom app import text\napp = FastAPI()\n",
+        "app/text.py": '''
+import re
+
+def clean_line(text):
+    text = re.sub(r"_", " ", text)
+    text = re.sub(r"\\s+", " ", text)
+    return text.replace("@", " at ")
+
+def sanitize_filename(name):
+    return name.replace("/", "_")
+''',
+    }
+    entries = []
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+        entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+    )
+    rows = sorted((s.line, s.text.split("'")[1]) for s in build_review_maps(tmp_path, manifest).signals.lossy_text_cleaning)
+    assert rows == [(5, "_"), (7, "@")]

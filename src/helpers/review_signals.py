@@ -220,6 +220,7 @@ class RuntimeSignals:
     leaky_session_dependencies: list[Signal] = field(default_factory=list)  # yielded sessions with no finally/close
     tables_without_migration: list[Signal] = field(default_factory=list)  # ORM tables no migration creates
     lossy_text_cleaning: list[Signal] = field(default_factory=list)  # cleaners that rewrite identifier characters
+    unwired_security_controls: list[Signal] = field(default_factory=list)  # protections defined but applied nowhere
     data_processors: list[Signal] = field(default_factory=list)  # third-party services that receive app data
     pipeline_hygiene: list[Signal] = field(default_factory=list)  # CI/deploy script practices
     # Functions combining several kinds of side effect (db write, network, files, subprocess,
@@ -1222,6 +1223,30 @@ def _lossy_text_cleaning(files, live: set[str], signals: RuntimeSignals) -> None
                         "(emails, URLs, ids or dates inside it change)"))
 
 
+_SECURITY_CONTROL_NAME = re.compile(
+    r"(?i)(csrf|xsrf|auth\w*_middleware|\w*_auth_middleware|authenticat\w*|authoriz\w*|login_required|"
+    r"require_\w*(auth|login|role|admin|permission)|rate_?limit\w*|throttl\w*|security_headers?\w*|"
+    r"verify_(token|signature|webhook|api_key)\w*|check_(permission|access|owner)\w*|sanitiz\w*|escape_html)")
+
+
+def _unwired_security_controls(files, live: set[str], signals: RuntimeSignals) -> None:
+    """Protections that exist in the code but are applied nowhere (definition only, or used only in a
+    commented-out line): the team believes the control is on; the running service does not have it."""
+    code = "\n".join(re.sub(r"(?m)#.*$", "", py.text) for py in files if not is_test_file(py.path))
+    for py in files:
+        if py.path not in live:
+            continue
+        for node in py.tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if not _SECURITY_CONTROL_NAME.match(node.name):
+                continue
+            uses = len(re.findall(rf"\b{re.escape(node.name)}\b", code))
+            if uses <= 1:  # the definition itself
+                signals.unwired_security_controls.append(Signal(
+                    py.path, node.lineno, f"`{node.name}` is defined but applied nowhere (not registered, not called)"))
+
+
 def _risk_hotspots(files, live: set[str], routes, signals: RuntimeSignals, limit: int = 15) -> None:
     """Rank live functions by how many KINDS of side effect they combine — no rule list, so it
     finds the functions worth tracing in any codebase: a failure between two effects leaves
@@ -1309,6 +1334,7 @@ def build_runtime_signals(
         ("session_fixation", lambda: _session_fixation(files, live, signals)),
         ("backend", lambda: _backend_signals(files, live, repo_path, manifest, signals)),
         ("lossy_text_cleaning", lambda: _lossy_text_cleaning(files, live, signals)),
+        ("unwired_security_controls", lambda: _unwired_security_controls(files, live, signals)),
     ):
         try:
             step()
@@ -1387,6 +1413,7 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
     lines += block("Session/connection dependencies that leak on error", [s.row for s in signals.leaky_session_dependencies])
     lines += block("ORM tables no migration creates", [s.row for s in signals.tables_without_migration])
     lines += block("Text cleaners that rewrite identifier characters", [s.row for s in signals.lossy_text_cleaning])
+    lines += block("Security controls defined but applied nowhere", [s.row for s in signals.unwired_security_controls])
     lines += block("Third-party services that receive application data (processors)",
                    [s.row for s in signals.data_processors])
     lines += block("Deployment pipeline hygiene", [s.row for s in signals.pipeline_hygiene])

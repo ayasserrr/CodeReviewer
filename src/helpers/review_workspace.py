@@ -1282,6 +1282,8 @@ class ReviewWorkspace:
                 "use (matching, dedup, contact details, dates, scoring): what no longer matches the original?",
                 rows(sig.lossy_text_cleaning))
         if category_id == "security":
+            add("Security controls defined but applied nowhere — the protection the code suggests is not active",
+                rows(sig.unwired_security_controls))
             add("Response models that hand secrets to the client (password hashes, tokens, keys)",
                 rows(sig.sensitive_response_fields))
         if category_id == "integration":

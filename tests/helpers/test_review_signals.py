@@ -621,3 +621,36 @@ def sanitize_filename(name):
     )
     rows = sorted((s.line, s.text.split("'")[1]) for s in build_review_maps(tmp_path, manifest).signals.lossy_text_cleaning)
     assert rows == [(5, "_"), (7, "@")]
+
+
+def test_security_controls_defined_but_never_applied(tmp_path: Path):
+    files = {
+        "app/main.py": '''
+from aiohttp import web
+from app.middlewares import error_middleware, rate_limit
+app = web.Application(middlewares=[error_middleware, rate_limit])
+# app.middlewares.append(csrf_middleware)
+''',
+        "app/middlewares.py": '''
+async def error_middleware(request, handler):
+    return await handler(request)
+
+async def rate_limit(request, handler):
+    return await handler(request)
+
+async def csrf_middleware(request, handler):
+    return await handler(request)
+''',
+    }
+    entries = []
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+        entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+    )
+    rows = [s.row for s in build_review_maps(tmp_path, manifest).signals.unwired_security_controls]
+    assert rows == [("`csrf_middleware` is defined but applied nowhere (not registered, not called) "
+                     "(app/middlewares.py:8)")]

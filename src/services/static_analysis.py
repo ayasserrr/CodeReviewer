@@ -95,7 +95,9 @@ async def analyze(
         findings_count=len(findings),
         tools_run=list(tool_results.keys()),
         tools_failed=tools_failed,
-        tool_failure_reasons={tool: tool_results[tool].get("error") or tool_results[tool]["status"] for tool in tools_failed},
+        tool_failure_reasons={
+            tool: tool_results[tool].get("error") or tool_results[tool]["status"] for tool in tools_failed
+        },
     )
 
     await save_static_findings(

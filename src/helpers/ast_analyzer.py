@@ -8,6 +8,7 @@ still classified and sized, just never AST-parsed.
 """
 
 import ast
+import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -40,12 +41,52 @@ class ParseOutcome:
     ast_timeout: bool = False
 
 
+# PEP 758 (Python 3.14): ``except A, B:`` without parentheses.
+_UNPARENTHESIZED_EXCEPT = re.compile(r"(?m)^(\s*except\*?\s+)(?!\()([^\n:()#]+,[^\n:#]+?)\s*:")
+_MAX_LINE_REPAIRS = 25
+
+
 def parse_quietly(source: str, filename: str = "<unknown>") -> ast.Module:
     """``ast.parse`` without the reviewed code's own ``SyntaxWarning``s (e.g. invalid
-    escape sequences) — they are the target repository's lint, not our logs' business."""
+    escape sequences) — they are the target repository's lint, not our logs' business.
+
+    Syntax that is valid on a newer Python than this interpreter (PEP 758 ``except A, B:``)
+    is accepted: it is rewritten to its equivalent before parsing, not reported as an error."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", SyntaxWarning)
-        return ast.parse(source, filename=filename)
+        try:
+            return ast.parse(source, filename=filename)
+        except SyntaxError:
+            rewritten = _UNPARENTHESIZED_EXCEPT.sub(lambda m: f"{m.group(1)}({m.group(2).strip()}):", source)
+            if rewritten == source:
+                raise
+            return ast.parse(rewritten, filename=filename)
+
+
+def parse_tolerant(source: str, filename: str = "<unknown>") -> ast.Module:
+    """Like :func:`parse_quietly`, but a line that still does not parse is neutralised in place
+    (line numbers preserved, block headers keep their block) so the rest of the module is still
+    analysed — for review analysis, where losing a whole module costs more than one line.
+    Raises ``SyntaxError`` only when the file cannot be repaired."""
+    try:
+        return parse_quietly(source, filename)
+    except SyntaxError:
+        pass
+    repaired = _UNPARENTHESIZED_EXCEPT.sub(lambda m: f"{m.group(1)}({m.group(2).strip()}):", source)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        for _ in range(_MAX_LINE_REPAIRS):
+            try:
+                return ast.parse(repaired, filename=filename)
+            except SyntaxError as error:
+                lines = repaired.split("\n")
+                index = (error.lineno or 0) - 1
+                if not 0 <= index < len(lines) or lines[index].strip() in ("pass", "if True:"):
+                    raise
+                indent = re.match(r"\s*", lines[index]).group(0)
+                lines[index] = indent + ("if True:" if lines[index].rstrip().endswith(":") else "pass")
+                repaired = "\n".join(lines)
+        return ast.parse(repaired, filename=filename)
 
 
 def parse_file_ast(path: Path, max_size_mb: float, timeout_ms: int) -> ParseOutcome:

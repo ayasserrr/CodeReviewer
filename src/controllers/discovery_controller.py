@@ -83,9 +83,7 @@ class DiscoveryController:
 
         logger.info("discovery_started", repository_id=str(repository_id), head_sha=head_sha, cache_key=cache_key)
 
-        manifest = await asyncio.to_thread(
-            self._run_discovery_sync, repository_id, repo_path, head_sha, cache_key
-        )
+        manifest = await asyncio.to_thread(self._run_discovery_sync, repository_id, repo_path, head_sha, cache_key)
 
         if manifest.statistics.traversal_timed_out or manifest.statistics.discovery_timed_out:
             # A partial scan is used for this run but never cached: the next run retries in full.
@@ -140,9 +138,7 @@ class DiscoveryController:
         for file_path in traversal.discovered_files:
             if not discovery_timed_out and time.monotonic() - start > settings.DISCOVERY_TOTAL_TIMEOUT_SECONDS:
                 discovery_timed_out = True
-                logger.warning(
-                    "discovery_total_timeout", timeout_seconds=settings.DISCOVERY_TOTAL_TIMEOUT_SECONDS
-                )
+                logger.warning("discovery_total_timeout", timeout_seconds=settings.DISCOVERY_TOTAL_TIMEOUT_SECONDS)
 
             if is_sensitive_env_file(file_path.name):
                 # CRITICAL SECURITY: never opened, never classified, never listed —

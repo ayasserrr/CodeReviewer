@@ -13,7 +13,7 @@ exceptions raised here to HTTP responses via exception handlers in ``main.py``.
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -90,8 +90,11 @@ class IngestionController:
         access_token = validate_access_token(access_token)
         base_url, project_path = validate_gitlab_url(gitlab_url)
         await asyncio.to_thread(
-            check_gitlab_host, base_url, settings.GITLAB_ALLOWED_HOSTS,
-            settings.GITLAB_ALLOW_PRIVATE_HOSTS, settings.GITLAB_ALLOW_HTTP,
+            check_gitlab_host,
+            base_url,
+            settings.GITLAB_ALLOWED_HOSTS,
+            settings.GITLAB_ALLOW_PRIVATE_HOSTS,
+            settings.GITLAB_ALLOW_HTTP,
         )
         repository_id = validate_repo_id(repo_id)
         repo_uuid = UUID(repository_id)
@@ -154,7 +157,7 @@ class IngestionController:
         return RepositoryIngestionResult(
             context=context,
             duration_seconds=duration,
-            ingested_at=datetime.now(timezone.utc),
+            ingested_at=datetime.now(UTC),
         )
 
     @staticmethod
@@ -171,8 +174,7 @@ class IngestionController:
         checked_out_branch = get_current_branch(clone_dest, settings.GIT_CLONE_TIMEOUT_SECONDS)
         if checked_out_branch != default_branch:
             raise DiskError(
-                f"Checked out branch {checked_out_branch!r} does not match "
-                f"resolved default branch {default_branch!r}"
+                f"Checked out branch {checked_out_branch!r} does not match resolved default branch {default_branch!r}"
             )
         return head_sha
 

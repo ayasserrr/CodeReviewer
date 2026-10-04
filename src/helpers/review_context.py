@@ -86,7 +86,11 @@ def _system_doc_brief(workspace: ReviewWorkspace) -> list[str]:
             break
         excerpt = text[:remaining]
         remaining -= len(excerpt)
-        lines += ["", f"### {path}", excerpt.rstrip() + ("\n[... continues in agents_md.md]" if len(excerpt) < len(text) else "")]
+        lines += [
+            "",
+            f"### {path}",
+            excerpt.rstrip() + ("\n[... continues in agents_md.md]" if len(excerpt) < len(text) else ""),
+        ]
     return lines
 
 
@@ -96,13 +100,17 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
     stats = manifest.statistics
     graph_stats = workspace.graph.statistics
 
-    languages = ", ".join(
-        f"{lang.language} ({lang.file_count} files, {lang.total_lines} lines)"
-        for lang in sorted(manifest.languages, key=lambda item: -item.file_count)
-    ) or "unknown"
-    frameworks = ", ".join(
-        f"{f.name}{' (primary)' if f.is_primary else ''} [{f.confidence}]" for f in manifest.frameworks
-    ) or "none detected"
+    languages = (
+        ", ".join(
+            f"{lang.language} ({lang.file_count} files, {lang.total_lines} lines)"
+            for lang in sorted(manifest.languages, key=lambda item: -item.file_count)
+        )
+        or "unknown"
+    )
+    frameworks = (
+        ", ".join(f"{f.name}{' (primary)' if f.is_primary else ''} [{f.confidence}]" for f in manifest.frameworks)
+        or "none detected"
+    )
     source_roots = ", ".join(stats.source_roots) or "."
 
     entrypoints = [f"- {e.path} ({e.kind}{f': {e.detail}' if e.detail else ''})" for e in manifest.entrypoints]
@@ -124,9 +132,11 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
         f"- Languages: {languages}",
         f"- Frameworks: {frameworks}",
         f"- Source roots: {source_roots}",
-        f"- Files scanned: {stats.total_files_scanned} ({stats.total_lines} lines); parse errors: {stats.total_parse_errors}",
+        f"- Files scanned: {stats.total_files_scanned} ({stats.total_lines} lines); parse errors: "
+        f"{stats.total_parse_errors}",
         (
-            f"- Real .env file present in the repo: {'YES — never open it; its existence alone is evidence' if manifest.env_file_exists else 'no'}"
+            "- Real .env file present in the repo: "
+            f"{'YES — never open it; its existence alone is evidence' if manifest.env_file_exists else 'no'}"
             " (env_map.md lists every .env* file's key names, duplicate keys and flags — never values)"
         ),
         (
@@ -136,7 +146,8 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
         "",
         *_system_doc_brief(workspace),
         "",
-        f"## Directory map ({min(total_dirs, _BRIEF_TREE_DIRS)} of {total_dirs} directories; full list: /_review/context/file_tree.md)",
+        f"## Directory map ({min(total_dirs, _BRIEF_TREE_DIRS)} of {total_dirs} directories; full list: "
+        "/_review/context/file_tree.md)",
         *tree,
         "",
         f"## Entrypoints ({len(entrypoints)})",
@@ -144,8 +155,12 @@ def build_repo_brief(workspace: ReviewWorkspace, repository_name: str) -> str:
         "",
         *maps_brief(workspace.maps),
         "",
-        f"## HTTP endpoints ({len(endpoints)}; full table with dependencies: /_review/context/route_map.md or list_endpoints)",
-        *(endpoints[:_BRIEF_ENDPOINTS] or ["- none detected (Discovery only detects Python frameworks — grep for others)"]),
+        f"## HTTP endpoints ({len(endpoints)}; full table with dependencies: /_review/context/route_map.md or "
+        "list_endpoints)",
+        *(
+            endpoints[:_BRIEF_ENDPOINTS]
+            or ["- none detected (Discovery only detects Python frameworks — grep for others)"]
+        ),
         "",
         f"## Declared dependencies ({len(dependencies)}; full list: /_review/context/dependencies.md)",
         ", ".join(dependencies[:_BRIEF_DEPENDENCIES]) or "none declared",
@@ -171,7 +186,8 @@ def build_context_files(workspace: ReviewWorkspace, brief: str) -> dict[str, dic
         "endpoints.md": "\n".join(
             ["# Detected HTTP endpoints"]
             + [
-                f"{e.method} {e.path} -> {e.handler} ({e.file}:{e.line}) [{e.framework}]{' [DUPLICATE]' if e.duplicate else ''}"
+                f"{e.method} {e.path} -> {e.handler} ({e.file}:{e.line}) "
+                f"[{e.framework}]{' [DUPLICATE]' if e.duplicate else ''}"
                 for e in manifest.endpoints
             ]
         ),

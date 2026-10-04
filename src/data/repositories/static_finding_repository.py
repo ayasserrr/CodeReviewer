@@ -56,9 +56,7 @@ class StaticFindingRepository:
         for i in range(0, len(rows), _UPSERT_BATCH_SIZE):
             batch = rows[i : i + _UPSERT_BATCH_SIZE]
             statement = pg_insert(StaticFindingRecord).values(batch)
-            statement = statement.on_conflict_do_nothing(
-                index_elements=["repository_id", "head_sha", "finding_id"]
-            )
+            statement = statement.on_conflict_do_nothing(index_elements=["repository_id", "head_sha", "finding_id"])
             result = await self._db_session.execute(statement)
             inserted += result.rowcount or 0
         await self._db_session.flush()

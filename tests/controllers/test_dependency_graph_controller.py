@@ -20,9 +20,14 @@ from utils import DependencyGraph, DiscoveryStatistics, FileEntry, RepositoryMan
 
 def _manifest(repo_path: Path, files: list[FileEntry], head_sha: str = "a" * 40) -> RepositoryManifest:
     return RepositoryManifest(
-        schema_version="1.0.0", discovery_engine_version="1.0.0", repository_id=str(uuid4()),
-        head_sha=head_sha, cache_key="cache-key", generated_at=datetime.now(UTC),
-        files=tuple(files), statistics=DiscoveryStatistics(source_roots=(".",)),
+        schema_version="1.0.0",
+        discovery_engine_version="1.0.0",
+        repository_id=str(uuid4()),
+        head_sha=head_sha,
+        cache_key="cache-key",
+        generated_at=datetime.now(UTC),
+        files=tuple(files),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
     )
 
 
@@ -53,9 +58,7 @@ def no_real_grimp_subprocess():
 class TestDependencyGraphControllerHappyPath:
     async def test_full_build_against_real_fixture_repo(self, tmp_path: Path, patched_graph_repo):
         (tmp_path / "mod.py").write_text(
-            "def bar():\n    pass\n\n"
-            "def foo():\n    bar()\n\n"
-            "class Widget:\n    def helper(self):\n        foo()\n"
+            "def bar():\n    pass\n\ndef foo():\n    bar()\n\nclass Widget:\n    def helper(self):\n        foo()\n"
         )
         manifest = _manifest(tmp_path, [FileEntry(path="mod.py", language="Python", size_bytes=1)])
         repository_id = uuid4()
@@ -95,9 +98,7 @@ class TestDependencyGraphControllerHappyPath:
         )
 
         controller = DependencyGraphController(db_session=MagicMock())
-        graph = await controller.build(
-            repository_id=uuid4(), repo_path=tmp_path, head_sha="a" * 40, manifest=manifest
-        )
+        graph = await controller.build(repository_id=uuid4(), repo_path=tmp_path, head_sha="a" * 40, manifest=manifest)
 
         assert {f.name for f in graph.functions} == {"foo"}
 
@@ -114,9 +115,7 @@ class TestDependencyGraphControllerPartialFailure:
         )
 
         controller = DependencyGraphController(db_session=MagicMock())
-        graph = await controller.build(
-            repository_id=uuid4(), repo_path=tmp_path, head_sha="a" * 40, manifest=manifest
-        )
+        graph = await controller.build(repository_id=uuid4(), repo_path=tmp_path, head_sha="a" * 40, manifest=manifest)
 
         assert {f.name for f in graph.functions} == {"foo"}
         assert len(graph.failed_files) == 1
@@ -130,8 +129,12 @@ class TestDependencyGraphControllerCaching:
         manifest = _manifest(tmp_path, [FileEntry(path="mod.py", language="Python", size_bytes=1)])
 
         cached = DependencyGraph(
-            schema_version="1.0.0", engine_version="1.0.0", repository_id=str(uuid4()),
-            head_sha="a" * 40, cache_key="whatever-the-cache-key-is", generated_at=datetime.now(UTC),
+            schema_version="1.0.0",
+            engine_version="1.0.0",
+            repository_id=str(uuid4()),
+            head_sha="a" * 40,
+            cache_key="whatever-the-cache-key-is",
+            generated_at=datetime.now(UTC),
         )
         mock_record = MagicMock()
         mock_record.graph_data = cached.model_dump(mode="json")
@@ -140,8 +143,10 @@ class TestDependencyGraphControllerCaching:
         mock_repo.get_by_cache_key = AsyncMock(return_value=mock_record)
         mock_repo.create = AsyncMock()
 
-        with patch("controllers.dependency_graph_controller.DependencyGraphRepository", return_value=mock_repo), \
-                patch("controllers.dependency_graph_controller.build_python_parser") as parser_spy:
+        with (
+            patch("controllers.dependency_graph_controller.DependencyGraphRepository", return_value=mock_repo),
+            patch("controllers.dependency_graph_controller.build_python_parser") as parser_spy,
+        ):
             controller = DependencyGraphController(db_session=MagicMock())
             this_repository = uuid4()
             result = await controller.build(

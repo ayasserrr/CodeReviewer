@@ -5,7 +5,7 @@ under tmp_path) so traversal/AST/framework/endpoint detection all run for
 real; only the DB layer (ManifestRepository) is mocked.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -107,7 +107,7 @@ class TestDiscoveryControllerCaching:
             repository_id=str(uuid4()),
             head_sha="c" * 40,
             cache_key="whatever-the-cache-key-is",
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(UTC),
         )
         mock_record = MagicMock()
         mock_record.manifest_data = cached.model_dump(mode="json")
@@ -116,9 +116,10 @@ class TestDiscoveryControllerCaching:
         mock_repo.get_by_cache_key = AsyncMock(return_value=mock_record)
         mock_repo.create = AsyncMock()
 
-        with patch("controllers.discovery_controller.ManifestRepository", return_value=mock_repo), patch(
-            "controllers.discovery_controller.rapid_surface_scan"
-        ) as scan_spy:
+        with (
+            patch("controllers.discovery_controller.ManifestRepository", return_value=mock_repo),
+            patch("controllers.discovery_controller.rapid_surface_scan") as scan_spy,
+        ):
             controller = DiscoveryController(db_session=MagicMock())
             this_repository = uuid4()
             result = await controller.discover(repository_id=this_repository, repo_path=tmp_path, head_sha="c" * 40)
@@ -135,9 +136,7 @@ class TestDiscoveryControllerCriticalFailure:
     async def test_missing_repo_path_raises_discovery_error(self, tmp_path: Path, patched_manifest_repo):
         controller = DiscoveryController(db_session=MagicMock())
         with pytest.raises(DiscoveryError):
-            await controller.discover(
-                repository_id=uuid4(), repo_path=tmp_path / "does-not-exist", head_sha="d" * 40
-            )
+            await controller.discover(repository_id=uuid4(), repo_path=tmp_path / "does-not-exist", head_sha="d" * 40)
         patched_manifest_repo.create.assert_not_awaited()
 
 
@@ -166,7 +165,9 @@ class TestDiscoveryControllerPartialFailure:
 
 
 class TestDiscoveryControllerTimeBudget:
-    async def test_over_budget_still_lists_every_file_and_is_not_cached(self, tmp_path: Path, patched_manifest_repo, monkeypatch):
+    async def test_over_budget_still_lists_every_file_and_is_not_cached(
+        self, tmp_path: Path, patched_manifest_repo, monkeypatch
+    ):
         _build_fake_fastapi_repo(tmp_path)
         (tmp_path / "web").mkdir()
         (tmp_path / "web" / "App.tsx").write_text("export const App = () => null\n")

@@ -86,18 +86,22 @@ def clone_repository(
     with tempfile.TemporaryDirectory(prefix="askpass-") as askpass_dir:
         askpass_script = _write_askpass_script(Path(askpass_dir))
 
-        env = safe_env({
-            "GIT_ASKPASS": str(askpass_script),
-            "GIT_ASKPASS_TOKEN": access_token,
-            "GIT_TERMINAL_PROMPT": "0",
-        })
+        env = safe_env(
+            {
+                "GIT_ASKPASS": str(askpass_script),
+                "GIT_ASKPASS_TOKEN": access_token,
+                "GIT_TERMINAL_PROMPT": "0",
+            }
+        )
 
         cmd = [
             "git",
             "clone",
-            "--depth", "1",
+            "--depth",
+            "1",
             "--single-branch",
-            "--branch", branch,
+            "--branch",
+            branch,
             "--no-tags",
             clone_url,
             str(dest),

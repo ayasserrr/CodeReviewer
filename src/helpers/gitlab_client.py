@@ -48,9 +48,7 @@ async def resolve_project(base_url: str, project_path: str, access_token: str) -
         raise NetworkError(f"Could not reach GitLab API at {host}") from exc
 
     if response.status_code in (401, 403):
-        logger.warning(
-            "gitlab_api_auth_failed", host=host, project_path=project_path, status_code=response.status_code
-        )
+        logger.warning("gitlab_api_auth_failed", host=host, project_path=project_path, status_code=response.status_code)
         raise AuthenticationError("GitLab rejected the provided access token")
 
     if response.status_code == 404:

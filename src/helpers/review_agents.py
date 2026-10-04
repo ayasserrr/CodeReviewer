@@ -113,7 +113,7 @@ def _gemini_class(function_calling_mode: str) -> type:
     Root cause of the ``MALFORMED_FUNCTION_CALL`` turns: in the default AUTO
     mode Gemini decodes tool calls freely, and batches of parallel calls
     (typically 3-6 ``grep``/``glob``/``read_file`` at once) regularly come back
-    unparseable — measured on the talent repository at ~27% of all turns in one
+    unparseable — measured on a real repository at ~27% of all turns in one
     lane, each costing a retry (and often a fallback to the judge model).
     ``VALIDATED`` constrains the output to the declared tool schemas (or plain
     text): 0 malformed turns in 82 calls across three lanes and both models.
@@ -308,6 +308,7 @@ class _RunBudget:
     limit: int
     deadline: float
     timeout: float
+    time_capped: bool = False
     used: int = 0
 
     def seconds_left(self) -> float:
@@ -315,6 +316,25 @@ class _RunBudget:
 
 
 _RUN_BUDGET: ContextVar[_RunBudget | None] = ContextVar("deep_review_run_budget", default=None)
+REVIEW_READS: ContextVar[set[str] | None] = ContextVar("deep_review_reads", default=None)
+_LANE_READS: ContextVar[set[str] | None] = ContextVar("deep_review_lane_reads", default=None)
+
+
+def current_lane_reads() -> set[str]:
+    """Files the agent currently running (and its code-explorers) opened — for completion checks."""
+    return set(_LANE_READS.get() or ())
+
+
+"""Every repository file any agent of the current review opened (shared by all lanes, live)."""
+
+_CALL_MARGIN_SECONDS = 10.0
+"""A model call is cut this long before the lane's hard cap, so the run always ends cleanly."""
+
+_STOP_GRACE_SECONDS = 45.0
+"""An agent (and every explorer it launched) stops this long before its wall-clock cap.
+
+Stopping cleanly keeps the run "completed" with everything recorded; the hard cap used to cancel
+agents mid-explorer-call (observed: a lane whose explorer was still reading when the cap hit)."""
 _AGENT_NAME: ContextVar[str] = ContextVar("deep_review_agent_name", default="")
 
 _RESUME_BONUS_CALLS = 12
@@ -330,7 +350,9 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
     ``ModelCallLimitMiddleware`` keeps in state.
     """
 
-    def __init__(self, limit: int, remaining_threshold: int = 6, time_fraction: float = 0.2, shared: bool = True) -> None:
+    def __init__(
+        self, limit: int, remaining_threshold: int = 6, time_fraction: float = 0.2, shared: bool = True
+    ) -> None:
         super().__init__()
         self.limit = limit
         self.shared = shared  # False for the code-explorer: it runs inside its parent's context
@@ -341,11 +363,22 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
         return _RUN_BUDGET.get() if self.shared else None
 
     def _exhausted(self) -> dict[str, Any] | None:
+        parent = _RUN_BUDGET.get()
+        if parent is not None and parent.seconds_left() <= _STOP_GRACE_SECONDS:
+            # Applies to explorers too (they run inside the parent's call): the lane's clock is theirs.
+            parent.time_capped = True
+            return {
+                "jump_to": "end",
+                "messages": [AIMessage(content="Wall-clock budget for this review lane is spent.")],
+            }
         budget = self._budget()
         if budget is None:
             return None
         if budget.used >= budget.limit:
-            return {"jump_to": "end", "messages": [AIMessage(content="Model call budget for this review lane is spent.")]}
+            return {
+                "jump_to": "end",
+                "messages": [AIMessage(content="Model call budget for this review lane is spent.")],
+            }
         budget.used += 1
         return None
 
@@ -365,10 +398,15 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
             low_time = seconds <= budget.timeout * self.time_fraction
         else:
             remaining = self.limit - int(request.state.get("run_model_call_count", 0) or 0)
-            seconds, low_time = None, False
+            parent = _RUN_BUDGET.get()
+            # An explorer wraps up when its parent lane is short of time, not only of its own calls.
+            seconds = parent.seconds_left() if parent is not None else None
+            low_time = seconds is not None and seconds <= max(120.0, parent.timeout * 0.12)
         if remaining > self.remaining_threshold and not low_time:
             return request
-        left = f"{max(remaining, 0)} model turns" + (f" and about {max(int(seconds // 60), 0)} minute(s)" if seconds is not None else "")
+        left = f"{max(remaining, 0)} model turns" + (
+            f" and about {max(int(seconds // 60), 0)} minute(s)" if seconds is not None else ""
+        )
         reminder = HumanMessage(
             content=(
                 f"[Budget notice] You have {left} left. Stop exploring now: record every "
@@ -382,7 +420,22 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
         return handler(self._nudge(request))
 
     async def awrap_model_call(self, request: ModelRequest, handler):
-        return await handler(self._nudge(request))
+        parent = _RUN_BUDGET.get()
+        if parent is None:
+            return await handler(self._nudge(request))
+        # One model call (with the client's own retries on 429/5xx) may never outlive the lane's
+        # clock: a slow or rate-limited judge call used to run past the cap and get the whole
+        # agent cancelled ("timed out") with its last verdicts unrecorded.
+        allowed = parent.seconds_left() - _CALL_MARGIN_SECONDS
+        if allowed <= 0:
+            parent.time_capped = True
+            return AIMessage(content="Wall-clock budget for this review lane is spent.")
+        try:
+            return await asyncio.wait_for(handler(self._nudge(request)), timeout=allowed)
+        except TimeoutError:
+            parent.time_capped = True
+            logger.warning("deep_review_model_call_time_capped", agent=_AGENT_NAME.get(), seconds=round(allowed))
+            return AIMessage(content="Wall-clock budget for this review lane is spent.")
 
 
 # Recording tools' results are tiny and carry ids the agent must remember.
@@ -450,7 +503,9 @@ class _ToolResultCapMiddleware(AgentMiddleware):
         return self._cap(await handler(request))
 
 
-def _harness_middleware(model_calls: int, fallback_model: BaseChatModel | None = None, *, shared_budget: bool = True) -> list:
+def _harness_middleware(
+    model_calls: int, fallback_model: BaseChatModel | None = None, *, shared_budget: bool = True
+) -> list:
     return [
         _ToolResultCapMiddleware(),
         ContextEditingMiddleware(
@@ -524,7 +579,9 @@ def _explorer_subagent(settings: Settings, backend: CompositeBackend, tools: lis
         "tools": tools,
         "middleware": [
             _filesystem_middleware(backend, settings),
-            *_harness_middleware(settings.DEEP_REVIEW_EXPLORER_MODEL_CALLS, _fallback_model(settings), shared_budget=False),
+            *_harness_middleware(
+                settings.DEEP_REVIEW_EXPLORER_MODEL_CALLS, _fallback_model(settings), shared_budget=False
+            ),
         ],
     }
 
@@ -540,13 +597,21 @@ def build_agent(
     explorer_tools: list,
     model_calls: int,
     strong: bool = False,
+    light: bool = False,
 ):
     """One configured deep agent (see module docstring for the stack)."""
     backend = build_backend(repo_path)
-    middleware = [_filesystem_middleware(backend, settings), *_harness_middleware(model_calls, _fallback_model(settings))]
+    middleware = [
+        _filesystem_middleware(backend, settings),
+        *_harness_middleware(model_calls, _fallback_model(settings)),
+    ]
+    # ``strong`` puts a specialist on the judge model (deep-tracing lanes); ``light`` puts a
+    # verifier on the base model (Medium/Low batches: the judge is kept for Critical/High).
+    model_role = (
+        "verifier" if strong and role == "specialist" else "specialist" if light and role == "verifier" else role
+    )
     return create_deep_agent(
-        # ``strong`` puts a specialist on the judge model (deep-tracing lanes).
-        model=build_chat_model(settings, "verifier" if strong and role == "specialist" else role),
+        model=build_chat_model(settings, model_role),
         tools=[_plan_tool(), *tools] if role == "specialist" else tools,
         system_prompt=system_prompt,
         middleware=middleware,
@@ -592,6 +657,9 @@ class _UsageCounter(BaseCallbackHandler):
             # Repository files only: the agent-side /_review/ area is tooling, not code.
             if path and not path.startswith(AGENT_ROOT.strip("/")):
                 self.files_read.add(path)
+                shared = REVIEW_READS.get()
+                if shared is not None:
+                    shared.add(path)
 
 
 def _tool_input_path(inputs: Any, input_str: str) -> str | None:
@@ -605,8 +673,11 @@ def _tool_input_path(inputs: Any, input_str: str) -> str | None:
     return str(path).lstrip("/") if path else None
 
 
-_MAX_CHECK_RESUMES = 3
-"""How many times a completion check may send an agent back while it still makes progress."""
+_MAX_CHECK_RESUMES = 6
+"""How many times a completion check may send an agent back while it still makes progress.
+
+Each round must change the nudge (the lane opened files, recorded or dismissed leads), so a
+stuck agent stops after one repeat; six rounds let a lane with a large file scope finish it."""
 
 _MAX_RESUMES = 2
 """How many times an agent that ended on an empty model turn is resumed."""
@@ -651,10 +722,12 @@ async def run_agent(
     budget = _RunBudget(limit=model_calls or 10**9, deadline=start + timeout_seconds, timeout=timeout_seconds)
     _RUN_BUDGET.set(budget)
     _AGENT_NAME.set(name)
+    _LANE_READS.set(usage.files_read)
 
     async def run_with_resume() -> bool:
         state: dict[str, Any] = {"messages": [HumanMessage(content=kickoff)], "files": files}
         checks = 0
+        escalated = False
         last_nudge: str | None = None
         resume = 0
         while resume <= _MAX_RESUMES:
@@ -665,11 +738,19 @@ async def run_agent(
                 # A silent end (thoughts only) is a normal end: the completion check, not the
                 # missing prose, decides whether the agent's work is actually done. It may send
                 # the agent back several times, but stops as soon as a round changes nothing.
-                nudge = completion_check() if completion_check and checks < _MAX_CHECK_RESUMES else None
-                if not nudge or nudge == last_nudge:
+                raw = completion_check() if completion_check and checks < _MAX_CHECK_RESUMES else None
+                if not raw or (raw == last_nudge and escalated):
                     return True
+                # An agent that ignored the check once gets it once more, stated plainly.
+                escalated = raw == last_nudge
+                nudge = (
+                    "You stopped without acting on this. It is not optional — do it now, starting with the first "
+                    f"item, before any summary.\n\n{raw}"
+                    if escalated
+                    else raw
+                )
                 checks += 1
-                last_nudge = nudge
+                last_nudge = raw
                 if budget.seconds_left() < min(120.0, budget.timeout * 0.1):
                     # Too close to the wall-clock cap to act on it; stopping cleanly beats a timeout.
                     logger.info("deep_review_agent_incomplete_work_skipped", agent=name, reason="too little time left")
@@ -698,9 +779,11 @@ async def run_agent(
             status, error = "incomplete", f"ended on an empty model turn after {_MAX_RESUMES} resumes"
     except TimeoutError:
         status, error = "timed_out", f"exceeded {timeout_seconds}s"
-    except Exception as exc:  # noqa: BLE001 -- one agent's failure must never abort the review
+    except Exception as exc:
         status, error = "failed", f"{type(exc).__name__}: {exc}"[:500]
     duration = time.monotonic() - start
+    if status == "completed" and budget.time_capped:
+        error = "wrapped up at its time cap (everything recorded is kept)"
     log = logger.info if status == "completed" else logger.warning
     log(
         "deep_review_agent_finished",

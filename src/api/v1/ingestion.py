@@ -49,8 +49,11 @@ async def ingest_repository(
     access_token = validate_access_token(payload.access_token.get_secret_value())
     base_url, project_path = validate_gitlab_url(payload.gitlab_url)
     await asyncio.to_thread(
-        check_gitlab_host, base_url, settings.GITLAB_ALLOWED_HOSTS,
-        settings.GITLAB_ALLOW_PRIVATE_HOSTS, settings.GITLAB_ALLOW_HTTP,
+        check_gitlab_host,
+        base_url,
+        settings.GITLAB_ALLOWED_HOSTS,
+        settings.GITLAB_ALLOW_PRIVATE_HOSTS,
+        settings.GITLAB_ALLOW_HTTP,
     )
     repository_id = validate_repo_id(payload.repo_id)
     repo_uuid = UUID(repository_id)

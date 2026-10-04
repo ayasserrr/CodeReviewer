@@ -33,13 +33,14 @@ from .manifest import (
 )
 from .models import RepositoryContext, RepositoryIngestionResult
 from .review import (
+    EXPOSURE_LABELS,
     AgentRunStats,
     DeepReviewReport,
     EvidenceRef,
-    InventorySection,
-    MergedFinding,
     ExecutiveSummary,
+    InventorySection,
     KpiAssessment,
+    MergedFinding,
     PriorityItem,
     ReviewCategory,
     ReviewConfig,
@@ -55,6 +56,7 @@ from .review import (
 )
 
 __all__ = [
+    "EXPOSURE_LABELS",
     "AgentRunStats",
     "AuthenticationError",
     "BootstrapError",
@@ -63,8 +65,6 @@ __all__ = [
     "ContainsEdge",
     "DeepReviewError",
     "DeepReviewReport",
-    "InventorySection",
-    "MergedFinding",
     "DependencyEntry",
     "DependencyGraph",
     "DependencyGraphFailure",
@@ -83,8 +83,10 @@ __all__ = [
     "ImportEdge",
     "IngestionError",
     "InvalidInputError",
+    "InventorySection",
     "KpiAssessment",
     "LanguageStat",
+    "MergedFinding",
     "NetworkError",
     "PriorityItem",
     "RepoNotFoundError",

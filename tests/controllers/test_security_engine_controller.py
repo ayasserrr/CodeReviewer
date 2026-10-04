@@ -34,9 +34,12 @@ class TestRunPipAudit:
 
         def fake_run(command, **kwargs):
             req = command[command.index("-r") + 1]
-            seen.append((command, open(req).read()))
-            name = open(req).read().split("==")[0]
-            payload = {"dependencies": [{"name": name, "version": "x", "vulns": [{"id": "PYSEC-1", "fix_versions": []}]}]}
+            text = Path(req).read_text()
+            seen.append((command, text))
+            name = text.split("==")[0]
+            payload = {
+                "dependencies": [{"name": name, "version": "x", "vulns": [{"id": "PYSEC-1", "fix_versions": []}]}]
+            }
             return _completed(returncode=1, stdout=json.dumps(payload))
 
         controller = SecurityEngineController()
@@ -61,8 +64,9 @@ class TestRunPipAudit:
     def test_unexpected_exit_code_is_an_error(self, tmp_path):
         repo = self._repo(tmp_path)
         controller = SecurityEngineController()
-        with patch("shutil.which", return_value="/usr/bin/pip-audit"), patch(
-            "subprocess.run", return_value=_completed(returncode=2, stderr="bad invocation")
+        with (
+            patch("shutil.which", return_value="/usr/bin/pip-audit"),
+            patch("subprocess.run", return_value=_completed(returncode=2, stderr="bad invocation")),
         ):
             result = controller._run_pip_audit(str(repo), [])
         assert result["status"] == "error" and "bad invocation" in result["error"]
@@ -79,9 +83,11 @@ class TestRunSemgrep:
     def test_nonempty_files_are_passed_to_command(self):
         controller = SecurityEngineController()
         completed = _completed(returncode=0, stdout=json.dumps({"results": []}))
-        with patch("shutil.which", return_value="/usr/bin/semgrep"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
-        ) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/semgrep"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed) as mock_run,
+        ):
             controller._run_semgrep(".", ["a.py", "b.py"])
         command = mock_run.call_args.args[0]
         assert "a.py" in command and "b.py" in command
@@ -103,10 +109,16 @@ class TestRunBandit:
 
     def test_severity_findings_parsed(self):
         controller = SecurityEngineController()
-        raw = {"results": [{"filename": "a.py", "line_number": 3, "issue_severity": "HIGH", "test_id": "B101", "issue_text": "bad"}]}
+        raw = {
+            "results": [
+                {"filename": "a.py", "line_number": 3, "issue_severity": "HIGH", "test_id": "B101", "issue_text": "bad"}
+            ]
+        }
         completed = _completed(returncode=1, stdout=json.dumps(raw))
-        with patch("shutil.which", return_value="/usr/bin/bandit"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with (
+            patch("shutil.which", return_value="/usr/bin/bandit"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed),
         ):
             result = controller._run_bandit(".", ["a.py"])
         assert result["status"] == "success"
@@ -116,9 +128,11 @@ class TestRunBandit:
         controller = SecurityEngineController()
         raw = {"results": [{"filename": "a.py", "line_number": 3}]}
         completed = _completed(returncode=1, stdout="Working... ━━━━ 100% 0:00:02\n" + json.dumps(raw))
-        with patch("shutil.which", return_value="/usr/bin/bandit"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
-        ) as run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/bandit"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed) as run,
+        ):
             result = controller._run_bandit(".", ["a.py", "web/main.tsx", "package.json"])
         assert result["status"] == "success"
         assert result["findings"] == raw["results"]
@@ -184,10 +198,11 @@ class TestRunSecurityScan:
             calls.append(tool_name)
             return {"tool": tool_name, "status": "success", "findings": [], "error": None}
 
-        with patch.object(controller, "_run_pip_audit", lambda p, f: fake_tool(p, f, "pip_audit")), patch.object(
-            controller, "_run_semgrep", lambda p, f: fake_tool(p, f, "semgrep")
-        ), patch.object(controller, "_run_bandit", lambda p, f: fake_tool(p, f, "bandit")), patch.object(
-            controller, "_run_gitleaks", lambda p, f: fake_tool(p, f, "gitleaks")
+        with (
+            patch.object(controller, "_run_pip_audit", lambda p, f: fake_tool(p, f, "pip_audit")),
+            patch.object(controller, "_run_semgrep", lambda p, f: fake_tool(p, f, "semgrep")),
+            patch.object(controller, "_run_bandit", lambda p, f: fake_tool(p, f, "bandit")),
+            patch.object(controller, "_run_gitleaks", lambda p, f: fake_tool(p, f, "gitleaks")),
         ):
             results = controller.run_security_scan(".", [])
 
@@ -200,12 +215,23 @@ class TestRunSecurityScan:
         def boom(*args, **kwargs):
             raise RuntimeError("unexpected bug")
 
-        with patch.object(controller, "_run_pip_audit", boom), patch.object(
-            controller, "_run_semgrep", lambda p, f: {"tool": "semgrep", "status": "success", "findings": [], "error": None}
-        ), patch.object(
-            controller, "_run_bandit", lambda p, f: {"tool": "bandit", "status": "success", "findings": [], "error": None}
-        ), patch.object(
-            controller, "_run_gitleaks", lambda p, f: {"tool": "gitleaks", "status": "success", "findings": [], "error": None}
+        with (
+            patch.object(controller, "_run_pip_audit", boom),
+            patch.object(
+                controller,
+                "_run_semgrep",
+                lambda p, f: {"tool": "semgrep", "status": "success", "findings": [], "error": None},
+            ),
+            patch.object(
+                controller,
+                "_run_bandit",
+                lambda p, f: {"tool": "bandit", "status": "success", "findings": [], "error": None},
+            ),
+            patch.object(
+                controller,
+                "_run_gitleaks",
+                lambda p, f: {"tool": "gitleaks", "status": "success", "findings": [], "error": None},
+            ),
         ):
             results = controller.run_security_scan(".", [])
 
@@ -219,9 +245,11 @@ class TestRunSemgrepOffline:
     def test_uses_bundled_config_offline_flags_and_env(self):
         controller = SecurityEngineController()
         completed = _completed(returncode=0, stdout=json.dumps({"results": []}))
-        with patch("shutil.which", return_value="/usr/bin/semgrep"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
-        ) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/semgrep"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed) as mock_run,
+        ):
             controller._run_semgrep(".", ["a.py"])
         command = mock_run.call_args.args[0]
         assert f"--config={controller.config.SEMGREP_CONFIG}" in command
@@ -240,8 +268,10 @@ class TestRunSemgrepOffline:
         controller = SecurityEngineController()
         stdout = json.dumps({"errors": [{"message": "Invalid YAML file rules.yml"}], "results": []})
         completed = _completed(returncode=7, stdout=stdout, stderr="")
-        with patch("shutil.which", return_value="/usr/bin/semgrep"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with (
+            patch("shutil.which", return_value="/usr/bin/semgrep"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed),
         ):
             result = controller._run_semgrep(".", ["a.py"])
         assert result["status"] == "error"

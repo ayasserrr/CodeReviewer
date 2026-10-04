@@ -31,7 +31,7 @@ class TestStaticFindingFromNormalized:
         finding = StaticFinding.from_normalized("ruff", data)
         try:
             finding.file = "b.py"
-            assert False, "expected FrozenInstanceError"
+            raise AssertionError("expected FrozenInstanceError")
         except AttributeError:
             pass
 

@@ -20,9 +20,15 @@ from enums import ReviewStatus, SourceType
 
 def _repository(user_id, **overrides):
     data = {
-        "id": uuid4(), "user_id": user_id, "name": "demo", "clone_url": "https://gitlab.example.com/g/demo.git",
-        "head_sha": "a" * 40, "default_branch": "main", "source_type": SourceType.GITLAB,
-        "created_at": datetime.now(UTC), "local_path": "/srv/clones/secret/path",
+        "id": uuid4(),
+        "user_id": user_id,
+        "name": "demo",
+        "clone_url": "https://gitlab.example.com/g/demo.git",
+        "head_sha": "a" * 40,
+        "default_branch": "main",
+        "source_type": SourceType.GITLAB,
+        "created_at": datetime.now(UTC),
+        "local_path": "/srv/clones/secret/path",
     }
     data.update(overrides)
     return SimpleNamespace(**data)
@@ -30,10 +36,22 @@ def _repository(user_id, **overrides):
 
 def _review(repository_id, status=ReviewStatus.COMPLETED, **overrides):
     data = {
-        "id": uuid4(), "repository_id": repository_id, "commit_sha": "a" * 40, "branch": "main",
-        "status": status, "issues_summary": {"total": 3}, "created_at": datetime.now(UTC),
-        "engine_version": "1.0.0", "provider": "gemini", "model": "m", "error": None, "completed_at": None,
-        "stage": "done", "progress": {"stages": {}}, "report_markdown": "# r", "report_data": {"findings": []},
+        "id": uuid4(),
+        "repository_id": repository_id,
+        "commit_sha": "a" * 40,
+        "branch": "main",
+        "status": status,
+        "issues_summary": {"total": 3},
+        "created_at": datetime.now(UTC),
+        "engine_version": "1.0.0",
+        "provider": "gemini",
+        "model": "m",
+        "error": None,
+        "completed_at": None,
+        "stage": "done",
+        "progress": {"stages": {}},
+        "report_markdown": "# r",
+        "report_data": {"findings": []},
     }
     data.update(overrides)
     return SimpleNamespace(**data)

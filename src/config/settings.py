@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     APP_NAME: str = Field(..., min_length=1, description="The name of the application")
     APP_ENV: Environment = Field(..., description="The environment in which the application is running")
     VERSION: str = Field(..., min_length=1, description="The version of the application")
-    DEBUG: Optional[bool] = Field(None, description="Whether to run the application in debug mode")
+    DEBUG: bool | None = Field(None, description="Whether to run the application in debug mode")
     API_VERSION: str = Field("/api/v1", min_length=1, description="URL prefix for the versioned API")
     PROJECT_ROOT: Path = Field(
         default_factory=lambda: _DEFAULT_PROJECT_ROOT,
@@ -52,10 +52,12 @@ class Settings(BaseSettings):
     # ===========================
     # Logging Configuration
     # ===========================
-    LOG_LEVEL: Optional[LogLevel] = Field(None, description="The logging level for the application")
+    LOG_LEVEL: LogLevel | None = Field(None, description="The logging level for the application")
     LOG_DIR: str = Field("storage/logs", min_length=1, description="The directory where log files are stored")
-    LOG_RENDERER: Optional[LogRenderer] = Field(None, description="The renderer for the application logs")
-    LOG_MAX_BYTES: int = Field(10 * 1024 * 1024, gt=0, description="The maximum size in bytes of each log file before rotation")
+    LOG_RENDERER: LogRenderer | None = Field(None, description="The renderer for the application logs")
+    LOG_MAX_BYTES: int = Field(
+        10 * 1024 * 1024, gt=0, description="The maximum size in bytes of each log file before rotation"
+    )
     LOG_BACKUP_COUNT: int = Field(10, ge=0, description="The number of backup log files to keep")
 
     # ===========================
@@ -81,7 +83,9 @@ class Settings(BaseSettings):
     # Repository Ingestion Configuration
     # ===========================
     CLONED_REPOS_DIR: str = Field(
-        "cloned_repos", min_length=1, description="Directory (relative to PROJECT_ROOT unless absolute) for cloned repositories"
+        "cloned_repos",
+        min_length=1,
+        description="Directory (relative to PROJECT_ROOT unless absolute) for cloned repositories",
     )
     GIT_CLONE_TIMEOUT_SECONDS: int = Field(300, gt=0, description="Hard timeout for git clone operations, in seconds")
     GITLAB_API_TIMEOUT_SECONDS: int = Field(15, gt=0, description="Timeout for GitLab API requests, in seconds")
@@ -93,30 +97,46 @@ class Settings(BaseSettings):
     GITLAB_ALLOW_PRIVATE_HOSTS: bool = Field(
         False, description="Allow unlisted hosts that resolve to private/loopback/link-local addresses (SSRF guard)"
     )
-    GITLAB_ALLOW_HTTP: bool = Field(False, description="Allow plain-http GitLab URLs for unlisted hosts (token sent unencrypted)")
-    MIN_FREE_DISK_MB: int = Field(500, gt=0, description="Minimum free disk space (MB) required before starting a clone")
+    GITLAB_ALLOW_HTTP: bool = Field(
+        False, description="Allow plain-http GitLab URLs for unlisted hosts (token sent unencrypted)"
+    )
+    MIN_FREE_DISK_MB: int = Field(
+        500, gt=0, description="Minimum free disk space (MB) required before starting a clone"
+    )
 
     # ===========================
     # Repository Discovery Configuration
     # ===========================
-    DISCOVERY_ENGINE_VERSION: str = Field("1.1.0", min_length=1, description="Version of the discovery algorithm/heuristics")
+    DISCOVERY_ENGINE_VERSION: str = Field(
+        "1.1.0", min_length=1, description="Version of the discovery algorithm/heuristics"
+    )
     DISCOVERY_SCHEMA_VERSION: str = Field("1.0.0", min_length=1, description="Version of the RepositoryManifest schema")
-    DISCOVERY_TRAVERSAL_TIMEOUT_SECONDS: float = Field(30.0, gt=0, description="Max wall-clock time for filesystem traversal")
-    DISCOVERY_AST_PER_FILE_TIMEOUT_MS: int = Field(1000, gt=0, description="Max time to spend AST-parsing a single file")
-    DISCOVERY_TOTAL_TIMEOUT_SECONDS: float = Field(120.0, gt=0, description="Max wall-clock time for the whole discovery run")
-    DISCOVERY_MAX_AST_FILE_SIZE_MB: float = Field(2.0, gt=0, description="Skip AST parsing for source files larger than this")
+    DISCOVERY_TRAVERSAL_TIMEOUT_SECONDS: float = Field(
+        30.0, gt=0, description="Max wall-clock time for filesystem traversal"
+    )
+    DISCOVERY_AST_PER_FILE_TIMEOUT_MS: int = Field(
+        1000, gt=0, description="Max time to spend AST-parsing a single file"
+    )
+    DISCOVERY_TOTAL_TIMEOUT_SECONDS: float = Field(
+        120.0, gt=0, description="Max wall-clock time for the whole discovery run"
+    )
+    DISCOVERY_MAX_AST_FILE_SIZE_MB: float = Field(
+        2.0, gt=0, description="Skip AST parsing for source files larger than this"
+    )
 
     # ===========================
     # Static Analysis Configuration (Track A — structural tools)
     # ===========================
-    ANALYSIS_TIMEOUT_SECONDS: int = Field(60, gt=0, description="Per-tool subprocess timeout for structural tools, in seconds")
-    RUFF_CONFIG_PATH: Optional[str] = Field(
+    ANALYSIS_TIMEOUT_SECONDS: int = Field(
+        60, gt=0, description="Per-tool subprocess timeout for structural tools, in seconds"
+    )
+    RUFF_CONFIG_PATH: str | None = Field(
         default_factory=lambda: str(_DEFAULT_PROJECT_ROOT / "src" / "assets" / "ruff.toml"),
         description="Ruff config passed to every scanned repository; bundled at src/assets/ruff.toml "
         "(same bundled-asset pattern as gitleaks) so scans get a consistent ruleset regardless of "
         "whether the target repo ships its own config. Only passed to ruff when the file actually exists.",
     )
-    PYRIGHT_CONFIG_PATH: Optional[str] = Field(
+    PYRIGHT_CONFIG_PATH: str | None = Field(
         default_factory=lambda: str(_DEFAULT_PROJECT_ROOT / "src" / "assets" / "pyrightconfig.json"),
         description="Pyright config (--project) passed to every scanned repository; bundled at "
         "src/assets/pyrightconfig.json so type-checking behavior (strictness, python version) is "
@@ -129,15 +149,23 @@ class Settings(BaseSettings):
         "run offline and deterministically. 'auto' or a registry pack (e.g. 'p/python') downloads rules from "
         "semgrep.dev on every run instead (needs network).",
     )
-    RADON_COMPLEXITY_RANKS_TO_IGNORE: str = Field("A,B", description="Comma-separated radon CC ranks that never become findings")
+    RADON_COMPLEXITY_RANKS_TO_IGNORE: str = Field(
+        "A,B", description="Comma-separated radon CC ranks that never become findings"
+    )
     RADON_MI_RANKS_TO_IGNORE: str = Field("A", description="Comma-separated radon MI ranks that never become findings")
-    LIZARD_CCN_THRESHOLD: int = Field(10, gt=0, description="Cyclomatic complexity below which lizard results are skipped")
-    LIZARD_CCN_ERROR_THRESHOLD: int = Field(20, gt=0, description="Cyclomatic complexity above which a lizard finding is severity=error instead of warning")
+    LIZARD_CCN_THRESHOLD: int = Field(
+        10, gt=0, description="Cyclomatic complexity below which lizard results are skipped"
+    )
+    LIZARD_CCN_ERROR_THRESHOLD: int = Field(
+        20, gt=0, description="Cyclomatic complexity above which a lizard finding is severity=error instead of warning"
+    )
 
     # ===========================
     # Security Engine Configuration (Track B — concurrent security tools)
     # ===========================
-    SECURITY_TOOL_TIMEOUT: int = Field(300, gt=0, description="Per-tool subprocess timeout for security tools, in seconds")
+    SECURITY_TOOL_TIMEOUT: int = Field(
+        300, gt=0, description="Per-tool subprocess timeout for security tools, in seconds"
+    )
     SECURITY_MAX_WORKERS: int = Field(4, gt=0, description="Max concurrent security-tool subprocesses")
 
     # ===========================
@@ -156,7 +184,7 @@ class Settings(BaseSettings):
     # ===========================
     # LLM Provider Configuration (used by the Deep Review agents)
     # ===========================
-    GEMINI_API_KEY: Optional[SecretStr] = Field(None, description="Google Gemini API key")
+    GEMINI_API_KEY: SecretStr | None = Field(None, description="Google Gemini API key")
     GEMINI_MODEL: str = Field("gemini-2.5-flash", min_length=1, description="Gemini model id")
 
     # ===========================
@@ -168,7 +196,7 @@ class Settings(BaseSettings):
         description="Let the deterministic env map read committed .env files for key names, duplicate keys and "
         "value flags (weak/short/localhost). Values never leave the process; agents still cannot open .env files.",
     )
-    DEEP_REVIEW_JUDGE_MODEL: Optional[str] = Field(
+    DEEP_REVIEW_JUDGE_MODEL: str | None = Field(
         "gemini-3.1-pro-preview",
         description="Stronger Gemini model for the judgment roles — verifier and synthesizer. Live runs showed "
         "Flash alone as verifier lets praise and false 'unused' findings through; the pro judge rejects them "
@@ -179,7 +207,7 @@ class Settings(BaseSettings):
         description="Review categories + security KPIs; bundled at src/assets/review_config.toml",
     )
     DEEP_REVIEW_ENGINE_VERSION: str = Field(
-        "1.10.3", min_length=1, description="Version of the review prompts/orchestration; part of the cache key"
+        "1.24.0", min_length=1, description="Version of the review prompts/orchestration; part of the cache key"
     )
     DEEP_REVIEW_MAX_CONCURRENCY: int = Field(
         6, gt=0, description="Max review agents running at once (bounded by the provider's rate limits)"

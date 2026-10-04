@@ -19,10 +19,7 @@ class TestFunctionBasedEndpoints:
         assert endpoints[0].is_class_based is False
 
     def test_fastapi_multiple_verbs_same_file(self):
-        tree = _parse(
-            "@app.get('/x')\ndef get_x():\n    pass\n\n"
-            "@router.post('/x')\ndef post_x():\n    pass\n"
-        )
+        tree = _parse("@app.get('/x')\ndef get_x():\n    pass\n\n@router.post('/x')\ndef post_x():\n    pass\n")
         endpoints = detect_endpoints_in_file(tree, "routes.py")
         methods = {e.method.value for e in endpoints}
         assert methods == {"GET", "POST"}
@@ -85,10 +82,7 @@ class TestClassBasedViews:
 
     def test_cbv_without_resolvable_registration_is_skipped(self):
         source = (
-            "from flask.views import MethodView\n\n"
-            "class OrphanView(MethodView):\n"
-            "    def get(self):\n"
-            "        pass\n"
+            "from flask.views import MethodView\n\nclass OrphanView(MethodView):\n    def get(self):\n        pass\n"
         )
         tree = _parse(source, "views.py")
         assert detect_endpoints_in_file(tree, "views.py") == []
@@ -115,9 +109,7 @@ class TestMarkDuplicates:
         assert len(result) == 2
 
     def test_same_path_different_method_not_duplicate(self):
-        tree = _parse(
-            "@app.get('/x')\ndef get_x():\n    pass\n\n@app.post('/x')\ndef post_x():\n    pass\n"
-        )
+        tree = _parse("@app.get('/x')\ndef get_x():\n    pass\n\n@app.post('/x')\ndef post_x():\n    pass\n")
         endpoints = detect_endpoints_in_file(tree, "a.py")
         result = mark_duplicates(endpoints)
         assert all(not e.duplicate for e in result)

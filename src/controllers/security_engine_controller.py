@@ -106,10 +106,19 @@ class SecurityEngineController(BaseController):
                     return {"data": json.loads(result.stdout or "{}")}
 
                 outcome = run_tool(
-                    tool_binary="pip-audit", repo_path=local_repo_path,
-                    command=["pip-audit", "-r", str(req_path), "--no-deps", "--disable-pip", "--format=json",
-                             "--progress-spinner=off"],
-                    timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
+                    tool_binary="pip-audit",
+                    repo_path=local_repo_path,
+                    command=[
+                        "pip-audit",
+                        "-r",
+                        str(req_path),
+                        "--no-deps",
+                        "--disable-pip",
+                        "--format=json",
+                        "--progress-spinner=off",
+                    ],
+                    timeout=self.config.SECURITY_TOOL_TIMEOUT,
+                    parse_output=parse,
                 )
             rel = req_file.relative_to(root).as_posix()
             if outcome["status"] != "success":
@@ -121,8 +130,12 @@ class SecurityEngineController(BaseController):
                 dep["source_line"] = pinned.get(str(dep.get("name", "")).lower(), (None, None))[1]
                 dependencies.append(dep)
         status = "error" if errors and not dependencies else "success"
-        return {"tool": "pip_audit", "status": status, "data": {"dependencies": dependencies},
-                "error": "; ".join(errors)[:500] or None}
+        return {
+            "tool": "pip_audit",
+            "status": status,
+            "data": {"dependencies": dependencies},
+            "error": "; ".join(errors)[:500] or None,
+        }
 
     def _run_semgrep(self, local_repo_path: str, files_to_analyze: list[str]) -> dict[str, Any]:
         """SAST with the bundled, offline ruleset (``SEMGREP_CONFIG``).
@@ -137,8 +150,14 @@ class SecurityEngineController(BaseController):
             return {"tool": "semgrep", "status": "success", "findings": [], "error": None}
 
         base_command = [
-            "semgrep", "scan", f"--config={self.config.SEMGREP_CONFIG}", "--json", "--quiet",
-            "--metrics=off", "--disable-version-check", "--",
+            "semgrep",
+            "scan",
+            f"--config={self.config.SEMGREP_CONFIG}",
+            "--json",
+            "--quiet",
+            "--metrics=off",
+            "--disable-version-check",
+            "--",
         ]
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
@@ -152,8 +171,11 @@ class SecurityEngineController(BaseController):
         outcome = _run_chunked(
             files_to_analyze,
             lambda chunk: run_tool(
-                tool_binary="semgrep", repo_path=local_repo_path, command=[*base_command, *chunk],
-                timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
+                tool_binary="semgrep",
+                repo_path=local_repo_path,
+                command=[*base_command, *chunk],
+                timeout=self.config.SECURITY_TOOL_TIMEOUT,
+                parse_output=parse,
                 env={"SEMGREP_ENABLE_VERSION_CHECK": "0", "SEMGREP_SEND_METRICS": "off"},
             ),
         )
@@ -170,18 +192,23 @@ class SecurityEngineController(BaseController):
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
             if result.returncode not in (0, 1):
-                raise ToolExitCodeError(f"bandit exited with unexpected code {result.returncode}: {result.stderr.strip()}")
+                raise ToolExitCodeError(
+                    f"bandit exited with unexpected code {result.returncode}: {result.stderr.strip()}"
+                )
             # On large inputs bandit draws a rich progress bar ("Working... 100%")
             # on stdout ahead of the JSON document, even with -q.
             stdout = result.stdout or "{}"
-            raw = json.loads(stdout[stdout.find("{"):] if "{" in stdout else "{}")
+            raw = json.loads(stdout[stdout.find("{") :] if "{" in stdout else "{}")
             return {"findings": raw.get("results", [])}
 
         outcome = _run_chunked(
             python_files,
             lambda chunk: run_tool(
-                tool_binary="bandit", repo_path=local_repo_path, command=[*base_command, *chunk],
-                timeout=self.config.SECURITY_TOOL_TIMEOUT, parse_output=parse,
+                tool_binary="bandit",
+                repo_path=local_repo_path,
+                command=[*base_command, *chunk],
+                timeout=self.config.SECURITY_TOOL_TIMEOUT,
+                parse_output=parse,
             ),
         )
         outcome["tool"] = "bandit"
@@ -203,17 +230,32 @@ class SecurityEngineController(BaseController):
         report_fd, report_path = tempfile.mkstemp(prefix="gitleaks-", suffix=".json")
         os.close(report_fd)
         command = [
-            self.gitleaks_bin, "detect", "--source", local_repo_path,
-            "--report-format", "json", "--report-path", report_path, "--no-git",
+            self.gitleaks_bin,
+            "detect",
+            "--source",
+            local_repo_path,
+            "--report-format",
+            "json",
+            "--report-path",
+            report_path,
+            "--no-git",
         ]
 
         try:
             result = subprocess.run(
-                command, cwd=local_repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=self.config.SECURITY_TOOL_TIMEOUT, env=safe_env(),
+                command,
+                cwd=local_repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=self.config.SECURITY_TOOL_TIMEOUT,
+                env=safe_env(),
             )
             if result.returncode not in (0, 1):
-                raise ToolExitCodeError(f"gitleaks exited with unexpected code {result.returncode}: {result.stderr.strip()}")
+                raise ToolExitCodeError(
+                    f"gitleaks exited with unexpected code {result.returncode}: {result.stderr.strip()}"
+                )
             with open(report_path, encoding="utf-8", errors="replace") as report:
                 findings = json.loads(report.read() or "[]")
             return {"tool": "gitleaks", "status": "success", "findings": findings, "error": None}
@@ -245,7 +287,8 @@ _PINNED_LINE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*==
 def _requirement_files(root: Path) -> list[Path]:
     """Every ``requirements*.txt`` outside dependency/build/VCS directories."""
     return sorted(
-        path for path in root.rglob("requirements*.txt")
+        path
+        for path in root.rglob("requirements*.txt")
         if path.is_file() and not any(part in IGNORED_DIR_NAMES for part in path.relative_to(root).parts[:-1])
     )
 

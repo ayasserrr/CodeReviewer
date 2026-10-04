@@ -31,8 +31,16 @@ from utils import (
 
 def _fn(file: str, qualname: str, start: int, end: int) -> FunctionNode:
     return FunctionNode(
-        id=f"{file}::{qualname}", name=qualname.split(".")[-1], qualname=qualname, file=file,
-        start_line=start, end_line=end, start_byte=0, end_byte=1, content_hash="h", loc=end - start + 1,
+        id=f"{file}::{qualname}",
+        name=qualname.split(".")[-1],
+        qualname=qualname,
+        file=file,
+        start_line=start,
+        end_line=end,
+        start_byte=0,
+        end_byte=1,
+        content_hash="h",
+        loc=end - start + 1,
     )
 
 
@@ -56,8 +64,13 @@ def repo(tmp_path: Path) -> Path:
 @pytest.fixture
 def workspace(repo: Path) -> ReviewWorkspace:
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
         files=(
             FileEntry(path="app/main.py", language="Python", size_bytes=1, lines=8),
             FileEntry(path="app/service.py", language="Python", size_bytes=1, lines=2),
@@ -65,8 +78,13 @@ def workspace(repo: Path) -> ReviewWorkspace:
     )
     handler, helper = _fn("app/main.py", "handler", 4, 5), _fn("app/service.py", "helper", 1, 2)
     graph = DependencyGraph(
-        schema_version="1", engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), functions=(handler, helper),
+        schema_version="1",
+        engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        functions=(handler, helper),
         call_edges=(CallEdge(caller_id=handler.id, callee_id=helper.id, line=5, col=11),),
     )
     static = [
@@ -142,8 +160,12 @@ class TestRecording:
         workspace.record_finding(security, _finding())
         from helpers.review_workspace import _UpdateFindingArgs, _WithdrawArgs
 
-        assert "Unknown finding" in workspace.update_finding(auth, _UpdateFindingArgs(finding_id="SEC-1", severity="Low"))
-        assert "Updated SEC-1" in workspace.update_finding(security, _UpdateFindingArgs(finding_id="SEC-1", severity="Low"))
+        assert "Unknown finding" in workspace.update_finding(
+            auth, _UpdateFindingArgs(finding_id="SEC-1", severity="Low")
+        )
+        assert "Updated SEC-1" in workspace.update_finding(
+            security, _UpdateFindingArgs(finding_id="SEC-1", severity="Low")
+        )
         assert workspace.findings["SEC-1"].severity == "Low"
         assert "Withdrew" in workspace.withdraw_finding(security, _WithdrawArgs(finding_id="SEC-1", reason="wrong"))
         assert workspace.findings == {}
@@ -196,7 +218,14 @@ class TestVerificationAndSynthesis:
     def test_reject_moves_finding_out(self, workspace):
         security = workspace.config.category("security")
         workspace.record_finding(security, _finding())
-        workspace.submit_verification("security", _VerifyArgs(finding_id="SEC-1", verdict="rejected", note="guarded"))
+        refused = workspace.submit_verification(
+            "security", _VerifyArgs(finding_id="SEC-1", verdict="rejected", note="guarded")
+        )
+        assert refused.startswith("NOT RECORDED") and "SEC-1" in workspace.findings
+        workspace.submit_verification(
+            "security",
+            _VerifyArgs(finding_id="SEC-1", verdict="rejected", note="guarded by the dependency at app/main.py:3"),
+        )
         assert "SEC-1" not in workspace.findings
         assert workspace.rejected["SEC-1"].verification.verdict == "rejected"
 
@@ -219,13 +248,19 @@ class TestVerificationAndSynthesis:
         workspace.submit_verification(
             "security",
             _VerifyArgs(
-                finding_id="SEC-1", verdict="adjusted", note="stdlib parser", adjusted_severity="Medium",
-                corrected_title="Entity expansion on uploaded DOCX", corrected_impact="Memory exhaustion only.",
+                finding_id="SEC-1",
+                verdict="adjusted",
+                note="stdlib parser",
+                adjusted_severity="Medium",
+                corrected_title="Entity expansion on uploaded DOCX",
+                corrected_impact="Memory exhaustion only.",
             ),
         )
         finding = workspace.findings["SEC-1"]
         assert (finding.severity, finding.title, finding.impact) == (
-            "Medium", "Entity expansion on uploaded DOCX", "Memory exhaustion only.",
+            "Medium",
+            "Entity expansion on uploaded DOCX",
+            "Memory exhaustion only.",
         )
 
     def test_duplicate_candidates_pair_findings_citing_the_same_line_across_categories(self, workspace):
@@ -243,11 +278,14 @@ class TestVerificationAndSynthesis:
         security = workspace.config.category("security")
         workspace.record_finding(security, _finding())
         workspace.record_finding(security, _finding(title="Same thing"))
-        assert "cycle" not in workspace.mark_duplicate(_DuplicateArgs(duplicate_id="SEC-2", primary_id="SEC-1", reason="same"))
+        assert "cycle" not in workspace.mark_duplicate(
+            _DuplicateArgs(duplicate_id="SEC-2", primary_id="SEC-1", reason="same")
+        )
         assert "cycle" in workspace.mark_duplicate(_DuplicateArgs(duplicate_id="SEC-1", primary_id="SEC-2", reason="x"))
         workspace.submit_summary(
             _SummaryArgs(
-                scope="s", verdict="v",
+                scope="s",
+                verdict="v",
                 priority_order=[{"title": "t", "rationale": "r", "finding_ids": ["SEC-2", "SEC-1", "BOGUS"]}],
             )
         )
@@ -275,7 +313,11 @@ class TestToolBinding:
         record = next(t for t in workspace.specialist_tools(security) if t.name == "record_finding")
         result = record.invoke(
             {
-                "title": "t", "severity": "Medium", "confidence": "high", "description": "d", "impact": "i",
+                "title": "t",
+                "severity": "Medium",
+                "confidence": "high",
+                "description": "d",
+                "impact": "i",
                 "evidence": [{"file": "app/service.py", "line_start": 1}],
             }
         )
@@ -301,17 +343,30 @@ class TestMapsIntegration:
         assert "header:x-user-email" in out and "CLIENT-ASSERTED IDENTITY" in out and "NO AUTH DEPENDENCY" in out
 
     def test_kpi_with_leads_cannot_be_not_applicable_or_closed_blindly(self, mapped):
-        mapped.static_by_id["x"] = _static("semgrep", "src.assets.semgrep.python-exception-text-returned-to-client",
-                                           "app/service.py", 1)
+        mapped.static_by_id["x"] = _static(
+            "semgrep", "src.assets.semgrep.python-exception-text-returned-to-client", "app/service.py", 1
+        )
         leads = mapped.kpi_leads()
         assert leads["KPI-07"] == ["app/service.py:1 (semgrep python-exception-text-returned-to-client)"]
         na = mapped.assess_kpi(_KpiArgs(kpi_id="KPI-07", status="not_applicable", summary="none"))
         assert na.startswith("NOT RECORDED") and "app/service.py:1" in na
-        blind = mapped.assess_kpi(_KpiArgs(kpi_id="KPI-07", status="closed", summary="ok",
-                                           evidence=[EvidenceInput(file="app/main.py", line_start=1)]))
+        blind = mapped.assess_kpi(
+            _KpiArgs(
+                kpi_id="KPI-07",
+                status="closed",
+                summary="ok",
+                evidence=[EvidenceInput(file="app/main.py", line_start=1)],
+            )
+        )
         assert blind.startswith("NOT RECORDED")
-        checked = mapped.assess_kpi(_KpiArgs(kpi_id="KPI-07", status="closed", summary="generic message",
-                                             evidence=[EvidenceInput(file="app/service.py", line_start=1)]))
+        checked = mapped.assess_kpi(
+            _KpiArgs(
+                kpi_id="KPI-07",
+                status="closed",
+                summary="generic message",
+                evidence=[EvidenceInput(file="app/service.py", line_start=1)],
+            )
+        )
         assert checked == "Assessed KPI-07 as closed."
         assert "Assessed KPI-09" in mapped.assess_kpi(_KpiArgs(kpi_id="KPI-09", status="not_applicable", summary="n/a"))
 
@@ -329,7 +384,9 @@ class TestMapsIntegration:
         leads = mapped.lane_leads("security")
         assert leads[0][0].startswith("Routes taking a user identity") and leads[0][1] == frozenset({"app/main.py"})
         assert [label for label, _ in mapped.unaddressed_leads("security")] == [
-            leads[0][0], "Baseline with no trace anywhere in the code: HTTP security headers (HSTS, CSP, X-Content-Type-Options, ...)",
+            leads[0][0],
+            "Baseline with no trace anywhere in the code: HTTP security headers (HSTS, CSP, X-Content-Type-Options, "
+            "...)",
         ]
         mapped.record_finding(mapped.config.category("security"), _finding(title="Header identity"))
         mapped.record_finding(mapped.config.category("security"), _finding(title="No security headers (HSTS, CSP)"))
@@ -338,7 +395,9 @@ class TestMapsIntegration:
 
     def test_absent_baselines_are_leads_addressed_by_mention(self, mapped):
         assert [b.id for b in mapped.maps.absent_baselines if b.lane == "observability"] == [
-            "request_ids", "metrics", "structured_logging",
+            "request_ids",
+            "metrics",
+            "structured_logging",
         ]
         labels = [label for label, _ in mapped.unaddressed_leads("observability")]
         assert any("request/correlation IDs" in label for label in labels)
@@ -353,8 +412,14 @@ class TestMapsIntegration:
     def test_folding_a_duplicate_merges_locations_and_keeps_higher_severity(self, workspace):
         perf = workspace.config.category("performance")
         workspace.record_finding(perf, _finding(title="Sync I/O in async A", severity="Medium"))
-        workspace.record_finding(perf, _finding(title="Sync I/O in async B", severity="High",
-                                                evidence=[EvidenceInput(file="app/service.py", line_start=1)]))
+        workspace.record_finding(
+            perf,
+            _finding(
+                title="Sync I/O in async B",
+                severity="High",
+                evidence=[EvidenceInput(file="app/service.py", line_start=1)],
+            ),
+        )
         assert "same pattern in one category" in workspace.duplicate_candidates()
         workspace.mark_duplicate(_DuplicateArgs(duplicate_id="PERF-2", primary_id="PERF-1", reason="same pattern"))
         merged = workspace.findings["PERF-1"]

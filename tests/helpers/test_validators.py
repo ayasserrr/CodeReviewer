@@ -120,7 +120,7 @@ class TestValidateRepoId:
         ],
     )
     def test_rejects_path_traversal_attempts(self, malicious_repo_id):
-        with pytest.raises(InvalidInputError, match="path separators|not a valid UUID"):
+        with pytest.raises(InvalidInputError, match=r"path separators|not a valid UUID"):
             validate_repo_id(malicious_repo_id)
 
     def test_rejects_non_uuid_string(self):

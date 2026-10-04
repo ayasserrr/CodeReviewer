@@ -50,8 +50,11 @@ class TestIngestRepository:
             repo_repo.create = AsyncMock()
 
             result = await _route(
-                request=MagicMock(), payload=_payload(), current_user=current_user,
-                db_session=db_session, background_tasks=background_tasks,
+                request=MagicMock(),
+                payload=_payload(),
+                current_user=current_user,
+                db_session=db_session,
+                background_tasks=background_tasks,
             )
 
         assert isinstance(result, IngestionAcceptedResponse)
@@ -90,8 +93,11 @@ class TestIngestRepository:
             repo_repo.create = AsyncMock()
 
             await _route(
-                request=MagicMock(), payload=_payload(repo_id=repo_id), current_user=current_user,
-                db_session=_session(), background_tasks=MagicMock(),
+                request=MagicMock(),
+                payload=_payload(repo_id=repo_id),
+                current_user=current_user,
+                db_session=_session(),
+                background_tasks=MagicMock(),
             )
 
         repo_repo.create.assert_not_awaited()
@@ -106,8 +112,11 @@ class TestIngestRepository:
             repo_repo.create = AsyncMock()
 
             result = await _route(
-                request=MagicMock(), payload=_payload(), current_user=MagicMock(id=uuid4()),
-                db_session=_session(), background_tasks=MagicMock(),
+                request=MagicMock(),
+                payload=_payload(),
+                current_user=MagicMock(id=uuid4()),
+                db_session=_session(),
+                background_tasks=MagicMock(),
             )
 
         assert "glpat-secret-token" not in result.model_dump_json()
@@ -128,8 +137,11 @@ class TestIngestRepository:
             repo_repo_cls.return_value.get = AsyncMock(return_value=None)
             repo_repo_cls.return_value.create = AsyncMock()
             await _route(
-                request=MagicMock(), payload=_payload(), current_user=MagicMock(id=uuid4()),
-                db_session=db_session, background_tasks=background_tasks,
+                request=MagicMock(),
+                payload=_payload(),
+                current_user=MagicMock(id=uuid4()),
+                db_session=db_session,
+                background_tasks=background_tasks,
             )
 
         assert order == ["commit", "schedule"]
@@ -143,8 +155,11 @@ class TestIngestRepository:
             background_tasks = MagicMock()
             with pytest.raises(HTTPException) as exc_info:
                 await _route(
-                    request=MagicMock(), payload=_payload(repo_id=str(uuid4())), current_user=MagicMock(id=uuid4()),
-                    db_session=_session(), background_tasks=background_tasks,
+                    request=MagicMock(),
+                    payload=_payload(repo_id=str(uuid4())),
+                    current_user=MagicMock(id=uuid4()),
+                    db_session=_session(),
+                    background_tasks=background_tasks,
                 )
 
         assert exc_info.value.status_code == 404
@@ -165,8 +180,11 @@ class TestOneActiveReviewPerRepository:
             repo_repo_cls.return_value.get = AsyncMock(return_value=MagicMock(user_id=current_user.id))
             with pytest.raises(HTTPException) as exc:
                 await _route(
-                    request=MagicMock(), payload=_payload(repo_id=str(uuid4())), current_user=current_user,
-                    db_session=_session(), background_tasks=MagicMock(),
+                    request=MagicMock(),
+                    payload=_payload(repo_id=str(uuid4())),
+                    current_user=current_user,
+                    db_session=_session(),
+                    background_tasks=MagicMock(),
                 )
         assert exc.value.status_code == 409 and str(running.id) in exc.value.detail
         queue_review.assert_not_awaited()

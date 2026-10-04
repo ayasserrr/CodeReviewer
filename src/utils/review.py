@@ -21,6 +21,15 @@ Confidence = Literal["low", "medium", "high"]
 TriageVerdict = Literal["true_positive", "false_positive", "low_value"]
 KpiStatus = Literal["open", "partially_open", "closed", "not_applicable", "not_verified"]
 VerificationVerdict = Literal["confirmed", "rejected", "adjusted"]
+# How reachable the defect is today — severity is calibrated against it.
+Exposure = Literal["live", "conditional", "latent", "dead", "theoretical"]
+EXPOSURE_LABELS: dict[str, str] = {
+    "live": "live — reachable through the running system today",
+    "conditional": "reachable, but only under specific conditions",
+    "latent": "latent — present in the code, not reachable from any entry point today (one import/route away)",
+    "dead": "dead — unused code nothing calls or plans to call",
+    "theoretical": "theoretical — needs a future change to the architecture before it can happen",
+}
 
 SEVERITY_ORDER: tuple[str, ...] = ("Critical", "High", "Medium", "Low")
 CONFIDENCE_ORDER: tuple[str, ...] = ("low", "medium", "high")
@@ -160,6 +169,7 @@ class Verification(BaseModel):
     verdict: VerificationVerdict
     original_severity: Severity
     note: str
+    independent: bool = True  # False: only a deterministic severity cap was applied, no verifier ran
 
 
 class ReviewFinding(BaseModel):
@@ -179,6 +189,7 @@ class ReviewFinding(BaseModel):
         static_finding_ids: ``StaticFinding.id``s this finding confirms/aggregates.
         verification: The verifier's judgment, or ``None`` if not verified.
         duplicate_of: Set by the synthesizer when merged into another finding.
+        exposure: How reachable the defect is today (live / conditional / latent / dead / theoretical).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -196,6 +207,11 @@ class ReviewFinding(BaseModel):
     static_finding_ids: tuple[str, ...] = Field(default_factory=tuple)
     verification: Verification | None = None
     duplicate_of: str | None = None
+    exposure: Exposure = "live"
+
+    @property
+    def independently_verified(self) -> bool:
+        return self.verification is not None and self.verification.independent
 
 
 class KpiAssessment(BaseModel):
@@ -313,6 +329,7 @@ class ReviewCoverage(BaseModel):
     discovery_timed_out: bool = False
     unreadable_directories: tuple[str, ...] = ()
     system_docs: tuple[str, ...] = ()
+    lane_scopes: tuple[str, ...] = ()  # "security: 41 of 42 scope files opened"
 
 
 class ReviewStatistics(BaseModel):
@@ -373,6 +390,11 @@ class DeepReviewReport(BaseModel):
     categories: tuple[ReviewCategory, ...] = Field(default_factory=tuple)
     findings: tuple[ReviewFinding, ...] = Field(default_factory=tuple)
     rejected_findings: tuple[ReviewFinding, ...] = Field(default_factory=tuple)
+    dismissed_leads: tuple[str, ...] = Field(default_factory=tuple)  # "lane — lead row — cited reason"
+    open_leads: tuple[str, ...] = Field(default_factory=tuple)
+    hypotheses: tuple[str, ...] = Field(default_factory=tuple)  # "lane — H-X-n: statement [outcome]"
+    system_models: tuple[str, ...] = Field(default_factory=tuple)  # "lane: the agent's model of the system"
+    own_investigation: int = 0  # findings not sitting on any static lead or tool hit
     merged_findings: tuple[MergedFinding, ...] = Field(default_factory=tuple)
     inventory: tuple[InventorySection, ...] = Field(default_factory=tuple)
     coverage: ReviewCoverage | None = None

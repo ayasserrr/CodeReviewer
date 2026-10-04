@@ -23,7 +23,9 @@ def get_log_file_path() -> Path:
     return log_dir / f"{env_name}-logs.jsonl"
 
 
-def add_environment(logger: object, method_name: str, event_dict: structlog.typing.EventDict) -> structlog.typing.EventDict:
+def add_environment(
+    logger: object, method_name: str, event_dict: structlog.typing.EventDict
+) -> structlog.typing.EventDict:
     """Stamps every log event with the running environment."""
     event_dict["environment"] = settings.APP_ENV.value
     return event_dict

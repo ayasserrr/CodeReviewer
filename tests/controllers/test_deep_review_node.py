@@ -18,25 +18,48 @@ from utils import DeepReviewReport, DependencyGraph, DiscoveryStatistics, Reposi
 def _state(tmp_path: Path) -> dict:
     repository_id = str(uuid4())
     context = SimpleNamespace(
-        repository_id=repository_id, repo_path=tmp_path, head_sha="a" * 40, default_branch="main",
+        repository_id=repository_id,
+        repo_path=tmp_path,
+        head_sha="a" * 40,
+        default_branch="main",
         gitlab_url="https://gitlab.example.com/group/demo.git",
     )
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id=repository_id, head_sha="a" * 40,
-        cache_key="k", generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id=repository_id,
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(),
     )
     graph = DependencyGraph(
-        schema_version="1", engine_version="1", repository_id=repository_id, head_sha="a" * 40, cache_key="k",
+        schema_version="1",
+        engine_version="1",
+        repository_id=repository_id,
+        head_sha="a" * 40,
+        cache_key="k",
         generated_at=datetime.now(UTC),
     )
-    return {"result": SimpleNamespace(context=context), "manifest": manifest, "dependency_graph": graph,
-            "findings": [], "tool_results": {}}
+    return {
+        "result": SimpleNamespace(context=context),
+        "manifest": manifest,
+        "dependency_graph": graph,
+        "findings": [],
+        "tool_results": {},
+    }
 
 
 def _report(repository_id: str) -> DeepReviewReport:
     return DeepReviewReport(
-        engine_version="1.0.0", repository_id=repository_id, repository_name="demo", head_sha="a" * 40,
-        cache_key="ck", provider="gemini", model="m", generated_at=datetime.now(UTC),
+        engine_version="1.0.0",
+        repository_id=repository_id,
+        repository_name="demo",
+        head_sha="a" * 40,
+        cache_key="ck",
+        provider="gemini",
+        model="m",
+        generated_at=datetime.now(UTC),
     )
 
 
@@ -131,7 +154,9 @@ async def test_success_with_pre_created_row_transitions_it_running_then_complete
 async def test_cache_hit_reuses_report(tmp_path, db, monkeypatch):
     monkeypatch.setattr(settings, "DEEP_REVIEW_ENABLED", True)
     state = _state(tmp_path)
-    cached = SimpleNamespace(id=uuid4(), report_data=_report(state["result"].context.repository_id).model_dump(mode="json"))
+    cached = SimpleNamespace(
+        id=uuid4(), report_data=_report(state["result"].context.repository_id).model_dump(mode="json")
+    )
     db.get_completed_by_cache_key.return_value = cached
     with patch("nodes.deep_review_node.DeepReviewController.review", new_callable=AsyncMock) as review:
         out = await deep_review_node(state)

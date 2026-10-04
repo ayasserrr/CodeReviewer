@@ -11,9 +11,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from system import get_logger
+from utils import DependencyEntry
 
 logger = get_logger(__name__)
-from utils import DependencyEntry
 
 _REQUIREMENT_LINE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*(.*)$")
 

@@ -17,6 +17,7 @@ primary framework up front.
 """
 
 import ast
+import contextlib
 from collections import defaultdict
 from collections.abc import Iterable
 
@@ -50,10 +51,8 @@ def _extract_methods_kwarg(call: ast.Call) -> list[HttpMethod]:
             for elt in keyword.value.elts:
                 literal = _literal_str(elt)
                 if literal:
-                    try:
+                    with contextlib.suppress(ValueError):
                         methods.append(HttpMethod(literal.upper()))
-                    except ValueError:
-                        pass
             if methods:
                 return methods
     return [HttpMethod.GET]
@@ -100,9 +99,13 @@ def _detect_function_based(tree: ast.Module, relative_path: str) -> list[Endpoin
 
 def _find_as_view_class(call: ast.Call) -> str | None:
     for arg in (*call.args, *(kw.value for kw in call.keywords)):
-        if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute) and arg.func.attr == "as_view":
-            if isinstance(arg.func.value, ast.Name):
-                return arg.func.value.id
+        if (
+            isinstance(arg, ast.Call)
+            and isinstance(arg.func, ast.Attribute)
+            and arg.func.attr == "as_view"
+            and isinstance(arg.func.value, ast.Name)
+        ):
+            return arg.func.value.id
     return None
 
 

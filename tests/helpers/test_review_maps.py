@@ -27,18 +27,22 @@ def _write(root: Path, rel: str, text: str) -> None:
 def repo(tmp_path: Path) -> Path:
     b = _BACKEND
     _write(tmp_path, f"{b}/app/__init__.py", "")
-    _write(tmp_path, f"{b}/app/deps.py", (
-        "import os\n"
-        "from fastapi import Header, Depends, HTTPException\n"
-        "from fastapi.security import HTTPBearer\n"
-        "SECRET_KEY = os.getenv('SECRET_KEY', 'secret')\n"
-        "_bearer = HTTPBearer()\n"
-        "async def verify_api_key(x_api_key: str = Header(None, alias='x-api-key')):\n"
-        "    return x_api_key\n"
-        "async def get_current_user(creds=Depends(_bearer)):\n"
-        "    import jwt\n"
-        "    return jwt.decode(creds.credentials, SECRET_KEY)\n"
-    ))
+    _write(
+        tmp_path,
+        f"{b}/app/deps.py",
+        (
+            "import os\n"
+            "from fastapi import Header, Depends, HTTPException\n"
+            "from fastapi.security import HTTPBearer\n"
+            "SECRET_KEY = os.getenv('SECRET_KEY', 'secret')\n"
+            "_bearer = HTTPBearer()\n"
+            "async def verify_api_key(x_api_key: str = Header(None, alias='x-api-key')):\n"
+            "    return x_api_key\n"
+            "async def get_current_user(creds=Depends(_bearer)):\n"
+            "    import jwt\n"
+            "    return jwt.decode(creds.credentials, SECRET_KEY)\n"
+        ),
+    )
     _write(tmp_path, f"{b}/app/routers/__init__.py", "")
     # A UTF-8 BOM must not hide a router.
     (tmp_path / b / "app" / "routers" / "items.py").write_bytes(
@@ -66,29 +70,47 @@ def repo(tmp_path: Path) -> Path:
         "async def login(body: ChatIn):\n"
         "    return body\n".encode()
     )
-    _write(tmp_path, f"{b}/app/main.py", (
-        "from fastapi import FastAPI, Depends\n"
-        "from fastapi.staticfiles import StaticFiles\n"
-        "from .deps import verify_api_key\n"
-        "from .routers import items\n"
-        "app = FastAPI(dependencies=[Depends(verify_api_key)])\n"
-        "app.include_router(items.router, prefix='/api/v1')\n"
-        "app.mount('/static/files', StaticFiles(directory='files'), name='files')\n"
-    ))
+    _write(
+        tmp_path,
+        f"{b}/app/main.py",
+        (
+            "from fastapi import FastAPI, Depends\n"
+            "from fastapi.staticfiles import StaticFiles\n"
+            "from .deps import verify_api_key\n"
+            "from .routers import items\n"
+            "app = FastAPI(dependencies=[Depends(verify_api_key)])\n"
+            "app.include_router(items.router, prefix='/api/v1')\n"
+            "app.mount('/static/files', StaticFiles(directory='files'), name='files')\n"
+        ),
+    )
     _write(tmp_path, f"{b}/src/__init__.py", "")
-    _write(tmp_path, f"{b}/src/services/store.py", (
-        "import os\nBASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')\ndef load():\n    return []\n"
-    ))
-    _write(tmp_path, f"{b}/src/services/links.py", "import os\nBASE = os.getenv('BASE_URL', 'https://app-dev.example.com')\n")
-    _write(tmp_path, f"{b}/src/legacy/old_graph.py", "from src.legacy.old_nodes import x\nif __name__ == '__main__':\n    pass\n")
+    _write(
+        tmp_path,
+        f"{b}/src/services/store.py",
+        ("import os\nBASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')\ndef load():\n    return []\n"),
+    )
+    _write(
+        tmp_path,
+        f"{b}/src/services/links.py",
+        "import os\nBASE = os.getenv('BASE_URL', 'https://app-dev.example.com')\n",
+    )
+    _write(
+        tmp_path,
+        f"{b}/src/legacy/old_graph.py",
+        "from src.legacy.old_nodes import x\nif __name__ == '__main__':\n    pass\n",
+    )
     _write(tmp_path, f"{b}/src/legacy/old_nodes.py", "x = 1\n")
-    _write(tmp_path, "web/src/api.ts", (
-        "const key = import.meta.env.VITE_API_KEY\n"
-        "export const list = () => fetch(`${base}/api/v1/items/`)\n"
-        "export const chat = () => fetch('/api/v1/items/chat', {method: 'POST'})\n"
-        "export const gone = () => fetch('/api/v1/removed/thing')\n"
-        "export const file = (n: string) => `/static/files/${n}`\n"
-    ))
+    _write(
+        tmp_path,
+        "web/src/api.ts",
+        (
+            "const key = import.meta.env.VITE_API_KEY\n"
+            "export const list = () => fetch(`${base}/api/v1/items/`)\n"
+            "export const chat = () => fetch('/api/v1/items/chat', {method: 'POST'})\n"
+            "export const gone = () => fetch('/api/v1/removed/thing')\n"
+            "export const file = (n: string) => `/static/files/${n}`\n"
+        ),
+    )
     _write(tmp_path, f"{b}/.env.example", "BASE_URL=http://localhost:8000\nSECRET_KEY=\nBASE_URL=x\n")
     _write(tmp_path, f"{b}/.env", "SECRET_KEY=abc\nAPI_KEY=1234\n")
     return tmp_path
@@ -99,10 +121,18 @@ def _manifest(repo: Path) -> RepositoryManifest:
     for path in sorted(repo.rglob("*")):
         if path.is_file() and path.suffix in (".py", ".ts"):
             rel = path.relative_to(repo).as_posix()
-            files.append(FileEntry(path=rel, language="Python" if path.suffix == ".py" else "TypeScript", size_bytes=1, lines=1))
+            files.append(
+                FileEntry(path=rel, language="Python" if path.suffix == ".py" else "TypeScript", size_bytes=1, lines=1)
+            )
     return RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(files),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(files),
     )
 
 
@@ -156,7 +186,8 @@ class TestEnvMap:
         divergent = maps.env_divergent_defaults()
         assert set(divergent) >= {"BASE_URL"}
         assert {r.file for r in divergent["BASE_URL"]} == {
-            f"{_BACKEND}/src/services/store.py", f"{_BACKEND}/src/services/links.py",
+            f"{_BACKEND}/src/services/store.py",
+            f"{_BACKEND}/src/services/links.py",
         }
 
     def test_env_files_report_keys_duplicates_and_flags_never_values(self, maps):
@@ -226,7 +257,14 @@ class TestImportsAndReachability:
 
 def test_context_files_and_brief(maps):
     files = render_context_files(maps)
-    assert set(files) == {"route_map.md", "env_map.md", "client_calls.md", "reachability.md", "architecture.md"}
+    assert set(files) == {
+        "route_map.md",
+        "env_map.md",
+        "client_calls.md",
+        "reachability.md",
+        "architecture.md",
+        "runtime_signals.md",
+    }
     assert "CLIENT-ASSERTED IDENTITY" in files["route_map.md"]
     brief = "\n".join(maps_brief(maps))
     assert "mounted sub-apps (/static/files)" in brief
@@ -243,15 +281,19 @@ def test_a_broken_map_does_not_break_the_others(repo, monkeypatch):
 
 def test_background_jobs_resolve_to_the_same_file_definition(tmp_path):
     _write(tmp_path, "svc/a.py", "def _run():\n    pass\n")
-    _write(tmp_path, "svc/b.py", (
-        "import asyncio\n"
-        "def _run():\n    pass\n"
-        "async def pipeline(x):\n    pass\n"
-        "def start(background_tasks):\n"
-        "    background_tasks.add_task(_run)\n"
-        "    asyncio.create_task(pipeline(1))\n"
-        "    asyncio.create_task(pipeline(2))\n"
-    ))
+    _write(
+        tmp_path,
+        "svc/b.py",
+        (
+            "import asyncio\n"
+            "def _run():\n    pass\n"
+            "async def pipeline(x):\n    pass\n"
+            "def start(background_tasks):\n"
+            "    background_tasks.add_task(_run)\n"
+            "    asyncio.create_task(pipeline(1))\n"
+            "    asyncio.create_task(pipeline(2))\n"
+        ),
+    )
     maps = build_review_maps(tmp_path, _manifest(tmp_path))
     jobs = {(j.function, j.file, j.line) for j in maps.background_jobs}
     assert ("_run", "svc/b.py", 2) in jobs and ("pipeline", "svc/b.py", 4) in jobs
@@ -259,46 +301,66 @@ def test_background_jobs_resolve_to_the_same_file_definition(tmp_path):
 
 
 def test_architecture_detectors(tmp_path):
-    _write(tmp_path, "svc/state.py", (
-        "import asyncio, threading\n"
-        "_SEM = asyncio.Semaphore(3)\n"
-        "_CACHE = {}\n"
-        "_ALLOWED = {'a', 'b'}\n"
-        "_MODEL = None\n"
-        "def load():\n    global _MODEL\n    _MODEL = object()\n"
-        "def remember(k, v):\n    _CACHE[k] = v\n"
-    ))
-    _write(tmp_path, "svc/services.py", (
-        "def select(*a):\n    return a\n"
-        "class DirectoryService:\n"
-        "    def __init__(self, email, db):\n        self.email = email\n        self.db = db\n"
-        "    def list(self):\n        return self.db.execute(select('Application'))\n"
-        "class ScopedService:\n"
-        "    def __init__(self, email, db):\n        self.email = email\n        self.db = db\n"
-        "    def _authorized(self):\n        return self.email\n"
-        "    def list(self):\n        self._authorized()\n        return self.db.execute(select('Application'))\n"
-    ))
-    _write(tmp_path, "web/App.tsx", (
-        "<Routes>\n"
-        "  <Route path=\"/login\" element={<LoginPage />} />\n"
-        "  <Route path=\"/candidates\" element={<CandidatesPage />} />\n"
-        "  <Route path=\"/admin\" element={<AdminRoute><AdminPage /></AdminRoute>} />\n"
-        "  <Route path=\"/\" element={<Navigate to=\"/candidates\" />} />\n"
-        "</Routes>\n"
-    ))
+    _write(
+        tmp_path,
+        "svc/state.py",
+        (
+            "import asyncio, threading\n"
+            "_SEM = asyncio.Semaphore(3)\n"
+            "_CACHE = {}\n"
+            "_ALLOWED = {'a', 'b'}\n"
+            "_MODEL = None\n"
+            "def load():\n    global _MODEL\n    _MODEL = object()\n"
+            "def remember(k, v):\n    _CACHE[k] = v\n"
+        ),
+    )
+    _write(
+        tmp_path,
+        "svc/services.py",
+        (
+            "def select(*a):\n    return a\n"
+            "class DirectoryService:\n"
+            "    def __init__(self, email, db):\n        self.email = email\n        self.db = db\n"
+            "    def list(self):\n        return self.db.execute(select('Application'))\n"
+            "class ScopedService:\n"
+            "    def __init__(self, email, db):\n        self.email = email\n        self.db = db\n"
+            "    def _authorized(self):\n        return self.email\n"
+            "    def list(self):\n        self._authorized()\n        return self.db.execute(select('Application'))\n"
+        ),
+    )
+    _write(
+        tmp_path,
+        "web/App.tsx",
+        (
+            "<Routes>\n"
+            '  <Route path="/login" element={<LoginPage />} />\n'
+            '  <Route path="/orders" element={<OrdersPage />} />\n'
+            '  <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />\n'
+            '  <Route path="/" element={<Navigate to="/orders" />} />\n'
+            "</Routes>\n"
+        ),
+    )
     files = []
     for path in sorted(tmp_path.rglob("*")):
         if path.is_file():
             rel = path.relative_to(tmp_path).as_posix()
-            files.append(FileEntry(path=rel, language="Python" if rel.endswith(".py") else "TypeScript", size_bytes=1, lines=1))
+            files.append(
+                FileEntry(path=rel, language="Python" if rel.endswith(".py") else "TypeScript", size_bytes=1, lines=1)
+            )
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(files),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(files),
     )
     maps = build_review_maps(tmp_path, manifest)
     assert {x.name for x in maps.process_state} == {"_SEM", "_CACHE", "_MODEL"}
     assert [x.function for x in maps.identity_unused] == ["DirectoryService.list"]
-    assert [(x.path, x.component) for x in maps.unguarded_routes] == [("/candidates", "CandidatesPage")]
+    assert [(x.path, x.component) for x in maps.unguarded_routes] == [("/orders", "OrdersPage")]
     from helpers.review_maps import build_inventory
 
     titles = [s.title for s in build_inventory(maps)]
@@ -312,8 +374,8 @@ def test_unpaginated_listing_detection():
     def route(method, path, handler, paginated=False):
         return RouteInfo(method, path, handler, "a.py", 1, (), (), False, False, paginated=paginated)
 
-    assert route("GET", "/api/candidates", "list_candidates").is_unpaginated_listing
-    assert not route("GET", "/api/candidates", "list_candidates", paginated=True).is_unpaginated_listing
-    assert not route("GET", "/api/candidates/{candidate_id}", "get_candidate").is_unpaginated_listing
-    assert not route("POST", "/api/candidates", "create_candidates").is_unpaginated_listing
+    assert route("GET", "/api/orders", "list_orders").is_unpaginated_listing
+    assert not route("GET", "/api/orders", "list_orders", paginated=True).is_unpaginated_listing
+    assert not route("GET", "/api/orders/{order_id}", "get_order").is_unpaginated_listing
+    assert not route("POST", "/api/orders", "create_orders").is_unpaginated_listing
     assert not route("GET", "/health", "health").is_unpaginated_listing

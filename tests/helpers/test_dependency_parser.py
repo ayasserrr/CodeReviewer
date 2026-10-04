@@ -14,12 +14,7 @@ class TestParsePyprojectToml:
 
     def test_poetry_dependencies_excludes_python(self, tmp_path: Path):
         f = tmp_path / "pyproject.toml"
-        f.write_text(
-            "[tool.poetry.dependencies]\n"
-            'python = "^3.13"\n'
-            'flask = "^3.0"\n'
-            'requests = {version = "^2.0"}\n'
-        )
+        f.write_text('[tool.poetry.dependencies]\npython = "^3.13"\nflask = "^3.0"\nrequests = {version = "^2.0"}\n')
         deps = parse_pyproject_toml(f)
         names = {d.name for d in deps}
         assert names == {"flask", "requests"}

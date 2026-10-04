@@ -42,7 +42,8 @@ class TestReviewConfig:
             (b"not = [valid", "invalid TOML"),
             (b'[[categories]]\nid = "a"\ntitle = "A"\ncode = "AA"\nfocus = "x"\n' * 2, "duplicate category ids"),
             (
-                b'[static_analysis.owners]\nruff = "nope"\n[[categories]]\nid = "a"\ntitle = "A"\ncode = "AA"\nfocus = "x"\n',
+                b'[static_analysis.owners]\nruff = "nope"\n'
+                b'[[categories]]\nid = "a"\ntitle = "A"\ncode = "AA"\nfocus = "x"\n',
                 "unknown categories",
             ),
         ],
@@ -270,7 +271,13 @@ class TestRunAgentResume:
     async def test_completion_check_resumes_once_with_its_message(self):
         from helpers.review_agents import run_agent
 
-        agent = _FakeAgent([AIMessage(content="All done."), AIMessage(content="Recorded 3 findings.")])
+        agent = _FakeAgent(
+            [
+                AIMessage(content="All done."),
+                AIMessage(content="Recorded 3 findings."),
+                AIMessage(content="Still nothing."),
+            ]
+        )
         checks = []
 
         def nothing_recorded():
@@ -281,10 +288,11 @@ class TestRunAgentResume:
             agent, name="specialist:x", kickoff="go", files={}, timeout_seconds=30, completion_check=nothing_recorded
         )
         assert stats.status == "completed"
-        # Resumed once; re-checked after the resume, and an unchanged answer ends the loop.
-        assert len(agent.inputs) == 2 and len(checks) == 2
+        # Resumed once; an unchanged answer is escalated once in plain words, then the loop ends.
+        assert len(agent.inputs) == 3 and len(checks) == 3
         assert agent.inputs[1]["messages"][-1].content.startswith("You recorded nothing — continue.")
         assert "model turns for this" in agent.inputs[1]["messages"][-1].content  # time/budget left is stated
+        assert agent.inputs[2]["messages"][-1].content.startswith("You stopped without acting on this.")
 
     async def test_silent_end_with_work_done_completes_without_resume(self):
         from helpers.review_agents import run_agent
@@ -298,14 +306,19 @@ class TestRunAgentResume:
     async def test_silent_end_with_work_missing_is_resumed_with_the_check(self):
         from helpers.review_agents import run_agent
 
-        agent = _FakeAgent([AIMessage(content=""), AIMessage(content="Verified.")])
+        agent = _FakeAgent([AIMessage(content=""), AIMessage(content="Verified."), AIMessage(content="Verified.")])
         pending = ["BUG-1"]
         stats = await run_agent(
-            agent, name="verifier:x", kickoff="go", files={}, timeout_seconds=30,
+            agent,
+            name="verifier:x",
+            kickoff="go",
+            files={},
+            timeout_seconds=30,
             completion_check=lambda: f"No verdict yet: {pending[0]}" if pending else None,
         )
-        assert stats.status == "completed" and len(agent.inputs) == 2
+        assert stats.status == "completed" and len(agent.inputs) == 3
         assert "No verdict yet: BUG-1" in agent.inputs[1]["messages"][-1].content
+        assert "not optional" in agent.inputs[2]["messages"][-1].content
 
     async def test_completion_check_resends_while_progress_is_made_and_stops_when_stuck(self):
         from helpers.review_agents import run_agent
@@ -328,11 +341,13 @@ class TestRunAgentResume:
             return result
 
         agent.ainvoke = tracking
-        stats = await run_agent(agent, name="verifier:x", kickoff="go", files={}, timeout_seconds=30,
-                                completion_check=check)
+        stats = await run_agent(
+            agent, name="verifier:x", kickoff="go", files={}, timeout_seconds=30, completion_check=check
+        )
         assert stats.status == "completed"
-        # 1 initial + resumes while the pending list shrinks; the round that changes nothing ends it.
-        assert len(agent.inputs) == 4
+        # 1 initial + resumes while the pending list shrinks; a round that changes nothing is escalated
+        # once, and the second unchanged round ends it.
+        assert len(agent.inputs) == 5
 
     async def test_satisfied_completion_check_does_not_resume(self):
         from helpers.review_agents import run_agent
@@ -375,8 +390,15 @@ def test_strong_lane_specialist_runs_on_the_judge_model(monkeypatch, tmp_path):
     monkeypatch.setattr(review_agents, "create_deep_agent", lambda **kwargs: kwargs)
     for strong in (False, True):
         review_agents.build_agent(
-            settings=cfg, repo_path=tmp_path, role="specialist", name="s", system_prompt="p",
-            tools=[], explorer_tools=[], model_calls=5, strong=strong,
+            settings=cfg,
+            repo_path=tmp_path,
+            role="specialist",
+            name="s",
+            system_prompt="p",
+            tools=[],
+            explorer_tools=[],
+            model_calls=5,
+            strong=strong,
         )
     assert "specialist" in roles and "verifier" in roles
 
@@ -406,6 +428,7 @@ def test_run_budget_is_shared_across_resumes_and_warns_on_time():
             def override(self, messages):
                 self.messages = messages
                 return self
+
         budget.limit, budget.used = 100, 0
         assert len(mw._nudge(_Req()).messages) == 1  # plenty of calls and time: no notice
         budget.deadline = _time.monotonic() + 60  # 6% of the timeout left
@@ -432,3 +455,76 @@ def test_gemini_tools_are_bound_in_validated_mode(monkeypatch):
 
     monkeypatch.setattr(real, "DEEP_REVIEW_FUNCTION_CALLING_MODE", "AUTO")
     assert not build_chat_model(real, "specialist").bind_tools([ping]).kwargs.get("tool_config")
+
+
+def test_lane_and_its_explorers_stop_cleanly_before_the_wall_clock_cap():
+    import time as _time
+
+    from helpers.review_agents import (
+        _RUN_BUDGET,
+        _STOP_GRACE_SECONDS,
+        _BudgetNudgeMiddleware,
+        _RunBudget,
+    )
+
+    budget = _RunBudget(limit=100, deadline=_time.monotonic() + _STOP_GRACE_SECONDS - 1, timeout=900)
+    token = _RUN_BUDGET.set(budget)
+    try:
+        lane = _BudgetNudgeMiddleware(limit=100).before_model({}, None)
+        explorer = _BudgetNudgeMiddleware(limit=20, shared=False).before_model({}, None)
+        assert lane["jump_to"] == "end" and explorer["jump_to"] == "end"
+        assert budget.time_capped and budget.used == 0
+    finally:
+        _RUN_BUDGET.reset(token)
+
+
+def test_lane_reads_are_tracked_per_agent_including_explorers():
+    from helpers.review_agents import (
+        _LANE_READS,
+        REVIEW_READS,
+        _UsageCounter,
+        current_lane_reads,
+    )
+
+    usage, shared = _UsageCounter(), set()
+    lane_token, shared_token = _LANE_READS.set(usage.files_read), REVIEW_READS.set(shared)
+    try:
+        usage.on_tool_start({"name": "read_file"}, "", inputs={"file_path": "/app/main.py"})
+        usage.on_tool_start({"name": "read_file"}, "", inputs={"file_path": "/_review/context/scopes.md"})
+        assert current_lane_reads() == {"app/main.py"} and shared == {"app/main.py"}
+    finally:
+        _LANE_READS.reset(lane_token)
+        REVIEW_READS.reset(shared_token)
+
+
+async def test_a_model_call_never_outlives_the_lane_clock():
+    import asyncio as _asyncio
+    import time as _time
+
+    from helpers.review_agents import (
+        _CALL_MARGIN_SECONDS,
+        _RUN_BUDGET,
+        _BudgetNudgeMiddleware,
+        _RunBudget,
+    )
+
+    budget = _RunBudget(limit=100, deadline=_time.monotonic() + _CALL_MARGIN_SECONDS + 0.3, timeout=900)
+    token = _RUN_BUDGET.set(budget)
+
+    class _Req:
+        def __init__(self):
+            self.messages, self.state = [], {}
+
+        def override(self, messages):
+            return self
+
+    async def slow_handler(request):
+        await _asyncio.sleep(5)  # a rate-limited judge call
+
+    try:
+        started = _time.monotonic()
+        result = await _BudgetNudgeMiddleware(limit=100).awrap_model_call(_Req(), slow_handler)
+        assert _time.monotonic() - started < 2
+        assert "Wall-clock budget" in result.content and budget.time_capped
+    finally:
+        _RUN_BUDGET.reset(token)

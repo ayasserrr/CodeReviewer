@@ -31,6 +31,7 @@ lock.
 
 import fnmatch
 import re
+import sys
 import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable
@@ -42,6 +43,7 @@ from pydantic import BaseModel, Field
 
 from helpers.fs_scanner import is_sensitive_env_file
 from helpers.review_maps import ReviewMaps, classify_env_value
+from helpers.review_signals import is_test_file
 from utils import (
     DependencyGraph,
     EvidenceRef,
@@ -81,7 +83,10 @@ _ZERO_CALLERS_NOTE = (
 
 _MAX_MERGED_EVIDENCE = 25
 # Lint-rule restatements in a maintainability finding title: ruff/flake8-style codes or the tool names.
-_LINT_TITLE = re.compile(r"\b(?:RUF|SIM|UP|PL[A-Z]?|[FEWBCN])\d{3,4}\b|\b(?:ruff|radon|lizard|vulture)\b|cyclomatic complexity", re.IGNORECASE)
+_LINT_TITLE = re.compile(
+    r"\b(?:RUF|SIM|UP|PL[A-Z]?|[FEWBCN])\d{3,4}\b|\b(?:ruff|radon|lizard|vulture)\b|cyclomatic complexity",
+    re.IGNORECASE,
+)
 _DEAD_MODULE_TITLE = re.compile(
     r"(dead|unreachable|unused|orphan\w*|not imported)\b.*\b(modules?|files?|packages?|director\w*|code)\b"
     r"|\b(modules?|files?|packages?)\b.*\b(dead|unreachable|unused|orphan\w*|not imported)",
@@ -107,10 +112,168 @@ def _is_script_or_test(path: str, scripts: set[str], unreachable: set[str]) -> b
     name = parts[-1]
     is_test = (
         any(p in ("tests", "test") for p in parts[:-1])
-        or name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+        or name == "conftest.py"
     )
     return is_test or path in scripts or ("scripts" in parts[:-1] and path in unreachable)
+
+
+_AUTHISH_PATH = re.compile(r"(?i)(auth|security|jwt|token|otp|session|password|login)")
 _LEAD_LINE_TOLERANCE = 15
+_SCOPE_REASON = re.compile(
+    r"(?i)(brief|checklist|baseline|prompt|instructions?|review scope|lead list)s?\b[^.]{0,40}"
+    r"\b(does not|doesn't|do not|never) (list|include|mention|require|cover)"
+)
+_CLIENT_FILE = re.compile(
+    r"(?i)\.(tsx?|jsx?|vue|svelte|mjs|cjs)$|(^|/)(vite|webpack|next|nuxt|tailwind|postcss|babel)"
+    r"\.config\.|(^|/)(package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|tsconfig[^/]*\.json)$"
+)
+_SYNTAX_CLAIM = re.compile(
+    r"(?i)syntax ?error|invalid syntax|does not (parse|compile|import)|cannot (be )?(parsed|"
+    r"imported|import|parse|compile)|fails? to (parse|compile|import)|import[- ]time (crash|error)"
+)
+_ENV_TEMPLATE = re.compile(r"(?i)(^|/)\.env[^/]*(example|sample|template|dist)")
+_SEVERE_STATIC = {"critical", "high"}  # security tools only; pyright/radon use "error" for ordinary hits
+_PERSISTED_STATE = re.compile(
+    r"(?i)\block(ed)?\b|\bflag\b|in[_ -]?progress|background work|\bjob\b|\blease\b|semaphore"
+)
+_CLEANUP_ONLY = re.compile(
+    r"(?i)\bfinally\b|\bexcept\b|context manager|\bwith\b block|cleaned up|clears? the|releases?"
+)
+# A named recovery MECHANISM, not a scenario word: "safe even on crashes" is exactly the wrong claim.
+_PROCESS_DEATH = re.compile(
+    r"(?i)stale|\bttl\b|expir|startup|on start|heartbeat|\bowner|\blease\b|timeout|"
+    r"not persisted|in[- ]memory only|reset (on|at|when)|reaper|watchdog|advisory lock|"
+    r"transaction[- ]scoped|rolled back"
+)
+
+
+def _group_key(finding) -> str:
+    """Triage group of a static finding: its rule id, except for dependency advisories, which are
+    grouped by package (one package often has dozens of advisories, each with its own id)."""
+    if finding.tool == "pip_audit" and finding.message:
+        return finding.message.split()[0].lower()
+    return finding.category
+
+
+def _cleanup_only_reason(claim: str, note: str) -> str | None:
+    """A lock/flag/job that survives the process is not made safe by cleanup code: ``finally`` and
+    ``except`` do not run when the process is killed, restarted or redeployed mid-job."""
+    if _PERSISTED_STATE.search(claim) and _CLEANUP_ONLY.search(note) and not _PROCESS_DEATH.search(note):
+        return (
+            "NOT RECORDED — the reason relies on cleanup code (finally/except/release), which does not run when "
+            "the process is killed, restarted or redeployed mid-job. Say what happens to this lock/flag/job "
+            "then — is it persisted (DB row, file, cache key) and what clears it: an expiry/TTL, a startup reset, "
+            "a heartbeat or owner check? If nothing does, it is a finding: record it."
+        )
+    return None
+
+
+_NON_REASON = re.compile(
+    r"(?i)\b(budget|out of time|no time|time ran|ran out|partially|not (fully )?(investigated|checked|traced|reviewed)|"
+    r"did not (check|trace|review)|covered (by|in|under) (finding|another)|see finding|already "
+    r"(recorded|reported|covered)|"
+    r"will (check|review) later|skipp?ed)\b"
+)
+_ANCHOR_TERMS = frozenset(
+    {
+        "cors",
+        "csrf",
+        "xss",
+        "jwt",
+        "ssrf",
+        "xxe",
+        "idor",
+        "csp",
+        "hsts",
+        "otp",
+        "sqli",
+        "injection",
+        "traversal",
+        "deserialization",
+        "clickjacking",
+        "openapi",
+        "swagger",
+        "mktemp",
+        "pickle",
+        "yaml",
+        "iframe",
+        "sandbox",
+    }
+)
+_MIN_HYPOTHESES = 6
+_GENERIC_NOTE_WORDS = frozenset(
+    {
+        "code",
+        "file",
+        "function",
+        "line",
+        "this",
+        "that",
+        "with",
+        "because",
+        "safe",
+        "defect",
+        "issue",
+        "application",
+        "system",
+        "data",
+        "value",
+        "check",
+        "used",
+    }
+)
+_EACH_ROW_MAX_KEYS = 25
+_HEDGE = re.compile(r"(?i)\b(might|may|potentially|possibly|could|perhaps|likely)\b")
+# Words every security/auth text shares; they say nothing about WHICH defect a text is about.
+_GENERIC_RISK_WORDS = frozenset(
+    {
+        "session",
+        "sessions",
+        "user",
+        "users",
+        "access",
+        "attacker",
+        "attack",
+        "attacks",
+        "security",
+        "secure",
+        "insecure",
+        "vulnerable",
+        "vulnerability",
+        "unauthorized",
+        "sensitive",
+        "leading",
+        "allowing",
+        "allows",
+        "hijacking",
+        "bypass",
+        "risk",
+        "issues",
+        "improper",
+        "properly",
+        "potentially",
+        "might",
+        "could",
+        "application",
+        "request",
+        "requests",
+        "endpoint",
+        "endpoints",
+        "cookie",
+        "cookies",
+        "data",
+        "server",
+    }
+)
+# A hypothesis names the code it suspects: an identifier, a call, a route, a file, or `quoted` code.
+_CODE_ELEMENT = re.compile(
+    r"`[^`]+`|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|\b[A-Z][a-z0-9]+[A-Z]\w*\b|\b\w+\(\)|"
+    r"(^|\s)/[\w{}.-]+/?[\w{}/.-]*|\b[\w-]+\.(py|js|ts|tsx|sql|sh|ya?ml|toml|json|html)\b"
+)
+_ROW_SYMBOL = re.compile(r"^`?([A-Za-z_][A-Za-z0-9_]{3,})`?\s*\(")
+"""Lead groups up to this many distinct locations are tracked row by row, not as a whole."""
 # High-signal bundled semgrep rules the security lane must rule on one by one.
 _SECURITY_LEAD_RULES: dict[str, str] = {
     "python-cors-wildcard-with-credentials": "CORS allows any origin with credentials",
@@ -123,14 +286,85 @@ _SECURITY_LEAD_RULES: dict[str, str] = {
     "python-tls-verification-disabled": "TLS verification disabled",
     "python-jwt-verification-disabled": "JWT verification disabled",
     "python-exception-text-returned-to-client": "raw exception text returned to clients",
+    "python-mass-assignment": "client payload copied field-by-field onto stored objects (privileged fields settable?)",
+    "python-open-redirect": "redirect target taken from the request",
+    "python-assert-as-guard": "assert used as an access/validation check (removed under -O)",
+    "python-archive-extract-all": "archive extracted without member-path checks (zip slip)",
+    "web-postmessage-any-origin": "postMessage to any origin / message listener without origin check",
+    "web-redirect-from-url-param": "browser navigation target read from the URL",
+}
+# Rules whose judgement belongs to another lane (security still triages every semgrep hit).
+_LANE_RULE_LEADS: dict[str, dict[str, str]] = {
+    "auth": {
+        "python-cookie-missing-flags": "cookies set without HttpOnly/Secure",
+        "python-jwt-decode-without-algorithms": "jwt.decode without an algorithms allow-list",
+        "python-secret-compared-with-equality": "secrets/tokens compared with == (timing, plaintext storage)",
+    },
+    "observability": {"python-secret-written-to-log": "credentials or tokens written to logs"},
+    "inputs": {"python-archive-extract-all": "archives extracted without member count/size/path limits"},
+    "correctness": {
+        "python-exception-swallowed": "broad exceptions swallowed without logging (failure looks like success)",
+        "python-mutable-default-argument": "mutable default arguments shared across calls",
+        "python-module-level-db-session": "one database session/connection shared by the whole process",
+        "python-float-for-money": "money handled as float",
+    },
 }
 _TITLE_STOPWORDS = {
-    "with", "from", "into", "that", "this", "missing", "lack", "lacks", "using", "used", "without", "the", "and",
-    "for", "via", "not", "all", "any", "are", "absence", "absent", "leads", "lead", "allows", "allowed", "can",
-    "issue", "issues", "potential", "possible", "multiple", "across", "due", "its", "has", "have", "been",
+    "with",
+    "from",
+    "into",
+    "that",
+    "this",
+    "missing",
+    "lack",
+    "lacks",
+    "using",
+    "used",
+    "without",
+    "the",
+    "and",
+    "for",
+    "via",
+    "not",
+    "all",
+    "any",
+    "are",
+    "absence",
+    "absent",
+    "leads",
+    "lead",
+    "allows",
+    "allowed",
+    "can",
+    "issue",
+    "issues",
+    "potential",
+    "possible",
+    "multiple",
+    "across",
+    "due",
+    "its",
+    "has",
+    "have",
+    "been",
     # Generic nouns every lane uses: sharing them says nothing about sharing a defect.
-    "api", "endpoint", "endpoints", "route", "routes", "application", "app", "code", "service", "services",
-    "file", "files", "data", "insecure", "unsafe", "vulnerability", "vulnerable",
+    "api",
+    "endpoint",
+    "endpoints",
+    "route",
+    "routes",
+    "application",
+    "app",
+    "code",
+    "service",
+    "services",
+    "file",
+    "files",
+    "data",
+    "insecure",
+    "unsafe",
+    "vulnerability",
+    "vulnerable",
 }
 
 # Static-analysis rules (bundled semgrep ids and bandit test ids) that are leads for a security KPI.
@@ -146,6 +380,7 @@ _KPI_RULES: dict[str, tuple[str, ...]] = {
     "python-markupsafe-markup-non-literal": ("KPI-05",),
     "python-jinja2-autoescape-disabled": ("KPI-05",),
     "python-static-files-mount": ("KPI-06",),
+    "python-technology-disclosure-header": ("KPI-03", "KPI-10"),
     "python-exception-text-returned-to-client": ("KPI-07",),
     "python-content-disposition-header": ("KPI-08",),
     "python-upload-filename-path-traversal": ("KPI-11",),
@@ -164,7 +399,9 @@ class EvidenceInput(BaseModel):
 
 class _QueryStaticArgs(BaseModel):
     tool: str | None = Field(None, description="Filter by tool, e.g. 'bandit', 'ruff', 'pyright'.")
-    rule: str | None = Field(None, description="Filter by rule/check id (exact), e.g. 'B105' or 'reportOptionalMemberAccess'.")
+    rule: str | None = Field(
+        None, description="Filter by rule/check id (exact), e.g. 'B105' or 'reportOptionalMemberAccess'."
+    )
     file_glob: str | None = Field(None, description="fnmatch pattern on the repo-relative path, e.g. 'app/api/*'.")
     severity: str | None = Field(None, description="Filter by tool severity, e.g. 'high', 'error', 'critical'.")
     triage: Literal["any", "untriaged", "true_positive", "false_positive", "low_value"] = Field(
@@ -213,7 +450,10 @@ class _EndpointArgs(BaseModel):
 
 class _HotspotArgs(BaseModel):
     kind: Literal["fan_in", "fan_out", "size", "complexity"] = Field(
-        "fan_in", description="fan_in = most-called functions; size = largest functions; complexity = static complexity findings."
+        "fan_in",
+        description=(
+            "fan_in = most-called functions; size = largest functions; complexity = static complexity findings."
+        ),
     )
     limit: int = Field(20, ge=1, le=100)
 
@@ -231,11 +471,20 @@ class _RecordFindingArgs(BaseModel):
     )
     impact: str = Field(..., description="What concretely happens because of this (who can do what / what breaks).")
     evidence: list[EvidenceInput] = Field(..., min_length=1, description="Every file:line you rely on (at least one).")
-    kpi_ids: list[str] = Field(default_factory=list, description="Security KPI ids this finding substantiates, e.g. ['KPI-06'].")
+    kpi_ids: list[str] = Field(
+        default_factory=list, description="Security KPI ids this finding substantiates, e.g. ['KPI-06']."
+    )
     static_finding_ids: list[str] = Field(
         default_factory=list, description="Ids of static-analysis findings this finding confirms or aggregates."
     )
     remediation: str | None = Field(None, description="Only if remediation is requested in your instructions.")
+    exposure: Literal["live", "conditional", "latent", "dead", "theoretical"] = Field(
+        "live",
+        description="How reachable the defect is TODAY: live = reachable through the running system; "
+        "conditional = reachable only under specific conditions (a config, a role, a race); latent = the code "
+        "exists but no entry point reaches it (one import/route away); dead = unused code nothing calls; "
+        "theoretical = needs a future architectural change. Calibrate severity to it.",
+    )
     violates_documented_rule: str | None = Field(
         None,
         description="When the repository's AGENTS.md documents the behaviour this finding contradicts: that "
@@ -253,6 +502,7 @@ class _UpdateFindingArgs(BaseModel):
     evidence: list[EvidenceInput] | None = Field(None, description="Replaces the evidence list when given.")
     kpi_ids: list[str] | None = None
     static_finding_ids: list[str] | None = None
+    exposure: Literal["live", "conditional", "latent", "dead", "theoretical"] | None = None
 
 
 class _WithdrawArgs(BaseModel):
@@ -261,7 +511,9 @@ class _WithdrawArgs(BaseModel):
 
 
 class _TriageArgs(BaseModel):
-    finding_ids: list[str] = Field(..., min_length=1, max_length=500, description="Static finding ids to triage (batch them).")
+    finding_ids: list[str] = Field(
+        ..., min_length=1, max_length=500, description="Static finding ids to triage (batch them)."
+    )
     verdict: Literal["true_positive", "false_positive", "low_value"] = Field(
         ...,
         description="true_positive = real defect; false_positive = the tool is wrong here; "
@@ -272,7 +524,13 @@ class _TriageArgs(BaseModel):
 
 class _TriageRuleArgs(BaseModel):
     tool: str = Field(..., description="Tool name, e.g. 'ruff'.")
-    rule: str = Field(..., description="Exact rule/check id, e.g. 'E501' or 'B008'.")
+    rule: str = Field(
+        ...,
+        description=(
+            "Exact rule/check id, e.g. 'E501' or 'B008'. For dependency scanners (pip_audit) the package name "
+            "also works and covers every advisory of that package in one call."
+        ),
+    )
     verdict: Literal["true_positive", "false_positive", "low_value"]
     reason: str = Field(..., description="Why this verdict holds for the whole rule group — cite what you sampled.")
     file_glob: str | None = Field(None, description="Optionally restrict to paths matching this fnmatch pattern.")
@@ -286,6 +544,65 @@ class _KpiArgs(BaseModel):
     finding_ids: list[str] = Field(default_factory=list, description="Your recorded findings that detail this KPI.")
 
 
+class _HypothesisInput(BaseModel):
+    statement: str = Field(
+        ..., description="A concrete suspected defect in THIS repository (what, where, why it would fail)."
+    )
+    files: list[str] = Field(..., min_length=1, description="Repository files the hypothesis is about.")
+
+
+class _HypothesesArgs(BaseModel):
+    system_model: str = Field(
+        ...,
+        description="3-8 sentences: how this system works from your lane's point of view (components, data flow, "
+        "trust boundaries, what could hurt most) — learned from the code and AGENTS.md, not from the leads.",
+    )
+    hypotheses: list[_HypothesisInput] = Field(
+        ..., min_length=1, description="Repository-specific suspicions to investigate (at least 6)."
+    )
+
+
+class _ResolveHypothesisArgs(BaseModel):
+    hypothesis_id: str
+    outcome: Literal["confirmed", "ruled_out"]
+    finding_id: str | None = Field(None, description="For confirmed: the finding you recorded for it.")
+    note: str = Field("", description="For ruled_out: what makes it safe, citing the repository path:line.")
+
+
+class _UpholdArgs(BaseModel):
+    ref: str = Field(..., description="The item id (H-... or D-...).")
+    note: str = Field(..., description="The code you checked that makes it safe, citing repository path:line.")
+
+
+class _OverturnArgs(BaseModel):
+    ref: str = Field(..., description="The item id (H-... or D-...) whose 'safe' conclusion is wrong.")
+    why_wrong: str = Field(..., description="Why the specialist's reasoning does not hold, citing the code.")
+    title: str
+    severity: Literal["Critical", "High", "Medium", "Low"]
+    description: str
+    impact: str
+    evidence: list[EvidenceInput] = Field(..., min_length=1)
+    exposure: Literal["live", "conditional", "latent", "dead", "theoretical"] = "live"
+
+
+class _DismissLeadArgs(BaseModel):
+    lead: str = Field(
+        ...,
+        description="Text identifying the lead: a distinctive part of one row (e.g. its file:line) closes that row; "
+        "a group label closes the whole group.",
+    )
+    reason: str = Field(
+        "",
+        description="Why it is not a defect, citing the repository `path:line` that shows it (the guard, caller, "
+        "config or test). Shown in the report. Not needed with finding_id.",
+    )
+    finding_id: str | None = Field(
+        None,
+        description="When one of your findings already covers this lead: its id. The lead's location is added to "
+        "that finding's evidence instead of being dismissed.",
+    )
+
+
 class _VerifyArgs(BaseModel):
     finding_id: str
     verdict: Literal["confirmed", "rejected", "adjusted"] = Field(
@@ -293,10 +610,17 @@ class _VerifyArgs(BaseModel):
         description="confirmed = true as stated; rejected = not a real issue / evidence doesn't support it; "
         "adjusted = real but the severity is wrong (give adjusted_severity).",
     )
-    note: str = Field(..., description="The decisive fact you checked, citing file:line.")
+    note: str = Field(
+        ...,
+        description="The decisive fact you checked, citing file:line. A rejection must cite the repository code "
+        "that disproves the claim.",
+    )
     adjusted_severity: Literal["Critical", "High", "Medium", "Low"] | None = None
     corrected_title: str | None = Field(
         None, description="Only when the title overstates or misnames the defect: the accurate one-line title."
+    )
+    corrected_exposure: Literal["live", "conditional", "latent", "dead", "theoretical"] | None = Field(
+        None, description="Only when the recorded exposure (live/conditional/latent/dead/theoretical) is wrong."
     )
     corrected_impact: str | None = Field(
         None,
@@ -336,7 +660,9 @@ class _SummaryArgs(BaseModel):
     scope: str = Field(..., description="One paragraph: what was reviewed (components, stacks, deploy artifacts).")
     verdict: str = Field(..., description="One paragraph: production-readiness verdict and the main reasons.")
     priority_order: list[_PriorityInput] = Field(..., min_length=1, description="Ranked themes, most blocking first.")
-    cross_cutting: list[_RootCauseInput] = Field(default_factory=list, description="3-6 root causes behind many findings.")
+    cross_cutting: list[_RootCauseInput] = Field(
+        default_factory=list, description="3-6 root causes behind many findings."
+    )
     verification_note: str = Field("", description="Which highest-severity items were confirmed directly in code.")
 
 
@@ -374,6 +700,7 @@ class ReviewWorkspace:
         self.manifest = manifest
         self.graph = graph
         self.config = config
+        self.frontend_in_scope = any(c.id == "frontend" for c in config.enabled_categories)
         self.tool_results = tool_results
 
         # Static findings: first occurrence wins on the content-hash id.
@@ -403,6 +730,14 @@ class ReviewWorkspace:
         self._lock = threading.Lock()
         self.findings: dict[str, ReviewFinding] = {}
         self.withdrawn: dict[str, str] = {}
+        # Lead rows a specialist dismissed with a cited reason: (category_id, row) -> reason.
+        self.dismissed_leads: dict[tuple[str, str], str] = {}
+        self._lead_rows: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        self._scopes: dict[str, list[str]] | None = None
+        # Per lane: the agent's own system model and repo-specific hypotheses (id -> record).
+        self.system_models: dict[str, str] = {}
+        self.negative_audit: dict[str, str] = {}  # ref -> "upheld: ..." / "overturned -> FID"
+        self.hypotheses: dict[str, dict[str, Any]] = {}
         self.invalid_evidence_bounces = 0
         self._counters: Counter[str] = Counter()
         self.triage: dict[str, StaticTriage] = {}
@@ -559,11 +894,17 @@ class ReviewWorkspace:
         page = matches[offset : offset + limit]
         if not page:
             return f"No static findings match (total matching: {len(matches)})."
-        lines = [f"{len(matches)} matching; showing {offset}-{offset + len(page) - 1}", "id | tool | severity | rule | location | triage | message"]
+        lines = [
+            f"{len(matches)} matching; showing {offset}-{offset + len(page) - 1}",
+            "id | tool | severity | rule | location | triage | message",
+        ]
         for finding, state in page:
             location = f"{finding.file}:{finding.line}" if finding.line else finding.file
             message = " ".join(finding.message.split())[:220]
-            lines.append(f"{finding.id} | {finding.tool} | {finding.severity} | {finding.category} | {location} | {state} | {message}")
+            lines.append(
+                f"{finding.id} | {finding.tool} | {finding.severity} | {finding.category} | {location} | {state} | "
+                f"{message}"
+            )
         if offset + len(page) < len(matches):
             lines.append(f"... more: call again with offset={offset + len(page)}")
         return "\n".join(lines)
@@ -581,7 +922,10 @@ class ReviewWorkspace:
                 )
         for cls in self.classes.values():
             if needle in cls.qualname.lower():
-                rows.append(f"class | {cls.id} | {cls.file}:{cls.start_line}-{cls.end_line} | methods={cls.method_count} | loc={cls.loc}")
+                rows.append(
+                    f"class | {cls.id} | {cls.file}:{cls.start_line}-{cls.end_line} | methods={cls.method_count} | "
+                    f"loc={cls.loc}"
+                )
         if not rows:
             return f"No function or class matching '{name}' in the dependency graph (only Python is indexed)."
         return "\n".join([f"{len(rows)} match(es)", *rows[:limit], f"({_ZERO_CALLERS_NOTE})"])
@@ -589,7 +933,9 @@ class ReviewWorkspace:
     def _file_lines(self, rel_path: str) -> list[str]:
         if rel_path not in self._text_cache:
             try:
-                self._text_cache[rel_path] = (self.repo_path / rel_path).read_text(encoding="utf-8", errors="replace").splitlines()
+                self._text_cache[rel_path] = (
+                    (self.repo_path / rel_path).read_text(encoding="utf-8", errors="replace").splitlines()
+                )
             except OSError:
                 self._text_cache[rel_path] = []
         return self._text_cache[rel_path]
@@ -656,9 +1002,13 @@ class ReviewWorkspace:
             reverse = self.maps.imported_by()
             for path in files[:20]:
                 if direction in ("imports", "both"):
-                    out.append(f"{path} imports: {', '.join(sorted(self.maps.import_edges.get(path, ()))[:limit]) or '-'}")
+                    out.append(
+                        f"{path} imports: {', '.join(sorted(self.maps.import_edges.get(path, ()))[:limit]) or '-'}"
+                    )
                 if direction in ("imported_by", "both"):
-                    out.append(f"{path} imported by: {', '.join(sorted(reverse.get(path, ()))[:limit]) or '- (nothing)'}")
+                    out.append(
+                        f"{path} imported by: {', '.join(sorted(reverse.get(path, ()))[:limit]) or '- (nothing)'}"
+                    )
             if len(files) > 20:
                 out.append(f"... {len(files) - 20} more files match '{module}' — narrow the query")
         return "\n".join(out) or (
@@ -691,13 +1041,16 @@ class ReviewWorkspace:
                     f"deps: {', '.join(r.dependencies) or '-'}"
                 )
             if self.maps.mounts and offset == 0 and not flagged_only:
-                lines.append("Mounted sub-apps (no FastAPI dependencies apply): " + "; ".join(
-                    f"{m.path} -> {m.target} ({m.file}:{m.line})" for m in self.maps.mounts))
+                lines.append(
+                    "Mounted sub-apps (no FastAPI dependencies apply): "
+                    + "; ".join(f"{m.path} -> {m.target} ({m.file}:{m.line})" for m in self.maps.mounts)
+                )
             return "\n".join(lines)
         rows = [
             e
             for e in self.manifest.endpoints
-            if (not path_contains or path_contains in e.path) and (not method or str(e.method).upper() == method.upper())
+            if (not path_contains or path_contains in e.path)
+            and (not method or str(e.method).upper() == method.upper())
         ]
         if not rows:
             return "No endpoints detected (Discovery detects Python web frameworks only; grep for others)."
@@ -718,12 +1071,14 @@ class ReviewWorkspace:
             return "\n".join(f"{len(callees)} callees | {fid}" for fid, callees in ranked) or "No resolved calls."
         if kind == "size":
             ranked = sorted(self.functions.values(), key=lambda f: f.loc, reverse=True)[:limit]
-            return "\n".join(f"{f.loc} loc | {f.id} | {f.file}:{f.start_line}" for f in ranked) or "No functions indexed."
+            return (
+                "\n".join(f"{f.loc} loc | {f.id} | {f.file}:{f.start_line}" for f in ranked) or "No functions indexed."
+            )
         complexity = [f for f in self.static_by_id.values() if f.tool in ("radon", "lizard")]
         complexity.sort(key=lambda f: (f.severity != "error", f.file, f.line or 0))
-        return "\n".join(f"{f.tool} | {f.severity} | {f.file}:{f.line} | {f.message[:160]}" for f in complexity[:limit]) or (
-            "No complexity findings."
-        )
+        return "\n".join(
+            f"{f.tool} | {f.severity} | {f.file}:{f.line} | {f.message[:160]}" for f in complexity[:limit]
+        ) or ("No complexity findings.")
 
     # ------------------------------------------------------------------
     # Write-side: specialists
@@ -754,6 +1109,10 @@ class ReviewWorkspace:
             errors += doc_errors
         errors += self._check_links(args.kpi_ids, args.static_finding_ids)
         errors += self._check_dead_module_claim(args.title, refs)
+        errors += self._check_backend_scope(category, refs)
+        syntax = self._check_syntax_claim(f"{args.title} {args.description} {args.impact}", [r.file for r in refs])
+        if syntax:
+            errors.append(syntax.removeprefix("NOT RECORDED — "))
         if errors or not refs:
             with self._lock:
                 self.invalid_evidence_bounces += 1
@@ -780,6 +1139,7 @@ class ReviewWorkspace:
                 evidence=tuple(refs),
                 kpi_ids=tuple(dict.fromkeys(args.kpi_ids)),
                 static_finding_ids=tuple(dict.fromkeys(args.static_finding_ids)),
+                exposure=args.exposure,
             )
         note = ""
         if args.severity in ("Critical", "High") and self._all_unreachable(refs):
@@ -808,7 +1168,7 @@ class ReviewWorkspace:
         errors += self._check_links(args.kpi_ids or [], args.static_finding_ids or [])
         if errors:
             return "NOT UPDATED — fix and retry: " + "; ".join(errors)
-        for field in ("severity", "confidence"):
+        for field in ("severity", "confidence", "exposure"):
             if getattr(args, field) is not None:
                 changes[field] = getattr(args, field)
         for field in ("title", "description", "impact"):
@@ -840,7 +1200,10 @@ class ReviewWorkspace:
         lines += [f"{f.id} | {f.severity} | {f.confidence} | {f.title}" for f in mine]
         if category.owns_security_kpis:
             missing = [k.id for k in self.config.security_kpis if k.id not in assessed]
-            lines.append(f"KPIs assessed: {len(assessed)}/{len(self.config.security_kpis)}; missing: {', '.join(missing) or 'none'}")
+            lines.append(
+                f"KPIs assessed: {len(assessed)}/{len(self.config.security_kpis)}; missing: "
+                f"{', '.join(missing) or 'none'}"
+            )
         owned = [t for t, owner in self.config.static_tool_owners.items() if owner == category.id]
         if owned:
             untriaged = sum(1 for f in self.static_by_id.values() if f.tool in owned and f.id not in self.triage)
@@ -868,7 +1231,10 @@ class ReviewWorkspace:
                     accepted += 1
         parts = [f"Triaged {accepted} as {args.verdict}."]
         if foreign:
-            parts.append(f"Ignored {len(foreign)} owned by another category (you triage only: {', '.join(sorted(owned)) or 'none'}).")
+            parts.append(
+                f"Ignored {len(foreign)} owned by another category (you triage only: "
+                f"{', '.join(sorted(owned)) or 'none'})."
+            )
         if unknown:
             parts.append(f"Unknown ids: {', '.join(unknown[:10])}.")
         return " ".join(parts)
@@ -880,7 +1246,7 @@ class ReviewWorkspace:
             f.id
             for f in self.static_by_id.values()
             if f.tool == args.tool
-            and f.category == args.rule
+            and (f.category == args.rule or _group_key(f) == args.rule.lower())
             and f.id not in self.triage
             and (not glob or fnmatch.fnmatch(f.file, glob))
         ]
@@ -897,6 +1263,8 @@ class ReviewWorkspace:
         leads: dict[str, list[str]] = defaultdict(list)
         for finding in self.static_by_id.values():
             rule = finding.category.rsplit(".", 1)[-1]
+            if rule.startswith("web-") and not self.frontend_in_scope:
+                continue
             for kpi_id in _KPI_RULES.get(rule, ()):
                 leads[kpi_id].append(f"{finding.file}:{finding.line} ({finding.tool} {rule})")
         for mount in self.maps.mounts:
@@ -906,7 +1274,12 @@ class ReviewWorkspace:
                 leads["KPI-01"].append(f"{route.file}:{route.line} (auth entry point {route.method} {route.path})")
         for read in self.maps.env_reads:
             if read.default and any(
-                flag in ("points at localhost/loopback", "contains a private IP address", "points at a dev/staging/test host")
+                flag
+                in (
+                    "points at localhost/loopback",
+                    "contains a private IP address",
+                    "points at a dev/staging/test host",
+                )
                 for flag in classify_env_value(read.key, read.default.strip("'\""))
             ):
                 leads["KPI-10"].append(f"{read.file}:{read.line} ({read.key} defaults to a local/dev/private host)")
@@ -924,6 +1297,7 @@ class ReviewWorkspace:
         def add(label: str, rows: list[tuple[str, str]]) -> None:
             if rows:
                 groups.append((label, frozenset(f for f, _ in rows), [r for _, r in rows]))
+                self._lead_rows[(category_id, label)] = list(rows)
 
         def static_rows(*rules: str) -> list[tuple[str, str]]:
             # Keyed "file:line": a static lead is addressed only by a finding citing near
@@ -936,67 +1310,128 @@ class ReviewWorkspace:
 
         routes = self.maps.routes
         if category_id == "security":
-            add("Routes taking a user identity from the request with no token verification (CLIENT-ASSERTED IDENTITY)",
-                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line}; {', '.join(r.identity_inputs)})")
-                 for r in routes if "CLIENT-ASSERTED IDENTITY" in r.flags])
-            add("Mounted sub-apps that FastAPI dependencies do not protect",
-                [(m.file, f"{m.path} -> {m.target[:60]} ({m.file}:{m.line})") for m in self.maps.mounts])
-            add("Upload filenames reaching filesystem paths (semgrep)", static_rows("python-upload-filename-path-traversal"))
+            add(
+                "Routes taking a user identity from the request with no token verification (CLIENT-ASSERTED IDENTITY)",
+                [
+                    (r.file, f"{r.method} {r.path} ({r.file}:{r.line}; {', '.join(r.identity_inputs)})")
+                    for r in routes
+                    if "CLIENT-ASSERTED IDENTITY" in r.flags
+                ],
+            )
+            add(
+                "Mounted sub-apps that FastAPI dependencies do not protect",
+                [(m.file, f"{m.path} -> {m.target[:60]} ({m.file}:{m.line})") for m in self.maps.mounts],
+            )
+            add(
+                "Upload filenames reaching filesystem paths (semgrep)",
+                static_rows("python-upload-filename-path-traversal"),
+            )
             for rule, label in _SECURITY_LEAD_RULES.items():
                 add(f"{label} (semgrep {rule})", static_rows(rule))
-            add("Queries that receive the caller's identity but never use it (possible global data exposure)",
-                [(f"{x.file}:{x.line}", f"{x.function} ({x.file}:{x.line}) ignores {x.identity}")
-                 for x in self.maps.identity_unused])
-            add("Objects addressed by an id in the path with no verified user (IDOR / enumeration)",
-                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line}; {r.auth_label})")
-                 for r in routes if re.search(r"\{[^}]*(id|thread|key|name)[^}]*\}", r.path, re.IGNORECASE)
-                 and not r.user_token_verified and not r.is_auth_entry])
+            add(
+                "Queries that receive the caller's identity but never use it (possible global data exposure)",
+                [
+                    (f"{x.file}:{x.line}", f"{x.function} ({x.file}:{x.line}) ignores {x.identity}")
+                    for x in self.maps.identity_unused
+                ],
+            )
+            add(
+                "Objects addressed by an id in the path with no verified user (IDOR / enumeration)",
+                [
+                    (r.file, f"{r.method} {r.path} ({r.file}:{r.line}; {r.auth_label})")
+                    for r in routes
+                    if re.search(r"\{[^}]*(id|thread|key|name)[^}]*\}", r.path, re.IGNORECASE)
+                    and not r.user_token_verified
+                    and not r.is_auth_entry
+                ],
+            )
         elif category_id == "auth":
-            add("Auth entry points (rate limiting, enumeration, OTP/reset flows)",
-                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.is_auth_entry])
+            add(
+                "Auth entry points (rate limiting, enumeration, OTP/reset flows)",
+                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.is_auth_entry],
+            )
             add("Insecure secret defaults (semgrep)", static_rows("python-insecure-secret-default"))
         elif category_id == "inputs":
-            add("Upload handlers (FILE UPLOAD routes)",
-                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.accepts_upload])
+            add(
+                "Upload handlers (FILE UPLOAD routes)",
+                [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.accepts_upload],
+            )
         elif category_id == "frontend":
-            add("Pages rendered without an auth guard (the page must fetch before redirecting)",
-                [(f"{x.file}:{x.line}", f"{x.path} -> <{x.component}> ({x.file}:{x.line})") for x in self.maps.unguarded_routes])
-            add("Frontend security hits (semgrep web rules)", [
-                (f.file, f"{f.file}:{f.line} ({f.category.rsplit('.', 1)[-1]})")
-                for f in self.static_by_id.values() if f.category.rsplit(".", 1)[-1].startswith("web-")
-            ])
+            add(
+                "Pages rendered without an auth guard (the page must fetch before redirecting)",
+                [
+                    (f"{x.file}:{x.line}", f"{x.path} -> <{x.component}> ({x.file}:{x.line})")
+                    for x in self.maps.unguarded_routes
+                ],
+            )
+            add(
+                "Frontend security hits (semgrep web rules)",
+                [
+                    (f.file, f"{f.file}:{f.line} ({f.category.rsplit('.', 1)[-1]})")
+                    for f in self.static_by_id.values()
+                    if f.category.rsplit(".", 1)[-1].startswith("web-")
+                ],
+            )
         elif category_id == "integration":
-            add("Environment keys with divergent inline defaults",
-                [(r.file, f"{key}: {r.default} @ {r.file}:{r.line}")
-                 for key, reads in self.maps.env_divergent_defaults().items() for r in reads])
-            add("Frontend calls with no backend route", [(c.file, f"{c.path} ({c.file}:{c.line})")
-                                                         for c in self.maps.unmatched_client_calls()])
+            add(
+                "Environment keys with divergent inline defaults",
+                [
+                    (r.file, f"{key}: {r.default} @ {r.file}:{r.line}")
+                    for key, reads in self.maps.env_divergent_defaults().items()
+                    for r in reads
+                ],
+            )
+            add(
+                "Frontend calls with no backend route",
+                []
+                if not self.frontend_in_scope
+                else [(c.file, f"{c.path} ({c.file}:{c.line})") for c in self.maps.unmatched_client_calls()],
+            )
         elif category_id == "performance":
             add("Blocking calls inside async functions (semgrep)", static_rows("python-blocking-call-in-async-def"))
-            add("Process-local state (singletons, caches, flags, semaphores: one process only, lost on restart)",
-                [(f"{x.file}:{x.line}", f"{x.name} ({x.file}:{x.line}): {x.kind}") for x in self.maps.process_state])
+            add(
+                "Process-local state (singletons, caches, flags, semaphores: one process only, lost on restart)",
+                [(f"{x.file}:{x.line}", f"{x.name} ({x.file}:{x.line}): {x.kind}") for x in self.maps.process_state],
+            )
             add("Local on-disk vector stores (semgrep)", static_rows("python-local-vector-store"))
             add("Model / embedding calls inside loops (semgrep)", static_rows("python-model-call-in-loop"))
-            add("Whole-collection recomputation (rerank / rescore / reindex / all items; check if it runs per event)",
-                static_rows("python-whole-collection-recompute"))
-            add("Collection endpoints with no pagination input",
-                [(r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
-                 for r in routes if r.is_unpaginated_listing])
+            add(
+                "Whole-collection recomputation (rerank / rescore / reindex / all items; check if it runs per event)",
+                static_rows("python-whole-collection-recompute"),
+            )
+            add(
+                "Collection endpoints with no pagination input",
+                [
+                    (r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
+                    for r in routes
+                    if r.is_unpaginated_listing
+                ],
+            )
         elif category_id == "correctness":
-            entry_points = [(r.file, r.handler, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.accepts_upload]
+            entry_points = [
+                (r.file, r.handler, f"{r.method} {r.path} ({r.file}:{r.line})") for r in routes if r.accepts_upload
+            ]
             entry_points += [
-                (job.file, job.function, f"background job {job.function} ({job.file}:{job.line}, started at {job.started_at})")
-                for job in self.maps.background_jobs if job.file
+                (
+                    job.file,
+                    job.function,
+                    f"background job {job.function} ({job.file}:{job.line}, started at {job.started_at})",
+                )
+                for job in self.maps.background_jobs
+                if job.file
             ]
             if entry_points:
                 files: set[str] = set()
                 for file, function, _ in entry_points:
                     files |= self._reachable_files(file, function, depth=2)
-                groups.append((
-                    "Core pipelines to trace end to end (upload handlers and background jobs; their callees are in scope)",
-                    frozenset(files),
-                    [row for _, _, row in entry_points],
-                ))
+                groups.append(
+                    (
+                        "Core pipelines to trace end to end (upload handlers and background jobs; their callees are "
+                        "in scope)",
+                        frozenset(files),
+                        [row for _, _, row in entry_points],
+                    )
+                )
             if self.system_docs:
                 # Every bullet / numbered line is a checkable claim about the system; headings as fallback.
                 claims = [
@@ -1011,32 +1446,45 @@ class ReviewWorkspace:
                     for n, line in enumerate(text.splitlines(), start=1)
                     if line.startswith("#") and line.lstrip("#").strip()
                 ]
-                groups.append((
+                groups.append(
                     (
-                        "Rules the developers documented in AGENTS.md — check each against the code; record every "
-                        "divergence with violates_documented_rule='<path>:<line>' of the rule it breaks"
-                    ),
-                    frozenset(path for path, _ in self.system_docs),
-                    headings[:40] or [path for path, _ in self.system_docs],
-                ))
-            add("Values rewritten during extraction (semgrep)", static_rows("python-silent-value-substitution"))
+                        (
+                            "Rules the developers documented in AGENTS.md — check each against the code; record every "
+                            "divergence with violates_documented_rule='<path>:<line>' of the rule it breaks"
+                        ),
+                        frozenset(path for path, _ in self.system_docs),
+                        headings[:40] or [path for path, _ in self.system_docs],
+                    )
+                )
             add("Random identifiers (semgrep)", static_rows("python-random-identifier"))
             add("Work claims / locks / in-progress flags (semgrep)", static_rows("python-claim-flag-or-lock"))
-            add("Document text lowercased at extraction (semgrep)", static_rows("python-lowercased-extracted-text"))
         elif category_id == "llm":
-            add("LangGraph graphs compiled without a checkpointer (semgrep)",
-                static_rows("python-langgraph-compile-without-checkpointer"))
+            add(
+                "LangGraph graphs compiled without a checkpointer (semgrep)",
+                static_rows("python-langgraph-compile-without-checkpointer"),
+            )
             add("Model calls inside loops (semgrep)", static_rows("python-model-call-in-loop"))
-            add("Document text lowercased before embedding / prompting (semgrep)",
-                static_rows("python-lowercased-extracted-text"))
         elif category_id == "maintainability":
             by_dir: dict[str, list[str]] = defaultdict(list)
             for path in self.maps.unreachable:
                 by_dir[str(PurePosixPath(path).parent)].append(path)
-            add("Backend routes no frontend code calls — an API route is NOT dead just because this frontend skips it; "
+            add(
+                "Backend routes no frontend code calls — an API route is NOT dead just because this frontend skips it; "
                 "record at most ONE grouped finding, only for routes nothing else uses (scripts, other services, docs)",
-                [(r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
-                 for r in self.maps.routes_without_client()])
+                [
+                    (
+                        r.file,
+                        f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})"
+                        + (
+                            f" — DOCUMENTED in {self.maps.documented_routes[r.path]}: an external contract unless the "
+                            "docs are stale"
+                            if r.path in self.maps.documented_routes
+                            else ""
+                        ),
+                    )
+                    for r in self.maps.routes_without_client()
+                ],
+            )
             if by_dir:
                 lines = {f.path: f.lines or 0 for f in self.manifest.files}
                 sized = sorted(
@@ -1044,31 +1492,287 @@ class ReviewWorkspace:
                     key=lambda row: -row[2],
                 )
                 total = sum(n for _, _, n in sized)
-                groups.append((
+                groups.append(
                     (
-                        f"Modules no application root imports — {len(self.maps.unreachable)} modules, ~{total:,} "
-                        "lines of dead-code candidates. Confirm, then record ONE grouped dead-code finding sized "
-                        "in lines (not one per folder)"
-                    ),
-                    frozenset(self.maps.unreachable),
-                    [f"{d}/ ({n} modules, {loc:,} lines)" for d, n, loc in sized],
-                ))
+                        (
+                            f"Modules no application root imports — {len(self.maps.unreachable)} modules, ~{total:,} "
+                            "lines of dead-code candidates. Confirm, then record ONE grouped dead-code finding sized "
+                            "in lines (not one per folder)"
+                        ),
+                        frozenset(self.maps.unreachable),
+                        [f"{d}/ ({n} modules, {loc:,} lines)" for d, n, loc in sized],
+                    )
+                )
             clones: Counter[str] = Counter()
             for f in self.static_by_id.values():
                 if f.tool == "jscpd":
                     match = re.search(r"\((\d+) lines", f.message)
                     clones[f.file] += int(match.group(1)) if match else 0
-            add("Largest duplicated code (jscpd): parallel implementations to name, e.g. near-identical orchestrators",
-                [(path, f"{path}: {n:,} duplicated lines") for path, n in clones.most_common(12) if n >= 30])
+            add(
+                "Largest duplicated code (jscpd): parallel implementations to name, e.g. near-identical orchestrators",
+                [(path, f"{path}: {n:,} duplicated lines") for path, n in clones.most_common(12) if n >= 30],
+            )
         elif category_id == "secrets":
-            add(".env files with flagged keys (weak/short/localhost/browser-exposed/duplicates)",
-                [(f.file, f"{f.file}: " + "; ".join(f"{k} {flag}" for k, flag in f.flags[:6])
-                  + (f"; duplicates: {', '.join(k for k, _ in f.duplicates)}" if f.duplicates else ""))
-                 for f in self.maps.env_files if f.flags or f.duplicates])
+            add(
+                ".env files with flagged keys (weak/short/localhost/browser-exposed/duplicates)",
+                [
+                    (
+                        f.file,
+                        f"{f.file}: "
+                        + "; ".join(f"{k} {flag}" for k, flag in f.flags[:6])
+                        + (f"; duplicates: {', '.join(k for k, _ in f.duplicates)}" if f.duplicates else ""),
+                    )
+                    for f in self.maps.env_files
+                    if f.flags or f.duplicates
+                ],
+            )
             add("Insecure secret defaults (semgrep)", static_rows("python-insecure-secret-default"))
+        for rule, label in _LANE_RULE_LEADS.get(category_id, {}).items():
+            add(f"{label} (semgrep {rule})", static_rows(rule))
+        self._signal_leads(category_id, add)
         for label, _ in self._absence_leads(category_id):
             groups.append((label, frozenset(), ["confirm the absence (the static search found nothing) and record it"]))
         return groups
+
+    def _signal_leads(self, category_id: str, add) -> None:
+        """Leads from runtime_signals.md: behaviour of the running system no linter reports."""
+        sig = self.maps.signals
+
+        def rows(signals) -> list[tuple[str, str]]:
+            return [
+                (f"{x.file}:{x.line}" if x.line else x.file, x.row if x.line else f"{x.text} ({x.file})")
+                for x in signals
+            ]
+
+        # Keyed by file (not file:line) and closed only by a finding NAMING the function: a defect deep
+        # inside a long function is still about that function.
+        if category_id == "correctness":
+            add(
+                "Hotspots — functions that combine several kinds of side effect. For each, walk every failure "
+                "path: a step failing after an earlier one committed, two concurrent calls, a retry, a crash "
+                "mid-way. Where is state left inconsistent, a lock or record stuck, work duplicated or lost?",
+                [(x.file, x.row) for x in sig.hotspots],
+            )
+        if category_id == "security":
+            add(
+                "Route handlers with the most powerful side effects — who can call each (authn AND authz: is any "
+                "logged-in user allowed?), what caller input reaches the file, network, subprocess or database "
+                "effect, and is it constrained? For outbound messaging: who may send to whom, with what content "
+                "(an open relay or phishing from the organisation's own sender)?",
+                [(x.file, x.row) for x in sig.hotspots if "route handler" in x.text],
+            )
+        if category_id in ("integration", "auth"):
+            add(
+                "Credentials accepted in the query string (proxy/server logs, browser history, referrers)",
+                rows(sig.query_credentials),
+            )
+        if category_id == "secrets":
+            add(
+                "Secrets / personal data shipped with the code or baked into the image — not committed to git is not "
+                "enough when the build context or delivered tree carries them",
+                rows(sig.packaged_artifacts),
+            )
+            add(
+                "Deploy manifests: env keys set twice (last writer wins) or pointing at local/dev targets",
+                rows([x for x in sig.deploy_env if "privileged" not in x.text and "count = 1" not in x.text]),
+            )
+        if category_id == "security":
+            add("Containers deployed privileged", rows([x for x in sig.deploy_env if "privileged" in x.text]))
+            add(
+                "Third-party services that receive application data — which personal data goes to each, is it "
+                "minimized, documented and covered by the users' consent (one grouped finding)",
+                rows(sig.data_processors),
+            )
+        if category_id == "correctness":
+            add(
+                "Request-scoped DB sessions/connections passed to background work — used after the request "
+                "closed them, or shared across concurrent tasks",
+                rows(sig.request_resource_in_background),
+            )
+            add(
+                "Tasks started fire-and-forget — failures vanish, work is lost on shutdown",
+                rows(sig.fire_and_forget_tasks),
+            )
+            add(
+                "Session/connection dependencies with no cleanup on error (pool exhaustion)",
+                rows(sig.leaky_session_dependencies),
+            )
+            add(
+                "Text cleaning that rewrites identifier characters — follow the cleaned text to every later "
+                "use (matching, dedup, contact details, dates, scoring): what no longer matches the original?",
+                rows(sig.lossy_text_cleaning),
+            )
+        if category_id == "security":
+            add(
+                "Security controls defined but applied nowhere — the protection the code suggests is not active",
+                rows(sig.unwired_security_controls),
+            )
+            add(
+                "Response models that hand secrets to the client (password hashes, tokens, keys)",
+                rows(sig.sensitive_response_fields),
+            )
+        if category_id == "integration":
+            add(
+                "Scripts that record a schema version without applying it — what does a fresh or existing "
+                "database look like after this runs?",
+                rows(sig.schema_marked_not_migrated),
+            )
+            add(
+                "ORM tables no migration creates — a fresh or production database will not have them",
+                rows(sig.tables_without_migration),
+            )
+        if category_id == "auth":
+            add(
+                "Identity written into the session without renewing it — can an id planted before login stay "
+                "valid after it (session fixation)?",
+                rows(sig.session_fixation),
+            )
+            add(
+                "Naive datetimes in token / OTP / session code (expiry and iat computed without a timezone)",
+                rows([x for x in sig.naive_datetimes if _AUTHISH_PATH.search(x.file)]),
+            )
+        if category_id == "integration":
+            add(
+                "Keys set to contradictory targets in different .env files (dev vs prod, local vs remote)",
+                [
+                    (f, f"{key} — {f}: {flags}")
+                    for key, per_file in self.maps.env_contradictions()
+                    for f, flags in per_file
+                ],
+            )
+        if category_id == "llm":
+            add(
+                "Chat / agent routes — trace what ONE request sends to the model: is history persisted or resent, "
+                "is there a per-user/session token or cost budget, are model and tool errors caught",
+                [
+                    (r.file, f"{r.method} {r.path} -> {r.handler} ({r.file}:{r.line})")
+                    for r in self.maps.routes
+                    if re.search(r"(?i)chat|agent|assistant|ask|conversation", r.path)
+                ],
+            )
+            add(
+                "Agent loops re-sending a growing message list (input tokens grow with every round)",
+                rows(sig.agent_loops),
+            )
+            add("Tool outputs handed to the model whole (no size bound)", rows(sig.unbounded_tool_output))
+            add("Files that call a model but never read token usage (cost is invisible)", rows(sig.usage_never_read))
+            add(
+                "Model / embedding clients built at import time (network at import, per-worker copies)",
+                rows(sig.model_clients_at_import),
+            )
+        elif category_id == "performance":
+            add(
+                "Sync model / embedding work reached from async code — each call freezes every request on the worker",
+                rows(sig.blocking_in_async),
+            )
+            add(
+                "Unbounded reads: whole tables / whole directories loaded per request (record ONE grouped finding "
+                "together with the unpaginated endpoints)",
+                rows(sig.unbounded_reads),
+            )
+            add(
+                "All-or-nothing startup: heavy init with no error handling, provider clients built at import time",
+                rows(sig.startup_fragility),
+            )
+            add("Whole-file JSON rewrites per event (O(events x file size) disk I/O)", rows(sig.whole_file_rewrites))
+            add(
+                "Deployment pinned to one instance (the process-local state above is why)",
+                rows([x for x in sig.deploy_env if "count = 1" in x.text]),
+            )
+        elif category_id == "observability":
+            if sig.print_live:
+                total = sum(n for _, n in sig.print_live)
+                add(
+                    f"print() used as logging in LIVE modules ({total} calls in {len(sig.print_live)} files) — cite "
+                    "these, "
+                    "not scripts",
+                    [(f, f"{f}: {n} print() calls") for f, n in sig.print_live[:15]],
+                )
+            add(
+                "Health endpoints that check no dependency (report healthy while the database/model is down)",
+                rows(sig.static_health),
+            )
+            add(
+                "Background jobs — where does a failure end up (log line only, in-memory/TTL state, or a durable "
+                "record that survives a restart)?",
+                [
+                    (f"{j.file}:{j.line}", f"{j.function} ({j.file}:{j.line}) started at {j.started_at}")
+                    for j in self.maps.background_jobs
+                    if j.file and j.file not in set(self.maps.unreachable)
+                ],
+            )
+        elif category_id == "testing":
+            add(
+                "CI / deploy pipelines with no test, lint or scan step (build -> deploy with no gate)",
+                [(p.file, f"{p.file}: stages {', '.join(p.stages) or 'unnamed'}") for p in sig.ci_without_checks],
+            )
+            add(
+                "Frontend calls with no backend route — broken contracts a contract/integration test would have caught",
+                [(c.file, f"{c.path} ({c.file}:{c.line})") for c in self.maps.unmatched_client_calls()],
+            )
+            add(
+                "Tests that cannot fail (no assertion) and credentials hard-coded in test/automation scripts",
+                rows(sig.weak_tests),
+            )
+            add(
+                "Deployment pipeline hygiene (sudo, curl | sh, secrets echoed, :latest images, --privileged)",
+                rows(sig.pipeline_hygiene),
+            )
+            if not sig.route_tests:
+                critical = [
+                    r
+                    for r in self.maps.routes
+                    if r.is_auth_entry or r.accepts_upload or "CLIENT-ASSERTED IDENTITY" in r.flags
+                ]
+                add(
+                    "Critical routes no test exercises — name them in the missing-tests finding (auth, authorization, "
+                    "uploads) rather than saying 'no tests' in general",
+                    [(r.file, f"{r.method} {r.path} ({r.file}:{r.line})") for r in critical][:40],
+                )
+        elif category_id == "dependencies":
+            add(
+                "Libraries doing the same job",
+                [(src, f"{fam}: {', '.join(pkgs)} ({src})") for fam, pkgs, src in sig.duplicate_libraries],
+            )
+            add(
+                "Declared dependencies nothing live imports (dead weight / attack surface)",
+                [(x.file, f"{x.text} ({x.file})") for x in sig.unused_dependencies],
+            )
+            add("Supply chain: missing lockfiles, unpinned base images", rows(sig.supply_chain))
+        elif category_id == "inputs":
+            add(
+                "External commands run with no timeout (a hostile document hangs the worker)",
+                rows(sig.subprocess_no_timeout),
+            )
+        elif category_id == "maintainability":
+            add(
+                "Executor nesting / single-worker thread pools (concurrency that is hard to reason about)",
+                rows(sig.executor_nesting),
+            )
+            add(
+                "Layers that import each other both ways (layering violation: core logic depends on the app layer)",
+                [
+                    (ex.split(" -> ", 1)[0], f"{a} <-> {b}: {ex}")
+                    for a, b, examples in sig.layer_cycles
+                    for ex in examples
+                ],
+            )
+        if category_id == "correctness":
+            add(
+                "Naive datetimes outside auth code (date math against aware values, wrong 'now' across timezones)",
+                rows([x for x in sig.naive_datetimes if not _AUTHISH_PATH.search(x.file)][:15]),
+            )
+        if category_id in ("maintainability", "correctness") and sig.parallel_implementations:
+            label = (
+                "Parallel implementations of one operation — name which one production uses and how the copies differ"
+                if category_id == "maintainability"
+                else "Parallel implementations of one operation — check whether the copies now process the same data "
+                "differently (a correctness bug)"
+            )
+            add(
+                label,
+                [(x.file, f"{name}: {x.row}") for name, sites in sig.parallel_implementations[:12] for x in sites],
+            )
 
     def _reachable_files(self, file: str, function: str, depth: int) -> set[str]:
         """``file`` plus the files of functions reachable from ``function`` within ``depth`` calls."""
@@ -1086,11 +1790,49 @@ class ReviewWorkspace:
         return files
 
     def _absence_leads(self, category_id: str) -> list[tuple[str, str]]:
-        return [
+        leads = [
             (f"Baseline with no trace anywhere in the code: {b.label}", b.mention)
             for b in self.maps.absent_baselines
             if b.lane == category_id
         ]
+        sig = self.maps.signals
+        leads += [
+            (f"Control with no trace anywhere in the live code: {label}", mention)
+            for lane, label, mention in sig.absent_controls
+            if lane == category_id
+        ]
+        if category_id == "dependencies" and any(
+            "no lockfile" in x.text or "no package-lock" in x.text for x in sig.supply_chain
+        ):
+            leads.append(
+                (
+                    (
+                        "Control with no trace anywhere in the live code: a dependency lockfile (transitive versions "
+                        "float between builds)"
+                    ),
+                    r"(?i)lock\s?-?file|lockfile|lock file|package-lock|poetry\.lock",
+                )
+            )
+        if category_id == "testing" and sig.ci_pipelines and not any(p.runs_scans for p in sig.ci_pipelines):
+            leads.append(
+                (
+                    "No CI/deploy pipeline runs a security or dependency scan (bandit/semgrep/pip-audit/npm "
+                    "audit/trivy/...)",
+                    r"(?i)scan|security (test|check)|dependency (audit|check)|sast",
+                )
+            )
+        if category_id == "testing" and self.maps.routes and not sig.route_tests:
+            leads.append(
+                (
+                    (
+                        f"No test drives the HTTP API ({len(sig.test_files)} test files, none uses "
+                        "TestClient/httpx/supertest): "
+                        "auth, authorization, uploads and the frontend/backend contract are untested"
+                    ),
+                    r"(?i)(integration|route|api|endpoint|contract|auth).{0,60}test|test.{0,60}(integration|route|api|endpoint|contract)",
+                )
+            )
+        return leads
 
     def untriaged_groups(self, category_id: str, threshold: float = 0.25) -> list[tuple[str, str, int]]:
         """``(tool, rule, count)`` of untriaged static findings this category owns — empty when coverage is fine."""
@@ -1099,13 +1841,49 @@ class ReviewWorkspace:
         if not mine:
             return []
         pending = [f for f in mine if f.id not in self.triage]
+        # A severe hit is never covered by the "most of it is triaged" allowance.
+        severe = [f for f in pending if f.severity in _SEVERE_STATIC]
         if len(pending) <= threshold * len(mine):
+            pending = severe
+        if not pending:
             return []
-        groups = Counter((f.tool, f.category) for f in pending)
+        groups = Counter((f.tool, _group_key(f)) for f in pending)
         return [(tool, rule, count) for (tool, rule), count in groups.most_common()]
 
-    def unaddressed_leads(self, category_id: str) -> list[tuple[str, list[str]]]:
-        mine = [f for f in self.findings.values() if f.category_id == category_id]
+    def unrecorded_true_positives(self, category_id: str) -> list[str]:
+        """Severe static hits the lane marked real that no finding (in any lane) reports.
+
+        A triage verdict alone never reaches the report's findings — a confirmed CVE or
+        injection sink that only lives in the triage table is a lost defect."""
+        owned = {t for t, owner in self.config.static_tool_owners.items() if owner == category_id}
+        texts = [" ".join([f.title, f.description, f.impact or ""]).lower() for f in self.findings.values()]
+        spans: dict[str, list[tuple[int, int]]] = defaultdict(list)
+        for f in self.findings.values():
+            for ref in f.evidence:
+                spans[ref.file].append((ref.line_start, ref.line_end or ref.line_start))
+        rows = []
+        for sf in self.static_by_id.values():
+            if (
+                sf.tool not in owned
+                or sf.severity not in _SEVERE_STATIC
+                or getattr(self.triage.get(sf.id), "verdict", None) != "true_positive"
+            ):
+                continue
+            rule = sf.category.lower()
+            package = sf.message.split()[0].lower() if sf.line is None and sf.message else ""
+            cited = sf.line is not None and any(
+                lo - _LEAD_LINE_TOLERANCE <= sf.line <= hi + _LEAD_LINE_TOLERANCE for lo, hi in spans.get(sf.file, ())
+            )
+            named = any(rule in t or (len(package) > 2 and re.search(rf"\b{re.escape(package)}\b", t)) for t in texts)
+            if not (cited or named):
+                where = f"{sf.file}:{sf.line}" if sf.line else sf.file
+                rows.append(f"{sf.id} [{sf.tool} {sf.category}, {sf.severity}] {where} — {sf.message[:140]}")
+        return rows
+
+    def unaddressed_leads(self, category_id: str, *, any_lane: bool = False) -> list[tuple[str, list[str]]]:
+        """Lead groups (or rows) no finding cites. ``any_lane``: a finding from ANY lane counts
+        (used for the report — a lead another lane recorded is covered, just not by its owner)."""
+        mine = [f for f in self.findings.values() if any_lane or f.category_id == category_id]
         spans: dict[str, list[tuple[int, int]]] = defaultdict(list)
         for f in mine:
             for ref in f.evidence:
@@ -1115,18 +1893,689 @@ class ReviewWorkspace:
             file, sep, line = key.rpartition(":")
             if sep and line.isdigit():
                 n = int(line)
-                return any(lo - _LEAD_LINE_TOLERANCE <= n <= hi + _LEAD_LINE_TOLERANCE for lo, hi in spans.get(file, ()))
+                return any(
+                    lo - _LEAD_LINE_TOLERANCE <= n <= hi + _LEAD_LINE_TOLERANCE for lo, hi in spans.get(file, ())
+                )
             return key in spans
 
-        missing = [
-            (label, rows)
-            for label, keys, rows in self.lane_leads(category_id)
-            if keys and not any(addressed(key) for key in keys)
-        ]
+        dismissed = {row for (cat, row) in self.dismissed_leads if cat == category_id}
+        missing: list[tuple[str, list[str]]] = []
+        for label, keys, rows in self.lane_leads(category_id):
+            if not keys or label in dismissed:
+                continue
+            pairs = self._lead_rows.get((category_id, label)) or [
+                (k, r) for k, r in zip(sorted(keys), rows, strict=False)
+            ]
+            if len(keys) <= _EACH_ROW_MAX_KEYS:
+                # Small groups are checked row by row: citing one row no longer hides the others
+                # (observed: one subprocess cited, another in the same group silently dropped).
+                texts = " ".join(
+                    f"{f.title} {f.description} " + " ".join(e.note or "" for e in f.evidence) for f in mine
+                )
+
+                def named(row: str, texts: str = texts) -> bool:
+                    # A row about a named symbol ("session_cache (file:22): ...") is covered only when a
+                    # finding names it — a citation near it in a big grouped finding is not enough.
+                    ident = _ROW_SYMBOL.match(row)
+                    return ident is None or ident.group(1) in texts
+
+                open_rows = [row for key, row in pairs if not (addressed(key) and named(row)) and row not in dismissed]
+                if open_rows:
+                    missing.append((label, open_rows))
+            elif not any(addressed(key) for key in keys) and not any(row in dismissed for _, row in pairs):
+                missing.append((label, rows))
         for label, mention in self._absence_leads(category_id):
-            if not any(re.search(mention, f"{f.title} {f.description}") for f in mine):
+            if label in dismissed:
+                continue
+            # A missing control needs a finding of its own: its title must name it (a passing
+            # mention in another finding's text used to close it — observed with the token budget).
+            strict = label.startswith("Control with no trace")
+            if not any(re.search(mention, f.title if strict else f"{f.title} {f.description}") for f in mine):
                 missing.append((label, ["confirm the absence (the static search found nothing) and record it"]))
         return missing
+
+    # ------------------------------------------------------------------
+    # Lead dismissals and file scopes
+    # ------------------------------------------------------------------
+
+    def dismiss_lead(self, category: ReviewCategory, args: "_DismissLeadArgs") -> str:
+        """Close lead rows: attach them to the finding that covers them, or dismiss them with a cited reason."""
+        if args.finding_id:
+            return self._attach_lead(category, args)
+        if _NON_REASON.search(args.reason):
+            return (
+                "NOT RECORDED — lack of time/budget, 'partially investigated' or 'covered elsewhere' is not a reason a "
+                "row is not a defect. If a finding covers it, call dismiss_lead again with finding_id=<that finding> "
+                "(the row is added to its evidence). Otherwise open the code and either record it or cite what makes "
+                "it safe."
+            )
+        if not self._cites_repository(args.reason):
+            return (
+                "NOT RECORDED — a dismissal must cite the repository code that shows the row is not a defect "
+                "(a `path:line` in the reason: the guard, the caller, the config that handles it). If you cannot "
+                "cite one, the row is a finding: record it."
+            )
+        needle = args.lead.strip().lower()
+        if (refused := _cleanup_only_reason(args.lead, args.reason)) is not None:
+            return refused
+        if len(needle) < 4:
+            return "NOT RECORDED — pass a distinctive part of the lead row (e.g. its file:line) or the group label."
+        self.lane_leads(category.id)  # refresh the row index
+        candidates: list[str] = []
+        for (cat, label), pairs in self._lead_rows.items():
+            if cat != category.id:
+                continue
+            if needle in label.lower():
+                candidates.append(label)
+            candidates += [row for _, row in pairs if needle in row.lower()]
+        candidates += [label for label, _ in self._absence_leads(category.id) if needle in label.lower()]
+        if not candidates:
+            return f"No lead of your lane matches '{args.lead}'. Use text from a row or label exactly as listed."
+        with self._lock:
+            for row in dict.fromkeys(candidates):
+                self.dismissed_leads[(category.id, row)] = args.reason.strip()[:600]
+        return f"Dismissed {len(set(candidates))} lead row(s)."
+
+    def _attach_lead(self, category: ReviewCategory, args: "_DismissLeadArgs") -> str:
+        """Add the matching lead rows' locations to one of the lane's findings (addresses them properly)."""
+        with self._lock:
+            finding = self.findings.get(args.finding_id or "")
+        if finding is None or finding.category_id != category.id:
+            return f"Unknown finding '{args.finding_id}' in your category."
+        needle = args.lead.strip().lower()
+        self.lane_leads(category.id)
+        keys = [
+            key
+            for (cat, label), pairs in self._lead_rows.items()
+            if cat == category.id
+            for key, row in pairs
+            if needle in row.lower() or needle in label.lower()
+        ]
+        refs = []
+        for key in dict.fromkeys(keys):
+            file, sep, line = key.rpartition(":")
+            evidence = (
+                EvidenceInput(file=file, line_start=int(line))
+                if sep and line.isdigit() and int(line) > 0
+                else EvidenceInput(file=key, line_start=1)
+            )
+            valid, _ = self.validate_evidence([evidence])
+            refs += valid
+        if not refs:
+            return f"No lead row of your lane matches '{args.lead}' with a citable location."
+        with self._lock:
+            known = {(e.file, e.line_start) for e in finding.evidence}
+            added = tuple(r for r in refs if (r.file, r.line_start) not in known)
+            self.findings[finding.id] = finding.model_copy(update={"evidence": finding.evidence + added})
+        return f"Attached {len(added)} lead location(s) to {finding.id} as evidence."
+
+    def record_hypotheses(self, category: ReviewCategory, args: _HypothesesArgs) -> str:
+        if len(args.system_model.strip()) < 120:
+            return (
+                "NOT RECORDED — describe the system model in 3-8 sentences (components, data flow, trust boundaries)."
+            )
+        known = {f.path for f in self.manifest.files}
+        errors, accepted = [], []
+        for n, item in enumerate(args.hypotheses, start=1):
+            files = [self._normalize_path(f) for f in item.files]
+            missing = [f for f in files if f not in known]
+            statement = item.statement.strip()
+            twin = self._similar_hypothesis(category.id, statement, [a for a, _ in accepted])
+            if len(statement) < 30:
+                errors.append(f"hypothesis {n}: state the suspected defect concretely")
+            elif not (
+                _CODE_ELEMENT.search(statement)
+                or any(PurePosixPath(f).stem.lower() in statement.lower() for f in files)
+            ):
+                errors.append(
+                    f"hypothesis {n}: name the code you suspect (function, class, route or file) — "
+                    "one concrete suspicion, not a category of risks"
+                )
+            elif len(_HEDGE.findall(statement)) >= 2 or (_HEDGE.search(statement) and re.search(r"\bor\b", statement)):
+                errors.append(
+                    f"hypothesis {n}: one concrete suspicion, not a hedged list of risks ('might … "
+                    "potentially … X or Y'). State what you think the code does wrong and where"
+                )
+            elif twin:
+                errors.append(f"hypothesis {n}: duplicates {twin} — record a different suspicion")
+            elif missing:
+                errors.append(f"hypothesis {n}: not repository files: {', '.join(missing)}")
+            else:
+                accepted.append((item.statement.strip()[:500], tuple(files)))
+        existing = [h for h in self.hypotheses.values() if h["lane"] == category.id]
+        if len(existing) + len(accepted) < _MIN_HYPOTHESES and not errors:
+            return (
+                f"NOT RECORDED — at least {_MIN_HYPOTHESES} repository-specific hypotheses are needed "
+                f"(you have {len(existing) + len(accepted)}). Derive them from the code you read, not from the leads."
+            )
+        with self._lock:
+            self.system_models[category.id] = args.system_model.strip()[:2000]
+            ids = []
+            for statement, files in accepted:
+                hid = f"H-{category.code}-{len([h for h in self.hypotheses.values() if h['lane'] == category.id]) + 1}"
+                self.hypotheses[hid] = {
+                    "lane": category.id,
+                    "statement": statement,
+                    "files": files,
+                    "outcome": None,
+                    "finding_id": None,
+                    "note": "",
+                }
+                ids.append(hid)
+        suffix = f" Not recorded: {'; '.join(errors)}." if errors else ""
+        return (
+            f"Recorded {', '.join(ids) or 'no'} hypotheses.{suffix} "
+            "Investigate each and resolve it with resolve_hypothesis."
+        )
+
+    def resolve_hypothesis(self, category: ReviewCategory, args: _ResolveHypothesisArgs) -> str:
+        with self._lock:
+            record = self.hypotheses.get(args.hypothesis_id)
+        if record is None or record["lane"] != category.id:
+            return f"Unknown hypothesis '{args.hypothesis_id}' in your lane."
+        if args.outcome == "confirmed":
+            finding = self.findings.get(args.finding_id or "")
+            if finding is None or finding.category_id != category.id:
+                return "NOT RECORDED — confirmed needs the id of the finding you recorded for it."
+            if not self._same_subject(record["statement"], f"{finding.title} {finding.description}"):
+                return (
+                    f"NOT RECORDED — {finding.id} ('{finding.title[:90]}') is about a different defect than "
+                    f"{args.hypothesis_id}. Confirm it with the finding that reports THIS suspicion (record one if "
+                    "it is real), or rule it out citing the code."
+                )
+        elif not self._cites_repository(args.note) or _NON_REASON.search(args.note):
+            return "NOT RECORDED — ruled_out needs the code that shows it is safe (a repository path:line in the note)."
+        elif (refused := _cleanup_only_reason(record["statement"], args.note)) is not None:
+            return refused
+        elif not self._note_matches(args.note, record["statement"], record["files"]):
+            return (
+                f"NOT RECORDED — this note does not address {args.hypothesis_id} ('{record['statement'][:100]}'). "
+                "Re-check which hypothesis you are closing and cite the code that decides it."
+            )
+        with self._lock:
+            record.update(outcome=args.outcome, finding_id=args.finding_id, note=args.note.strip()[:600])
+        return f"{args.hypothesis_id}: {args.outcome}."
+
+    @staticmethod
+    def _key_words(text: str) -> set[str]:
+        return set(re.findall(r"[a-z][a-z0-9_]{3,}", text.lower())) - _TITLE_STOPWORDS - _GENERIC_NOTE_WORDS
+
+    def _same_subject(self, statement: str, finding_text: str) -> bool:
+        """A finding confirms a hypothesis only when it talks about the same thing: 2+ key words in
+        common, generic risk vocabulary ("session", "hijacking", "unauthorized") not counted."""
+        shared = (self._key_words(statement) & self._key_words(finding_text)) - _GENERIC_RISK_WORDS
+        return len(shared) >= 2
+
+    def _similar_hypothesis(self, lane: str, statement: str, pending: list[str]) -> str | None:
+        words = self._key_words(statement)
+        others = [(hid, h["statement"]) for hid, h in self.hypotheses.items() if h["lane"] == lane]
+        others += [(f"hypothesis '{p[:40]}...'", p) for p in pending]
+        for ref, other in others:
+            theirs = self._key_words(other)
+            if words and theirs and len(words & theirs) / len(words | theirs) >= 0.7:
+                return ref
+        return None
+
+    def _note_matches(self, note: str, statement: str, files) -> bool:
+        """A note closes a hypothesis/lead only if it talks about it (shares its files or key words)."""
+        note_l = (note or "").lower()
+        if any(PurePosixPath(f).name.lower() in note_l for f in files):
+            return True
+        words = set(re.findall(r"[a-z][a-z0-9_]{3,}", statement.lower())) - _TITLE_STOPWORDS - _GENERIC_NOTE_WORDS
+        return len(words & set(re.findall(r"[a-z][a-z0-9_]{3,}", note_l))) >= 2
+
+    # ------------------------------------------------------------------
+    # Audit of negative conclusions (dismissed leads, ruled-out hypotheses)
+    # ------------------------------------------------------------------
+
+    def negatives_to_audit(self, category_id: str, limit: int = 12) -> list[dict[str, str]]:
+        """The lane's "this is safe" conclusions, for a second agent to check like any finding.
+
+        A wrong dismissal is as costly as a false finding and used to go unchecked (observed: a
+        stuck-lock lead dismissed because the release sat in a background task's finally block —
+        exactly the bug)."""
+        items: list[dict[str, str]] = []
+        for hid, h in self.hypotheses.items():
+            if h["lane"] == category_id and h["outcome"] == "ruled_out" and hid not in self.negative_audit:
+                items.append({"ref": hid, "kind": "ruled-out hypothesis", "claim": h["statement"], "reason": h["note"]})
+        for n, ((lane, row), reason) in enumerate(sorted(self.dismissed_leads.items()), start=1):
+            ref = f"D-{self.config.category(lane).code}-{n}" if lane == category_id else ""
+            if ref and ref not in self.negative_audit:
+                items.append({"ref": ref, "kind": "dismissed lead", "claim": row, "reason": reason})
+        return items[:limit]
+
+    def uphold_negative(self, category_id: str, args: "_UpholdArgs") -> str:
+        item = next((i for i in self.negatives_to_audit(category_id, limit=999) if i["ref"] == args.ref), None)
+        if item is None:
+            return f"Unknown or already judged item '{args.ref}'."
+        if not self._cites_repository(args.note):
+            return "NOT RECORDED — upholding needs the code you checked (a repository path:line in the note)."
+        if (refused := _cleanup_only_reason(item["claim"], args.note)) is not None:
+            return refused
+        with self._lock:
+            self.negative_audit[args.ref] = f"upheld: {args.note.strip()[:300]}"
+        return f"{args.ref}: upheld."
+
+    def overturn_negative(self, category: ReviewCategory, args: "_OverturnArgs") -> str:
+        item = next((i for i in self.negatives_to_audit(category.id, limit=999) if i["ref"] == args.ref), None)
+        if item is None:
+            return f"Unknown or already judged item '{args.ref}'."
+        record = _RecordFindingArgs(
+            title=args.title,
+            severity=args.severity,
+            confidence="high",
+            description=args.description,
+            impact=args.impact,
+            evidence=args.evidence,
+            exposure=args.exposure,
+        )
+        out = self.record_finding(category, record)
+        if not out.startswith("Recorded "):
+            return out
+        fid = out.split()[1]
+        with self._lock:
+            # Not marked verified: an overturn is a new claim and goes through independent verification
+            # like every other finding (observed: an audit "overturn" asserting a wrong library default).
+            finding = self.findings[fid]
+            self.findings[fid] = finding.model_copy(
+                update={
+                    "description": (
+                        f"{finding.description}\n\nRaised by the audit of a dismissed conclusion ({args.ref}): "
+                        f"{args.why_wrong.strip()[:600]}"
+                    )
+                }
+            )
+            self.negative_audit[args.ref] = f"overturned -> {fid}"
+            if args.ref in self.hypotheses:
+                self.hypotheses[args.ref].update(
+                    outcome="confirmed",
+                    finding_id=fid,
+                    note=f"ruling overturned by the verifier: {args.why_wrong[:200]}",
+                )
+            else:
+                # Kept (not deleted) so the other D- refs stay stable while the audit runs.
+                for key in [k for k in self.dismissed_leads if k[0] == category.id and k[1] == item["claim"]]:
+                    self.dismissed_leads[key] = f"dismissal overturned by the verifier → {fid}"
+        return f"{args.ref}: overturned; recorded {fid} (it will be independently verified)."
+
+    def open_hypotheses(self, category_id: str) -> list[str]:
+        return [
+            f"{hid}: {h['statement'][:160]}"
+            for hid, h in self.hypotheses.items()
+            if h["lane"] == category_id and h["outcome"] is None
+        ]
+
+    def hypothesis_rows(self) -> list[str]:
+        rows = []
+        for hid, h in self.hypotheses.items():
+            if h["outcome"] == "confirmed":
+                result = f"confirmed → {h['finding_id']}"
+            elif h["outcome"] == "ruled_out":
+                audit = self.negative_audit.get(hid, "")
+                result = f"ruled out — {h['note']}" + ("; verifier upheld" if audit.startswith("upheld") else "")
+            else:
+                result = "not resolved"
+            rows.append(f"{h['lane']} — {hid}: {h['statement']} [{result}]")
+        return rows
+
+    def lead_backed(self, finding: ReviewFinding) -> bool:
+        """True when the finding sits on a static lead or a static-tool hit (vs. the agent's own investigation)."""
+        if finding.static_finding_ids:
+            return True
+        cited = {(e.file, e.line_start) for e in finding.evidence}
+        cited_files = {e.file for e in finding.evidence}
+        for pairs in self._lead_rows.values():
+            for key, _row in pairs:
+                file, sep, line = key.rpartition(":")
+                if sep and line.isdigit():
+                    if any(f == file and abs(n - int(line)) <= _LEAD_LINE_TOLERANCE for f, n in cited):
+                        return True
+                elif key in cited_files:
+                    return True
+        for sf in self.static_by_id.values():
+            if any(sf.file == f and sf.line and abs(sf.line - n) <= 2 for f, n in cited):
+                return True
+        return False
+
+    def render_system_overview(self) -> str:
+        """A factual map of THIS system for the agents' first step (building their own system model)."""
+        maps, sig = self.maps, self.maps.signals
+        files = self.manifest.files
+        comps: dict[str, Counter] = defaultdict(Counter)
+        for f in files:
+            parts = PurePosixPath(f.path).parts
+            top = "/".join(parts[:2]) if len(parts) > 2 else parts[0] if len(parts) > 1 else "."
+            comps[top][f.language or "other"] += 1
+        lines = ["# System overview (static facts — build your own model of the system from these and the code)", ""]
+        lines.append("## Components (folder: files by language)")
+        for top, langs in sorted(comps.items(), key=lambda kv: -sum(kv[1].values()))[:20]:
+            lines.append(f"- {top}: " + ", ".join(f"{n} {lang}" for lang, n in langs.most_common(4)))
+        runtimes = self.declared_runtimes()
+        lines += [
+            "",
+            "## Declared runtime versions (judge syntax and semantics against THESE, not older releases): "
+            + ("; ".join(runtimes) or "none declared"),
+        ]
+        lines += ["", f"## Application entry points: {', '.join(maps.app_roots) or 'none detected'}"]
+        groups: dict[str, list] = defaultdict(list)
+        for r in maps.routes:
+            segs = [x for x in r.path.strip("/").split("/") if x and not x.startswith("{")]
+            groups["/" + "/".join(segs[:3])].append(r)
+        if groups:
+            lines += ["", f"## API surface ({len(maps.routes)} routes, grouped; auth = strongest check applied)"]
+            for prefix, routes in sorted(groups.items()):
+                auth = Counter(r.auth_label for r in routes)
+                flags = Counter(f for r in routes for f in r.flags)
+                lines.append(
+                    f"- {prefix}: {len(routes)} routes; auth "
+                    + ", ".join(f"{k} x{v}" for k, v in auth.items())
+                    + ("; flags " + ", ".join(f"{k} x{v}" for k, v in flags.items()) if flags else "")
+                )
+        stores = sorted(
+            {
+                pkg.lower()
+                for pkg in re.findall(
+                    r"(?i)\b(sqlalchemy|psycopg2?|asyncpg|sqlite3|redis|pymongo|motor|chromadb|qdrant|faiss|elasticsearch|"
+                    r"boto3|minio|celery|kafka|pika)\b",
+                    " ".join(py for py in self._python_sources()),
+                )
+            }
+        )
+        lines += [
+            "",
+            f"## Data stores and infrastructure libraries in live code: {', '.join(stores) or 'none detected'}",
+        ]
+        lines.append(
+            "## External services that receive data: "
+            + ("; ".join(x.text.split(" —")[0] for x in sig.data_processors) or "none detected")
+        )
+        lines.append(
+            f"## Background work ({len(maps.background_jobs)}): "
+            + "; ".join(f"{j.function} ({j.file}:{j.line})" for j in maps.background_jobs if j.file)[:1500]
+        )
+        lines.append(f"## Process-local state: {len(maps.process_state)} items (architecture.md)")
+        web = [f.path for f in files if f.path.endswith((".tsx", ".jsx", ".vue", ".svelte"))]
+        lines.append(
+            f"## Browser client: {len(web)} component files; {len(maps.client_calls)} API call paths "
+            f"({len(maps.unmatched_client_calls())} with no backend route)"
+        )
+        lines.append(
+            f"## Tests: {len(sig.test_files)} files ({len(sig.route_tests)} drive the API); CI/deploy pipelines: "
+            + (", ".join(p.file for p in sig.ci_pipelines) or "none")
+        )
+        docs = ", ".join(path for path, _ in self.system_docs)
+        lines.append(
+            f"## Developer-written system description (AGENTS.md): {docs or 'none — infer the intent from the code'}"
+        )
+        lines.append(
+            f"## Dead-code candidates: {len(maps.unreachable)} modules no entry point imports (reachability.md)"
+        )
+        return "\n".join(lines)
+
+    def _client_roots(self) -> list[str]:
+        if getattr(self, "_client_roots_cache", None) is None:
+            paths = [f.path for f in self.manifest.files]
+            roots = [str(PurePosixPath(p).parent) for p in paths if PurePosixPath(p).name == "package.json"]
+            self._client_roots_cache = [
+                r for r in roots if r != "." and not any(q.endswith(".py") and q.startswith(r + "/") for q in paths)
+            ]
+        return self._client_roots_cache
+
+    def is_client_path(self, path: str) -> bool:
+        """Browser-client code or build files (a client app folder, TS/JS sources, bundler config)."""
+        return bool(_CLIENT_FILE.search(path)) or any(path.startswith(r + "/") for r in self._client_roots())
+
+    def _check_backend_scope(self, category: ReviewCategory, refs) -> list[str]:
+        if self.frontend_in_scope or category.id == "frontend" or not refs:
+            return []
+        files = {r.file for r in refs}
+        if all(self.is_client_path(f) and not _ENV_TEMPLATE.search(f) for f in files):
+            return [
+                (
+                    "the evidence is only browser-client code, which is outside this backend review — cite the "
+                    "backend code involved (the route, the setting, the key it hands out), or drop it"
+                )
+            ]
+        return []
+
+    def _declared_python_floor(self) -> tuple[int, int] | None:
+        floors = []
+        for row in self.declared_runtimes():
+            m = re.search(r"(?:requires-python|python_requires)\s*>=?\s*(3)\.(\d+)|python:(3)\.(\d+)", row)
+            if m:
+                major, minor = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+                floors.append((int(major), int(minor)))
+        return max(floors) if floors else None
+
+    def _check_syntax_claim(self, text: str, files) -> str | None:
+        """A "cannot parse / import" claim is checked, not believed: the cited file must really fail to
+        compile, on an interpreter at least as new as the one the project declares."""
+        if not _SYNTAX_CLAIM.search(text or ""):
+            return None
+        floor = self._declared_python_floor()
+        for path in {f for f in files if f.endswith(".py")}:
+            try:
+                source = (self.repo_path / path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            try:
+                compile(source, path, "exec", dont_inherit=True)
+            except SyntaxError:
+                if floor and floor > sys.version_info[:2]:
+                    return (
+                        f"NOT RECORDED — {path} targets Python {floor[0]}.{floor[1]}+ (declared), newer than the "
+                        "parser available here; its syntax may be valid there (e.g. Python 3.14 accepts "
+                        "`except A, B:`). A syntax claim needs the failure on the declared version."
+                    )
+                continue
+            return (
+                f"NOT RECORDED — {path} compiles: the syntax/import-failure claim is false. Describe what the "
+                "code really does wrong, if anything."
+            )
+        return None
+
+    def declared_runtimes(self) -> list[str]:
+        """Interpreter / runtime versions the project declares.
+
+        Read from pyproject, .python-version, Dockerfiles and package.json."""
+        found: list[str] = []
+        patterns = (
+            (r"(?im)^\s*requires-python\s*=\s*[\"']([^\"']+)", "requires-python {}"),
+            (r"(?im)^\s*python_requires\s*=\s*[\"']([^\"']+)", "python_requires {}"),
+            (r"(?im)^\s*FROM\s+(?:[\w./-]+/)?python:([\w.${}:-]+)", "Docker python:{}"),
+            (r"(?im)^\s*ARG\s+PYTHON_VERSION\s*=\s*([\w.]+)", "Docker PYTHON_VERSION={}"),
+            (r'"node"\s*:\s*"([^"]+)"', "node {}"),
+            (r"(?im)^\s*FROM\s+(?:[\w./-]+/)?node:([\w.-]+)", "Docker node:{}"),
+        )
+        for entry in self.manifest.files:
+            name = PurePosixPath(entry.path).name.lower()
+            if name in (".python-version", ".nvmrc", ".tool-versions"):
+                try:
+                    text = (self.repo_path / entry.path).read_text(encoding="utf-8", errors="replace").strip()
+                    found.append(f"{entry.path}: {text.splitlines()[0][:40] if text else '?'}")
+                except OSError:
+                    pass
+                continue
+            if not (
+                name in ("pyproject.toml", "setup.cfg", "setup.py", "package.json") or name.startswith("dockerfile")
+            ):
+                continue
+            try:
+                text = (self.repo_path / entry.path).read_text(encoding="utf-8", errors="replace")[:100_000]
+            except OSError:
+                continue
+            for rx, fmt in patterns:
+                for value in re.findall(rx, text)[:2]:
+                    found.append(f"{entry.path}: " + fmt.format(value.strip()))
+        return list(dict.fromkeys(found))[:12]
+
+    def _python_sources(self):
+        dead = set(self.maps.unreachable)
+        for f in self.manifest.files:
+            if f.language == "Python" and f.path not in dead and not is_test_file(f.path):
+                try:
+                    yield (self.repo_path / f.path).read_text(encoding="utf-8", errors="replace")[:50_000]
+                except OSError:
+                    continue
+
+    def lane_scopes(self) -> dict[str, list[str]]:
+        """Which repository files each lane must open itself (directly or through its code-explorers).
+
+        Every live source file lands in at least one lane: a file no rule claims goes to
+        correctness (backend) or frontend (browser code). Dead modules are left to the
+        maintainability lane's reachability evidence — reading them adds nothing.
+        """
+        if self._scopes is not None:
+            return self._scopes
+        maps, sig = self.maps, self.maps.signals
+        dead = set(maps.unreachable)
+        code_langs_excluded = {"Markdown", "JSON", "YAML", "TOML"}
+        entries = {f.path: f for f in self.manifest.files}
+
+        def is_live_code(path: str) -> bool:
+            f = entries.get(path)
+            return bool(
+                f
+                and f.language
+                and f.language not in code_langs_excluded
+                and path not in dead
+                and not is_test_file(path)
+                and not f.skipped_due_to_size
+                and ((f.lines or 0) >= 5 if f.lines is not None else f.size_bytes >= 120)
+                and not path.endswith((".min.js", ".d.ts"))
+            )
+
+        live = sorted(p for p in entries if is_live_code(p))
+        web = [p for p in live if p.endswith((".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".mjs"))]
+        if not self.frontend_in_scope:
+            # Backend-first review: browser code is context only, in no lane's scope.
+            live = [p for p in live if p not in set(web)]
+            web = []
+        backend = [p for p in live if p not in set(web)]
+
+        # A top-level folder holding several code packages is a project container
+        # ("my-service/{app,src}"): its name says nothing about each file.
+        children: dict[str, set[str]] = defaultdict(set)
+        for p in live:
+            parts = PurePosixPath(p).parts
+            if len(parts) > 2:
+                children[parts[0]].add(parts[1])
+        containers = {top for top, subs in children.items() if len(subs) >= 2}
+
+        def rel(path: str) -> str:
+            parts = PurePosixPath(path).parts
+            return "/".join(parts[1:]) if len(parts) > 1 and parts[0] in containers else path
+
+        def match(rx: str, pool=live) -> set[str]:
+            return {p for p in pool if re.search(rx, "/" + rel(p), re.IGNORECASE)}
+
+        deploy = {
+            p
+            for p in entries
+            if re.search(
+                r"(?i)(^|/)(dockerfile[^/]*|jenkinsfile[^/]*|docker-compose[^/]*|compose\.ya?ml|\.gitlab-ci\.yml)$|/jenkins/|"
+                r"\.nomad$|\.github/workflows/|(^|/)k8s/|(^|/)helm/",
+                p,
+            )
+        }
+        # Operational scripts run against real environments (migrations, bootstrap, cron): the
+        # deploy-facing lanes must read them, not only the catch-all lane.
+        ops = {
+            p
+            for p in entries
+            if not is_test_file(p)
+            and "node_modules" not in p
+            and re.search(
+                r"(?i)(\.(sh|bash|sql)$|(^|/)(makefile|procfile|alembic\.ini|entrypoint[^/]*)$|(^|/)(migrations?|alembic)/)",
+                p,
+            )
+            and (entries[p].size_bytes or 0) > 0
+        }
+        manifests = {
+            p
+            for p in entries
+            if re.search(
+                r"(?i)(^|/)(requirements[^/]*\.(txt|in)|pyproject\.toml|package\.json|pipfile|setup\.(py|cfg))$", p
+            )
+            and "node_modules" not in p
+        }
+        templates = {
+            p
+            for p in entries
+            if is_sensitive_env_file(PurePosixPath(p).name) is False
+            and re.search(r"(?i)(^|/)\.env[^/]*(example|sample|template|dist)", p)
+        }
+        route_files = {r.file for r in maps.routes} & set(live)
+        upload_files: set[str] = set()
+        for r in maps.routes:
+            if r.accepts_upload:
+                upload_files |= self._reachable_files(r.file, r.handler, depth=2)
+        env_files = {r.file for r in maps.env_reads} & set(live)
+        model_files = {
+            x.file
+            for x in sig.usage_never_read
+            + sig.model_clients_at_import
+            + sig.blocking_in_async
+            + sig.agent_loops
+            + sig.unbounded_tool_output
+        }
+        job_files = {j.file for j in maps.background_jobs if j.file}
+        scopes: dict[str, set[str]] = {
+            "security": route_files | match(r"(auth|security|deps|middleware|permission|guard|export|html|iframe)"),
+            "auth": match(r"(auth|security|jwt|token|session|login|user|otp|password|deps)"),
+            "integration": env_files
+            | match(r"(config|settings|client|/api/|http|proxy|vite\.config|(^|/)main\.(py|tsx?))")
+            | deploy
+            | ops,
+            "frontend": set(web),
+            "observability": set(maps.app_roots)
+            | {f for f, _ in sig.print_live}
+            | job_files
+            | {x.file for x in sig.static_health},
+            "testing": set(sig.test_files) | deploy | ops,
+            "secrets": env_files | templates | deploy | match(r"(^|/)scripts?/"),
+            "performance": {x.file for x in maps.process_state}
+            | {x.file for x in sig.blocking_in_async}
+            | job_files
+            | {x.file for x in sig.unbounded_reads}
+            | {x.file for x in sig.startup_fragility}
+            | {r.file for r in maps.routes if r.is_unpaginated_listing},
+            "llm": model_files | match(r"(llm|agent|prompt|chat|rag|embed|vector|model|inference|transcri)"),
+            "inputs": upload_files | match(r"(upload|import|extract|pars|ocr|pdf|docx|media|audio|image|file|webhook)"),
+            "correctness": upload_files
+            | job_files
+            | match(r"(service|screen|scor|pipeline|extract|process|crud|repositor)", backend),
+            "maintainability": {x.file for _, sites in sig.parallel_implementations for x in sites}
+            | {ex.split(" -> ", 1)[0] for _, _, examples in sig.layer_cycles for ex in examples},
+            "dependencies": manifests | {p for p in deploy if "dockerfile" in p.lower()},
+        }
+        claimed = set().union(*scopes.values())
+        for path in live:
+            if path not in claimed:
+                scopes["frontend" if path in set(web) else "correctness"].add(path)
+        live_or_config = set(live) | deploy | manifests | templates | set(sig.test_files) | ops
+        if not self.frontend_in_scope:
+            # Client build config, client tests and whole client apps (a folder with a package.json
+            # and no Python) are not backend files; env templates stay (keys the backend hands out).
+            live_or_config = {p for p in live_or_config if p in templates or not self.is_client_path(p)}
+        self._scopes = {lane: sorted(p for p in paths if p in live_or_config) for lane, paths in scopes.items()}
+        return self._scopes
+
+    def unopened_scope(self, category_id: str, opened: set[str]) -> list[str]:
+        opened = {p.lstrip("/") for p in opened}
+        return [p for p in self.lane_scopes().get(category_id, []) if p not in opened]
+
+    def render_scopes(self) -> str:
+        lines = [
+            "# File scope per lane (every live source file is in at least one lane's scope)",
+            "Open every file of your lane — yourself or through code-explorer sweeps (their reads count).",
+            "",
+        ]
+        for lane, paths in self.lane_scopes().items():
+            lines.append(f"## {lane} ({len(paths)} files)")
+            lines += [f"- {p}" for p in paths] or ["- none"]
+            lines.append("")
+        return "\n".join(lines)
 
     def assess_kpi(self, args: _KpiArgs) -> str:
         kpi = next((k for k in self.config.security_kpis if k.id == args.kpi_id), None)
@@ -1198,6 +2647,62 @@ class ReviewWorkspace:
             + (f"{'; '.join(extras)}\n" if extras else "")
         )
 
+    def _cites_repository(self, text: str) -> bool:
+        known = {f.path for f in self.manifest.files}
+        for path in re.findall(r"([\w./\-]+\.[A-Za-z0-9]+):\d+", text or ""):
+            path = path.lstrip("/")
+            if path in known or any(k.endswith("/" + path) for k in known):
+                return True
+        return False
+
+    def _verdict_mismatch(self, finding: ReviewFinding, note: str) -> str | None:
+        """Refuse a verdict whose note is about different code than the finding (ids mixed up in a batch).
+
+        Observed: a verifier checking several findings recorded "rejected — password hashing is
+        fine (utils.py:19)" on the finding about unpaginated coupon lists.
+        """
+        cited = {m.lstrip("/") for m in re.findall(r"([\w./\-]+\.[A-Za-z0-9]+):\d+", note or "")}
+        own = {e.file for e in finding.evidence}
+        note_words = set(re.findall(r"[a-z][a-z0-9_]{2,}", (note or "").lower()))
+        if not cited:
+            # No citation to compare: the note must at least talk about this finding (its title or files).
+            finding_words = (
+                self._title_terms(finding.title)
+                | {
+                    w
+                    for e in finding.evidence
+                    for w in re.findall(r"[a-z][a-z0-9_]{2,}", PurePosixPath(e.file).stem.lower())
+                }
+                | set(re.findall(r"[a-z][a-z0-9_]{3,}", finding.description.lower())[:80])
+            )
+            if len((note or "").split()) >= 8 and not (finding_words & note_words):
+                return (
+                    f"NOT RECORDED — this note does not mention anything from {finding.id} "
+                    f"('{finding.title[:100]}'). Re-check which finding you are judging and cite its code."
+                )
+            return None
+        if any(c == f or f.endswith("/" + c) or c.endswith("/" + f) for c in cited for f in own):
+            return None
+        terms = self._title_terms(finding.title)
+        if terms & set(re.findall(r"[a-z][a-z0-9_]{2,}", (note or "").lower())):
+            return None
+        other = next(
+            (
+                f
+                for f in self.findings.values()
+                if f.id != finding.id
+                and f.category_id == finding.category_id
+                and any(c == e.file or e.file.endswith("/" + c) for c in cited for e in f.evidence)
+            ),
+            None,
+        )
+        hint = f" It matches {other.id} ('{other.title[:80]}') — did you mean that id?" if other else ""
+        return (
+            f"NOT RECORDED — this note cites {', '.join(sorted(cited))}, but {finding.id} is about "
+            f"'{finding.title[:100]}' ({', '.join(sorted(own)) or 'no files'}).{hint} Re-check which finding you are "
+            "judging."
+        )
+
     def submit_verification(self, category_id: str, args: _VerifyArgs) -> str:
         with self._lock:
             finding = self.findings.get(args.finding_id)
@@ -1205,7 +2710,33 @@ class ReviewWorkspace:
                 return f"Unknown finding '{args.finding_id}' for this verification batch."
             if args.verdict == "adjusted" and not args.adjusted_severity:
                 return "NOT RECORDED — 'adjusted' requires adjusted_severity."
-            verification = Verification(verdict=args.verdict, original_severity=finding.severity, note=args.note.strip()[:1500])
+            mismatch = self._verdict_mismatch(finding, args.note)
+            if mismatch:
+                return mismatch
+            if args.verdict == "rejected" and not self._cites_repository(args.note):
+                return (
+                    "NOT RECORDED — a rejection must cite the code that disproves the claim (a repository "
+                    "`path:line` in the note, e.g. the guard, caller or config you found). If you could not find "
+                    "such code, the claim stands: confirm it, or adjust its severity/title/impact."
+                )
+            if args.verdict == "rejected" and _SCOPE_REASON.search(args.note):
+                return (
+                    "NOT RECORDED — whether a checklist, brief or baseline lists this is not a reason it is not a "
+                    "defect. Reject only on what the code does; otherwise confirm or adjust."
+                )
+            if args.verdict != "rejected":
+                claim = " ".join(
+                    filter(
+                        None,
+                        [args.note, getattr(args, "corrected_title", None), getattr(args, "corrected_impact", None)],
+                    )
+                )
+                refused = self._check_syntax_claim(claim, [r.file for r in finding.evidence])
+                if refused:
+                    return refused + " Re-judge the finding on what the code does at runtime."
+            verification = Verification(
+                verdict=args.verdict, original_severity=finding.severity, note=args.note.strip()[:1500]
+            )
             self.verifications[finding.id] = verification
             if args.verdict == "rejected":
                 self.rejected[finding.id] = finding.model_copy(update={"verification": verification})
@@ -1217,6 +2748,8 @@ class ReviewWorkspace:
                 }
                 if args.corrected_title and args.corrected_title.strip():
                     update["title"] = args.corrected_title.strip()[:300]
+                if args.corrected_exposure:
+                    update["exposure"] = args.corrected_exposure
                 if args.corrected_impact and args.corrected_impact.strip():
                     update["impact"] = args.corrected_impact.strip()[:3000]
                 self.findings[finding.id] = finding.model_copy(update=update)
@@ -1242,7 +2775,9 @@ class ReviewWorkspace:
         lines = [f"{len(rows)} finding(s)", "id | severity | verified | title | first evidence"]
         for f in rows:
             verified = f.verification.verdict if f.verification else "unverified"
-            lines.append(f"{f.id} | {f.severity} | {verified} | {f.title} | {f.evidence[0].label if f.evidence else '-'}")
+            lines.append(
+                f"{f.id} | {f.severity} | {verified} | {f.title} | {f.evidence[0].label if f.evidence else '-'}"
+            )
         return "\n".join(lines)
 
     @staticmethod
@@ -1270,7 +2805,9 @@ class ReviewWorkspace:
             # (e.g. the bundled API key seen in session.ts and in .env.example).
             return True
         if self._locations_overlap(a, b):
-            return overlap >= 0.15
+            # Same place + the same specific defect keyword (cors, csrf, xss, jwt, ...) is one defect even
+            # when the titles are worded apart ("Overly permissive CORS" vs "CORS allows credentialed ...").
+            return overlap >= 0.15 or bool(terms_a & terms_b & _ANCHOR_TERMS)
         shares_file = bool({e.file for e in a.evidence} & {e.file for e in b.evidence})
         return shares_file and overlap >= 0.34
 
@@ -1280,7 +2817,9 @@ class ReviewWorkspace:
         - every cited Python file, or the first-cited (defect) location, is unreachable from the
           application roots -> latent, at most High;
         - every cited file is a standalone script or a test -> at most Medium;
-        - the finding reports an absent production baseline (rate limiting, metrics, ...) -> at most High.
+        - the finding reports an absent production baseline (rate limiting, metrics, ...) -> at most High;
+        - exposure dead / theoretical -> at most Medium (and a finding located in unreachable code is
+          re-labelled latent whatever exposure the agent gave it).
         The cap and its reason are appended to the verification note, so the report shows why.
         """
         unreachable = set(self.maps.unreachable)
@@ -1292,8 +2831,25 @@ class ReviewWorkspace:
                 files = {ref.file for ref in finding.evidence}
                 primary = finding.evidence[0].file if finding.evidence else None
                 py_files = {f for f in files if f.endswith(".py")}
+                in_dead_code = bool(py_files and py_files <= unreachable and py_files == files) or (
+                    primary is not None and primary in unreachable
+                )
+                if in_dead_code and finding.exposure in ("live", "conditional"):
+                    # The defect's location is not reachable from any entry point: whatever the
+                    # agent wrote, it is not live today.
+                    finding = finding.model_copy(update={"exposure": "latent"})
+                    self.findings[fid] = finding
                 ceiling, reason = None, ""
-                if py_files and py_files == files and all(_is_script_or_test(f, scripts, unreachable) for f in files):
+                if finding.exposure in ("dead", "theoretical"):
+                    ceiling, reason = "Medium", f"exposure is {finding.exposure} — nothing reaches it today"
+                elif (
+                    finding.category_id != "testing"
+                    and py_files
+                    and py_files == files
+                    and all(_is_script_or_test(f, scripts, unreachable) for f in files)
+                ):
+                    # Testing findings cite the test files BECAUSE the service lacks tests: the
+                    # affected thing is the running service, not the scripts it cites.
                     ceiling, reason = "Medium", "only standalone scripts/tests are affected, not the running service"
                 elif py_files and py_files <= unreachable and py_files == files:
                     ceiling, reason = "High", "latent — the cited code is not imported by any application entry point"
@@ -1301,7 +2857,10 @@ class ReviewWorkspace:
                     # The defect's own location is dead code; citing the live route it *would* sit
                     # behind does not make it reachable (observed: a dead text-to-SQL module rated
                     # Critical because the finding also cited the live chat router).
-                    ceiling, reason = "High", f"latent — {primary} (the defect's location) is not imported by any application entry point"
+                    ceiling, reason = (
+                        "High",
+                        f"latent — {primary} (the defect's location) is not imported by any application entry point",
+                    )
                 elif any(re.search(b.mention, finding.title) for b in baselines):
                     ceiling, reason = "High", "missing production baseline"
                 elif _HARDENING_TITLE.search(finding.title) and not _EXPLOIT_TITLE.search(finding.title):
@@ -1312,7 +2871,9 @@ class ReviewWorkspace:
                 verification = (
                     finding.verification.model_copy(update={"note": f"{finding.verification.note} {note}".strip()})
                     if finding.verification
-                    else Verification(verdict="adjusted", original_severity=finding.severity, note=note)
+                    else Verification(
+                        verdict="adjusted", original_severity=finding.severity, note=note, independent=False
+                    )
                 )
                 self.findings[fid] = finding.model_copy(update={"severity": ceiling, "verification": verification})
                 capped += 1
@@ -1328,9 +2889,7 @@ class ReviewWorkspace:
         """
         with self._lock:
             live = [f for f in self.findings.values() if f.id not in self.duplicates]
-        rank = {
-            f.id: (SEVERITY_ORDER.index(f.severity), -len(f.evidence), f.verification is None, f.id) for f in live
-        }
+        rank = {f.id: (SEVERITY_ORDER.index(f.severity), -len(f.evidence), f.verification is None, f.id) for f in live}
         live.sort(key=lambda f: rank[f.id])
         folded = 0
         for i, primary in enumerate(live):
@@ -1360,7 +2919,9 @@ class ReviewWorkspace:
                 if static.id in self.triage or static.tool != "ruff" or not _FORMATTING_RULE.match(static.category):
                     continue
                 self.triage[static.id] = StaticTriage(
-                    finding_id=static.id, tool=static.tool, verdict="low_value",
+                    finding_id=static.id,
+                    tool=static.tool,
+                    verdict="low_value",
                     reason="formatting only (whitespace, blank lines, line length, import order) — not a defect",
                     triaged_by="formatting",
                 )
@@ -1383,8 +2944,11 @@ class ReviewWorkspace:
                 hit = next((fid for lo, hi, fid in spans.get(static.file, ()) if lo <= static.line <= hi), None)
                 if hit is not None:
                     self.triage[static.id] = StaticTriage(
-                        finding_id=static.id, tool=static.tool, verdict="true_positive",
-                        reason=f"cited by reported finding {hit}", triaged_by="citation",
+                        finding_id=static.id,
+                        tool=static.tool,
+                        verdict="true_positive",
+                        reason=f"cited by reported finding {hit}",
+                        triaged_by="citation",
                     )
                     count += 1
         return count
@@ -1425,7 +2989,7 @@ class ReviewWorkspace:
         titles = {f.id: f.title for f in live}
         lines = ["Candidate duplicates (overlap is a hint, not proof — read both and merge only the SAME defect):"]
         for (a, b), reasons in sorted(pairs.items(), key=lambda kv: -len(kv[1])):
-            lines.append(f"- {a} \"{titles[a][:90]}\" <> {b} \"{titles[b][:90]}\" ({'; '.join(reasons[:3])})")
+            lines.append(f'- {a} "{titles[a][:90]}" <> {b} "{titles[b][:90]}" ({"; ".join(reasons[:3])})')
         return "\n".join(lines[:120])
 
     def get_finding(self, finding_id: str) -> str:
@@ -1462,6 +3026,7 @@ class ReviewWorkspace:
 
     def submit_summary(self, args: _SummaryArgs) -> str:
         known = set(self.findings)
+
         def _clean(ids: list[str]) -> tuple[str, ...]:
             return tuple(self.duplicates.get(i, i) for i in dict.fromkeys(ids) if i in known)
 
@@ -1470,11 +3035,19 @@ class ReviewWorkspace:
                 scope=args.scope.strip()[:3000],
                 verdict=args.verdict.strip()[:4000],
                 priority_order=tuple(
-                    PriorityItem(title=p.title.strip()[:200], rationale=p.rationale.strip()[:1500], finding_ids=_clean(p.finding_ids))
+                    PriorityItem(
+                        title=p.title.strip()[:200],
+                        rationale=p.rationale.strip()[:1500],
+                        finding_ids=_clean(p.finding_ids),
+                    )
                     for p in args.priority_order
                 ),
                 cross_cutting=tuple(
-                    RootCause(title=r.title.strip()[:200], explanation=r.explanation.strip()[:2000], finding_ids=_clean(r.finding_ids))
+                    RootCause(
+                        title=r.title.strip()[:200],
+                        explanation=r.explanation.strip()[:2000],
+                        finding_ids=_clean(r.finding_ids),
+                    )
                     for r in args.cross_cutting
                 ),
                 verification_note=args.verification_note.strip()[:2000],
@@ -1488,31 +3061,61 @@ class ReviewWorkspace:
     def query_tools(self) -> list[BaseTool]:
         """Read-only tools every agent (and the code-explorer subagent) gets."""
         return [
-            _tool(self.static_overview, "static_analysis_overview",
-                  "Summary of the static-analysis pass: per tool status, finding counts, severities, top rules, owner category."),
-            _tool(self.query_static_findings, "query_static_findings",
-                  "List static-analysis findings (paginated, filterable by tool/rule/file glob/severity/triage state).",
-                  _QueryStaticArgs),
-            _tool(self.find_symbol, "find_symbol",
-                  "Locate Python functions/classes by name in the dependency graph: file:line span, params, decorators, caller count.",
-                  _FindSymbolArgs),
-            _tool(self.find_references, "find_references",
-                  "Whole-word search for an identifier across every scanned source file (fast, exhaustive). "
-                  "Mandatory before any 'unused/dead' claim.", _ReferencesArgs),
-            _tool(self.call_relations, "get_call_relations",
-                  "Callers and callees of a Python function (resolved call graph with call-site lines). Use to trace reachability.",
-                  _CallRelationArgs),
-            _tool(self.module_imports, "get_module_imports",
-                  "Import graph: what a module/file imports and who imports it (accepts dotted modules or repository "
-                  "paths). Use for layering and reachability questions.",
-                  _ImportArgs),
-            _tool(self.list_endpoints, "list_endpoints",
-                  "HTTP routes with full paths, the auth dependencies that actually apply (app/router/route, transitive), "
-                  "identity inputs taken from the request, and flags. Filter with flagged_only=true for the risky ones.",
-                  _EndpointArgs),
-            _tool(self.hotspots, "get_hotspots",
-                  "Ranked hot spots: most-called functions (fan_in), most-calling (fan_out), largest (size), most complex (complexity).",
-                  _HotspotArgs),
+            _tool(
+                self.static_overview,
+                "static_analysis_overview",
+                "Summary of the static-analysis pass: per tool status, finding counts, severities, top rules, owner "
+                "category.",
+            ),
+            _tool(
+                self.query_static_findings,
+                "query_static_findings",
+                "List static-analysis findings (paginated, filterable by tool/rule/file glob/severity/triage state).",
+                _QueryStaticArgs,
+            ),
+            _tool(
+                self.find_symbol,
+                "find_symbol",
+                "Locate Python functions/classes by name in the dependency graph: file:line span, params, "
+                "decorators, caller count.",
+                _FindSymbolArgs,
+            ),
+            _tool(
+                self.find_references,
+                "find_references",
+                "Whole-word search for an identifier across every scanned source file (fast, exhaustive). "
+                "Mandatory before any 'unused/dead' claim.",
+                _ReferencesArgs,
+            ),
+            _tool(
+                self.call_relations,
+                "get_call_relations",
+                "Callers and callees of a Python function (resolved call graph with call-site lines). Use to trace "
+                "reachability.",
+                _CallRelationArgs,
+            ),
+            _tool(
+                self.module_imports,
+                "get_module_imports",
+                "Import graph: what a module/file imports and who imports it (accepts dotted modules or repository "
+                "paths). Use for layering and reachability questions.",
+                _ImportArgs,
+            ),
+            _tool(
+                self.list_endpoints,
+                "list_endpoints",
+                "HTTP routes with full paths, the auth dependencies that actually apply (app/router/route, "
+                "transitive), "
+                "identity inputs taken from the request, and flags. Filter with flagged_only=true for the risky ones.",
+                _EndpointArgs,
+            ),
+            _tool(
+                self.hotspots,
+                "get_hotspots",
+                "Ranked hot spots: most-called functions (fan_in), most-calling (fan_out), largest (size), most "
+                "complex (complexity).",
+                _HotspotArgs,
+            ),
         ]
 
     def specialist_tools(self, category: ReviewCategory, *, kpi_assessor: bool = False) -> list[BaseTool]:
@@ -1523,58 +3126,145 @@ class ReviewWorkspace:
         """
         tools = [
             *self.query_tools(),
-            _tool(lambda **kw: self.record_finding(category, _RecordFindingArgs(**kw)), "record_finding",
-                  "Record one verified finding for your category. Validates every file:line citation against the repository.",
-                  _RecordFindingArgs),
-            _tool(lambda **kw: self.update_finding(category, _UpdateFindingArgs(**kw)), "update_finding",
-                  "Amend one of your recorded findings (only the fields you pass change).", _UpdateFindingArgs),
-            _tool(lambda **kw: self.withdraw_finding(category, _WithdrawArgs(**kw)), "withdraw_finding",
-                  "Withdraw one of your findings that turned out to be wrong.", _WithdrawArgs),
-            _tool(lambda: self.list_my_findings(category), "list_my_findings",
-                  "Recap of what you have recorded so far (findings, triage progress, KPI coverage)."),
+            _tool(
+                lambda **kw: self.record_finding(category, _RecordFindingArgs(**kw)),
+                "record_finding",
+                "Record one verified finding for your category. Validates every file:line citation against the "
+                "repository.",
+                _RecordFindingArgs,
+            ),
+            _tool(
+                lambda **kw: self.update_finding(category, _UpdateFindingArgs(**kw)),
+                "update_finding",
+                "Amend one of your recorded findings (only the fields you pass change).",
+                _UpdateFindingArgs,
+            ),
+            _tool(
+                lambda **kw: self.withdraw_finding(category, _WithdrawArgs(**kw)),
+                "withdraw_finding",
+                "Withdraw one of your findings that turned out to be wrong.",
+                _WithdrawArgs,
+            ),
+            _tool(
+                lambda: self.list_my_findings(category),
+                "list_my_findings",
+                "Recap of what you have recorded so far (findings, triage progress, KPI coverage).",
+            ),
+            _tool(
+                lambda **kw: self.record_hypotheses(category, _HypothesesArgs(**kw)),
+                "record_hypotheses",
+                "FIRST STEP: record your model of this system and at least 6 repository-specific hypotheses "
+                "(suspected defects with the files involved), derived from reading the code.",
+                _HypothesesArgs,
+            ),
+            _tool(
+                lambda **kw: self.resolve_hypothesis(category, _ResolveHypothesisArgs(**kw)),
+                "resolve_hypothesis",
+                "Close one hypothesis: confirmed (with the finding id) or ruled_out (citing the code that makes "
+                "it safe). Every hypothesis ends one of these two ways; the report lists them.",
+                _ResolveHypothesisArgs,
+            ),
+            _tool(
+                lambda **kw: self.dismiss_lead(category, _DismissLeadArgs(**kw)),
+                "dismiss_lead",
+                "Close a mandatory lead row (or a whole group). With finding_id: the row is covered by that finding "
+                "and its location is added to the finding's evidence. Without: the row is NOT a defect, and the "
+                "reason cites the code that shows it (listed in the report). Budget/time is never a reason.",
+                _DismissLeadArgs,
+            ),
         ]
         if kpi_assessor:
             tools.append(
-                _tool(lambda **kw: self.assess_kpi(_KpiArgs(**kw)), "assess_security_kpi",
-                      "Record the status of one mandatory security KPI with evidence. Every KPI must be assessed.", _KpiArgs)
+                _tool(
+                    lambda **kw: self.assess_kpi(_KpiArgs(**kw)),
+                    "assess_security_kpi",
+                    "Record the status of one mandatory security KPI with evidence. Every KPI must be assessed.",
+                    _KpiArgs,
+                )
             )
             return tools
         tools += [
-            _tool(lambda **kw: self.triage_static(category, _TriageArgs(**kw)), "triage_static_findings",
-                  "Give a verdict on static-analysis findings from the tools your category owns. Batch ids that share a verdict.",
-                  _TriageArgs),
-            _tool(lambda **kw: self.triage_rule(category, _TriageRuleArgs(**kw)), "triage_static_rule",
-                  "Apply one verdict to ALL untriaged findings of one (tool, rule) group — after sampling a few instances "
-                  "with query_static_findings and reading the code. The fast way through large lint rule groups.",
-                  _TriageRuleArgs),
+            _tool(
+                lambda **kw: self.triage_static(category, _TriageArgs(**kw)),
+                "triage_static_findings",
+                "Give a verdict on static-analysis findings from the tools your category owns. Batch ids that share "
+                "a verdict.",
+                _TriageArgs,
+            ),
+            _tool(
+                lambda **kw: self.triage_rule(category, _TriageRuleArgs(**kw)),
+                "triage_static_rule",
+                "Apply one verdict to ALL untriaged findings of one (tool, rule) group — after sampling a few "
+                "instances "
+                "with query_static_findings and reading the code. The fast way through large lint rule groups.",
+                _TriageRuleArgs,
+            ),
         ]
         return tools
 
     def verifier_tools(self, category_id: str) -> list[BaseTool]:
         return [
             *self.query_tools(),
-            _tool(lambda **kw: self.submit_verification(category_id, _VerifyArgs(**kw)), "submit_verification",
-                  "Record your independent verdict on one finding.", _VerifyArgs),
+            _tool(
+                lambda **kw: self.submit_verification(category_id, _VerifyArgs(**kw)),
+                "submit_verification",
+                "Record your independent verdict on one finding.",
+                _VerifyArgs,
+            ),
+        ]
+
+    def negative_audit_tools(self, category: ReviewCategory) -> list[BaseTool]:
+        return [
+            *self.query_tools(),
+            _tool(
+                lambda **kw: self.uphold_negative(category.id, _UpholdArgs(**kw)),
+                "uphold",
+                "The specialist was right: the item is not a defect. Cite the code you checked.",
+                _UpholdArgs,
+            ),
+            _tool(
+                lambda **kw: self.overturn_negative(category, _OverturnArgs(**kw)),
+                "overturn",
+                "The specialist was wrong: record the defect as a finding (it is marked verified by you).",
+                _OverturnArgs,
+            ),
         ]
 
     def synthesizer_tools(self) -> list[BaseTool]:
         return [
             self.query_tools()[0],
-            _tool(self.list_findings, "list_findings", "Compact list of all current findings (filterable).", _ListFindingsArgs),
+            _tool(
+                self.list_findings,
+                "list_findings",
+                "Compact list of all current findings (filterable).",
+                _ListFindingsArgs,
+            ),
             _tool(self.get_finding, "get_finding", "Full text of one finding.", _GetFindingArgs),
-            _tool(self.duplicate_candidates, "find_duplicate_candidates",
-                  "Pairs of findings from different categories that cite the same file:line or the same KPI — "
-                  "the usual shape of one defect reported twice. Start deduplication here."),
-            _tool(lambda **kw: self.mark_duplicate(_DuplicateArgs(**kw)), "mark_duplicate",
-                  "Fold a finding that reports the same underlying defect as another (e.g. from two categories) into it.",
-                  _DuplicateArgs),
-            _tool(lambda **kw: self.submit_summary(_SummaryArgs(**kw)), "submit_executive_summary",
-                  "Record the report's scope, verdict, priority order, cross-cutting root causes and verification note. Call once, last.",
-                  _SummaryArgs),
+            _tool(
+                self.duplicate_candidates,
+                "find_duplicate_candidates",
+                "Pairs of findings from different categories that cite the same file:line or the same KPI — "
+                "the usual shape of one defect reported twice. Start deduplication here.",
+            ),
+            _tool(
+                lambda **kw: self.mark_duplicate(_DuplicateArgs(**kw)),
+                "mark_duplicate",
+                "Fold a finding that reports the same underlying defect as another (e.g. from two categories) into it.",
+                _DuplicateArgs,
+            ),
+            _tool(
+                lambda **kw: self.submit_summary(_SummaryArgs(**kw)),
+                "submit_executive_summary",
+                "Record the report's scope, verdict, priority order, cross-cutting root causes and verification "
+                "note. Call once, last.",
+                _SummaryArgs,
+            ),
         ]
 
 
-def _tool(func: Callable[..., str], name: str, description: str, args_schema: type[BaseModel] | None = None) -> BaseTool:
+def _tool(
+    func: Callable[..., str], name: str, description: str, args_schema: type[BaseModel] | None = None
+) -> BaseTool:
     """Wrap a workspace method as a LangChain tool with an explicit schema."""
     if args_schema is None:
         return StructuredTool.from_function(func=lambda: func(), name=name, description=description)

@@ -518,3 +518,78 @@ async def visit(request):
     )
     rows = [s.row for s in build_review_maps(tmp_path, manifest).signals.session_fixation]
     assert rows == ["`login` sets session['user_id'] without renewing the session (app/views.py:6)"]
+
+
+def test_backend_lifecycle_signals(tmp_path: Path):
+    files = {
+        "app/main.py": "from fastapi import FastAPI\nfrom app.routes import router\nfrom app import models\n"
+                       "app = FastAPI()\napp.include_router(router)\n",
+        "app/db.py": '''
+from sqlalchemy.orm import sessionmaker
+SessionLocal = sessionmaker()
+
+def get_db():
+    db = SessionLocal()
+    yield db
+
+def get_db_safe():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+''',
+        "app/models.py": '''
+class Order(Base):
+    __tablename__ = "orders"
+
+class Refund(Base):
+    __tablename__ = "refunds"
+''',
+        "app/routes.py": '''
+import asyncio
+from fastapi import APIRouter, BackgroundTasks, Depends
+from pydantic import BaseModel
+from app.db import get_db
+router = APIRouter()
+
+class UserOut(BaseModel):
+    email: str
+    hashed_password: str
+
+class LoginOut(BaseModel):
+    access_token: str
+
+@router.get("/me", response_model=UserOut)
+def me():
+    return None
+
+@router.post("/login", response_model=LoginOut)
+def login():
+    return None
+
+@router.post("/orders")
+async def create(tasks: BackgroundTasks, db=Depends(get_db)):
+    tasks.add_task(send_receipt, db, 1)
+    asyncio.create_task(notify())
+    keep = asyncio.create_task(notify())
+    return keep
+''',
+        "migrations/versions/001_init.py": 'op.create_table("orders")\n',
+    }
+    entries = []
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+        entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
+    manifest = RepositoryManifest(
+        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
+        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+    )
+    sig = build_review_maps(tmp_path, manifest).signals
+    assert [s.text for s in sig.request_resource_in_background] == [
+        "`create` passes request-scoped `db` to add_task() — it is closed when the response is sent"]
+    assert [s.line for s in sig.fire_and_forget_tasks] == [26]
+    assert [s.text for s in sig.sensitive_response_fields] == ["response model UserOut returns field `hashed_password`"]
+    assert [s.text.split("`")[1] for s in sig.leaky_session_dependencies] == ["get_db"]
+    assert [s.text.split("`")[1] for s in sig.tables_without_migration] == ["refunds"]

@@ -115,6 +115,8 @@ _AUTHISH_PATH = re.compile(r"(?i)(auth|security|jwt|token|otp|session|password|l
 _LEAD_LINE_TOLERANCE = 15
 _SCOPE_REASON = re.compile(r"(?i)(brief|checklist|baseline|prompt|instructions?|review scope|lead list)s?\b[^.]{0,40}"
                            r"\b(does not|doesn't|do not|never) (list|include|mention|require|cover)")
+_CLIENT_FILE = re.compile(r"(?i)\.(tsx?|jsx?|vue|svelte|mjs|cjs)$|(^|/)(vite|webpack|next|nuxt|tailwind|postcss|babel)"
+                          r"\.config\.|(^|/)(package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|tsconfig[^/]*\.json)$")
 _SEVERE_STATIC = {"critical", "high"}  # security tools only; pyright/radon use "error" for ordinary hits
 _PERSISTED_STATE = re.compile(r"(?i)\block(ed)?\b|\bflag\b|in[_ -]?progress|background work|\bjob\b|\blease\b|semaphore")
 _CLEANUP_ONLY = re.compile(r"(?i)\bfinally\b|\bexcept\b|context manager|\bwith\b block|cleaned up|clears? the|releases?")
@@ -517,6 +519,7 @@ class ReviewWorkspace:
         self.manifest = manifest
         self.graph = graph
         self.config = config
+        self.frontend_in_scope = any(c.id == "frontend" for c in config.enabled_categories)
         self.tool_results = tool_results
 
         # Static findings: first occurrence wins on the content-hash id.
@@ -1049,6 +1052,8 @@ class ReviewWorkspace:
         leads: dict[str, list[str]] = defaultdict(list)
         for finding in self.static_by_id.values():
             rule = finding.category.rsplit(".", 1)[-1]
+            if rule.startswith("web-") and not self.frontend_in_scope:
+                continue
             for kpi_id in _KPI_RULES.get(rule, ()):
                 leads[kpi_id].append(f"{finding.file}:{finding.line} ({finding.tool} {rule})")
         for mount in self.maps.mounts:
@@ -1257,6 +1262,19 @@ class ReviewWorkspace:
             add("Third-party services that receive application data — which personal data goes to each, is it "
                 "minimized, documented and covered by the users' consent (one grouped finding)",
                 rows(sig.data_processors))
+        if category_id == "correctness":
+            add("Request-scoped DB sessions/connections passed to background work — used after the request "
+                "closed them, or shared across concurrent tasks", rows(sig.request_resource_in_background))
+            add("Tasks started fire-and-forget — failures vanish, work is lost on shutdown",
+                rows(sig.fire_and_forget_tasks))
+            add("Session/connection dependencies with no cleanup on error (pool exhaustion)",
+                rows(sig.leaky_session_dependencies))
+        if category_id == "security":
+            add("Response models that hand secrets to the client (password hashes, tokens, keys)",
+                rows(sig.sensitive_response_fields))
+        if category_id == "integration":
+            add("ORM tables no migration creates — a fresh or production database will not have them",
+                rows(sig.tables_without_migration))
         if category_id == "auth":
             add("Identity written into the session without renewing it — can an id planted before login stay "
                 "valid after it (session fixation)?", rows(sig.session_fixation))
@@ -1853,6 +1871,10 @@ class ReviewWorkspace:
 
         live = sorted(p for p in entries if is_live_code(p))
         web = [p for p in live if p.endswith((".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".mjs"))]
+        if not self.frontend_in_scope:
+            # Backend-first review: browser code is context only, in no lane's scope.
+            live = [p for p in live if p not in set(web)]
+            web = []
         backend = [p for p in live if p not in set(web)]
 
         # A top-level folder holding several code packages is a project container
@@ -1919,6 +1941,14 @@ class ReviewWorkspace:
             if path not in claimed:
                 scopes["frontend" if path in set(web) else "correctness"].add(path)
         live_or_config = set(live) | deploy | manifests | templates | set(sig.test_files) | ops
+        if not self.frontend_in_scope:
+            # Client build config, client tests and whole client apps (a folder with a package.json
+            # and no Python) are not backend files; env templates stay (keys the backend hands out).
+            client_roots = [str(PurePosixPath(p).parent) for p in entries if PurePosixPath(p).name == "package.json"]
+            client_roots = [r for r in client_roots if r != "." and not any(
+                q.endswith(".py") and q.startswith(r + "/") for q in entries)]
+            live_or_config = {p for p in live_or_config if not _CLIENT_FILE.search(p) and (
+                p in templates or not any(p.startswith(r + "/") for r in client_roots))}
         self._scopes = {lane: sorted(p for p in paths if p in live_or_config) for lane, paths in scopes.items()}
         return self._scopes
 

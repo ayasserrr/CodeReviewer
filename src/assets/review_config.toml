@@ -79,6 +79,10 @@ developer's machine, and do its parts agree with each other?
   strings (they end up in logs, history, referrers).
 - Outbound calls: timeouts, retries of non-idempotent requests, error handling that hides
   failures, global side effects inside HTTP helpers.
+- API contract of the backend itself: request bodies taken as raw dict/Request.json() instead
+  of validated schemas, status codes that lie (200 with an error body, 500 for bad input, 404
+  vs 403 leaking existence), inconsistent error shapes across routers, breaking changes to
+  documented routes, POSTs that create money/jobs/messages with no idempotency key.
 - Operational scripts in your scope (migrations, bootstrap/entrypoint, shell, SQL,
   Makefile): run each one in your head against an EXISTING production environment and
   a second time — does it mark schema as applied without applying it, drop or reset
@@ -112,6 +116,9 @@ Think like an attacker who has read this code: who can reach what, as whom, with
 - Server-side requests (SSRF) and inbound integrations: URLs, hosts or files fetched on a
   client's behalf; webhooks/callbacks accepted without a signature check or replay
   protection; redirects to request-supplied targets.
+- Response over-exposure: ORM objects or dicts returned without a response schema (password
+  hashes, internal flags, other users' fields leave the server), list endpoints returning
+  every column of every row, errors echoing queries or internals.
 - Model/agent features (when present): untrusted content fed to models that decide or
   act (prompt injection), model output rendered as HTML or executed, tools with write
   access driven by model output.
@@ -150,7 +157,9 @@ id = "frontend"
 title = "Frontend & Client Security"
 code = "WEB"
 effort = 2
-enabled = true
+# Off: the review is backend-first. Browser code is then only context (which routes it calls,
+# what the backend hands it) and is in no lane's scope. Set true to review the client too.
+enabled = false
 focus = """
 Only applicable if the repository contains a browser client. If not, record nothing and
 say "not applicable".
@@ -249,6 +258,9 @@ What happens to THIS system under real load and real data growth, and with more 
   pagination, whole collections reloaded or reprocessed per event (O(n) per event, O(n^2)
   overall), whole files rewritten per event, N+1 queries, missing indexes.
 - External calls: timeouts, backoff, circuit breakers, bounded concurrency.
+- Database usage: transactions held open across slow work (HTTP/model calls, file parsing)
+  holding locks and pool connections; pool size vs workers x concurrency; per-request
+  construction of heavy clients (HTTP, model, DB engines) instead of one shared instance.
 - Memory: in-process caches, dicts or buffers keyed by user/session/job that only grow;
   whole files or result sets loaded into memory; connection pools sized for one worker.
 - Startup: heavy resources loaded synchronously, clients built at import time, one failing
@@ -341,6 +353,10 @@ Does THIS system produce correct results and keep its data consistent — not on
 - State: flags/locks/claims released only on the happy path (stuck after a crash or
   deploy), transactions with partial writes, missing rollbacks, sessions shared across
   tasks, naive vs aware datetimes, money as float.
+- Async and ORM pitfalls: one AsyncSession/connection shared by concurrent tasks (gather,
+  background work), lazy-loaded relationships touched after the session closed or in async
+  code, sync ORM/drivers called inside async def, commits inside loops that leave half a
+  batch written, exceptions in background tasks/schedulers that nobody observes.
 - Parallel implementations of one operation (runtime_signals.md): diff them — copies that
   already disagree are correctness bugs.
 - Entry points and scripts that cannot work as written; reliance on private library APIs.

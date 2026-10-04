@@ -214,6 +214,11 @@ class RuntimeSignals:
     supply_chain: list[Signal] = field(default_factory=list)  # missing lockfiles, unpinned base images
     naive_datetimes: list[Signal] = field(default_factory=list)
     session_fixation: list[Signal] = field(default_factory=list)  # identity put into a session that is never renewed
+    request_resource_in_background: list[Signal] = field(default_factory=list)  # request-scoped db/session handed to later work
+    fire_and_forget_tasks: list[Signal] = field(default_factory=list)  # create_task() result dropped
+    sensitive_response_fields: list[Signal] = field(default_factory=list)  # response models carrying secrets
+    leaky_session_dependencies: list[Signal] = field(default_factory=list)  # yielded sessions with no finally/close
+    tables_without_migration: list[Signal] = field(default_factory=list)  # ORM tables no migration creates
     data_processors: list[Signal] = field(default_factory=list)  # third-party services that receive app data
     pipeline_hygiene: list[Signal] = field(default_factory=list)  # CI/deploy script practices
     # Functions combining several kinds of side effect (db write, network, files, subprocess,
@@ -1092,6 +1097,100 @@ def _session_fixation(files, live: set[str], signals: RuntimeSignals) -> None:
                     py.path, line, f"`{func.name}` sets session['{key}'] without renewing the session"))
 
 
+_REQUEST_RESOURCE = re.compile(r"(?i)(^|_)(db|session|conn|connection|cursor|tx|uow)(_|$)")
+_RESOURCE_TYPE = re.compile(r"(?i)session|connection|cursor|database|sessiondep|dbdep")
+_DEFERRED_CALL = {"add_task", "create_task", "ensure_future", "submit", "run_in_executor", "apply_async", "delay",
+                  "enqueue", "start_soon", "Thread", "Process", "call_later", "call_soon"}
+# Fields that never belong in a response (issued tokens do: a login response returns one).
+_SENSITIVE_FIELD = re.compile(r"(?i)^(hashed_?password|password(_hash|_digest)?|passwd|pwd_hash|client_secret|"
+                              r"secret(_key)?|api_?key(_hash)?|otp(_code|_secret)?|salt|private_?key|mfa_secret|"
+                              r"totp_secret|signing_key)$")
+
+
+def _request_scoped_params(func) -> set[str]:
+    """Parameters injected per request (``Depends(get_db)``, ``db: Session``, ``SessionDep``)."""
+    args = func.args.args + func.args.kwonlyargs
+    defaults = [None] * (len(func.args.args) - len(func.args.defaults)) + list(func.args.defaults) + list(
+        func.args.kw_defaults)
+    names = set()
+    for arg, default in zip(args, defaults, strict=False):
+        annotation = ast.unparse(arg.annotation) if arg.annotation is not None else ""
+        injected = isinstance(default, ast.Call) and _dotted(default.func).endswith("Depends")
+        if (injected and (_REQUEST_RESOURCE.search(arg.arg) or _RESOURCE_TYPE.search(ast.unparse(default))
+                          or _RESOURCE_TYPE.search(annotation))) or (
+                "Depends" in annotation and _RESOURCE_TYPE.search(annotation)) or re.search(
+                r"(?i)^(Async)?Session(Dep)?$|^DbSession$|^SessionDep$", annotation):
+            names.add(arg.arg)
+    return names
+
+
+def _backend_signals(files, live: set[str], repo_path: Path, manifest: RepositoryManifest,
+                     signals: RuntimeSignals) -> None:
+    response_models: set[str] = set()
+    for py in files:
+        for func in _functions(py.tree):
+            for dec in func.decorator_list:
+                if isinstance(dec, ast.Call):
+                    for kw in dec.keywords:
+                        if kw.arg == "response_model":
+                            response_models |= {n.id for n in ast.walk(kw.value) if isinstance(n, ast.Name)}
+    tables: dict[str, tuple[str, int]] = {}
+    for py in files:
+        if py.path not in live:
+            continue
+        for node in ast.walk(py.tree):
+            if isinstance(node, ast.ClassDef):
+                if node.name in response_models:
+                    for item in node.body:
+                        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and \
+                                _SENSITIVE_FIELD.match(item.target.id):
+                            signals.sensitive_response_fields.append(Signal(
+                                py.path, item.lineno, f"response model {node.name} returns field `{item.target.id}`"))
+                for item in node.body:
+                    if (isinstance(item, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__tablename__"
+                                                             for t in item.targets)
+                            and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str)):
+                        tables[item.value.value] = (py.path, item.lineno)
+        for func in _functions(py.tree):
+            scoped = _request_scoped_params(func)
+            own = list(_own_nodes(func))
+            for node in own:
+                if not isinstance(node, ast.Call):
+                    continue
+                last = _dotted(node.func).split(".")[-1]
+                if scoped and last in _DEFERRED_CALL:
+                    passed = {n.id for a in [*node.args, *(k.value for k in node.keywords)]
+                              for n in ast.walk(a) if isinstance(n, ast.Name)} & scoped
+                    if passed:
+                        signals.request_resource_in_background.append(Signal(
+                            py.path, node.lineno, f"`{func.name}` passes request-scoped `{min(passed)}` to "
+                            f"{last}() — it is closed when the response is sent"))
+            for node in own:
+                if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                        and _dotted(node.value.func).split(".")[-1] in ("create_task", "ensure_future")):
+                    signals.fire_and_forget_tasks.append(Signal(
+                        py.path, node.lineno, f"`{func.name}` starts a task and drops the reference "
+                        "(it can be garbage-collected; its exception is never observed)"))
+            yields = [n for n in own if isinstance(n, (ast.Yield, ast.YieldFrom))]
+            if yields and any(isinstance(n, ast.Call) and re.search(
+                    r"(?i)session|connect|engine\.begin|pool\.acquire", _dotted(n.func)) for n in own):
+                protected = any(isinstance(n, ast.Try) and n.finalbody for n in own) or any(
+                    isinstance(n, (ast.With, ast.AsyncWith)) for n in own)
+                if not protected:
+                    signals.leaky_session_dependencies.append(Signal(
+                        py.path, func.lineno, f"`{func.name}` yields a session/connection with no try/finally "
+                        "or context manager — an exception in the request leaks it"))
+    migration_texts = [_read(repo_path, e.path) for e in manifest.files
+                       if re.search(r"(?i)(^|/)(alembic|migrations?)/|\.sql$", e.path)]
+    creates_at_startup = any(".create_all" in py.text for py in files if py.path in live)
+    if migration_texts and tables and not creates_at_startup:
+        blob = "\n".join(migration_texts)
+        for table, (path, line) in sorted(tables.items()):
+            if not re.search(rf"[\"'`]{re.escape(table)}[\"'`]|\b{re.escape(table)}\b\s*\(", blob):
+                signals.tables_without_migration.append(Signal(
+                    path, line, f"table `{table}` is defined in the models but no migration creates it"))
+
+
 def _risk_hotspots(files, live: set[str], routes, signals: RuntimeSignals, limit: int = 15) -> None:
     """Rank live functions by how many KINDS of side effect they combine — no rule list, so it
     finds the functions worth tracing in any codebase: a failure between two effects leaves
@@ -1177,6 +1276,7 @@ def build_runtime_signals(
         ("production", lambda: _production_signals(files, live, edges, repo_path, manifest, signals)),
         ("hotspots", lambda: _risk_hotspots(files, live, routes, signals)),
         ("session_fixation", lambda: _session_fixation(files, live, signals)),
+        ("backend", lambda: _backend_signals(files, live, repo_path, manifest, signals)),
     ):
         try:
             step()
@@ -1248,6 +1348,12 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
     lines += block("Naive datetimes (no timezone)", [s.row for s in signals.naive_datetimes])
     lines += block("Identity written into a session that is never renewed (session fixation)",
                    [s.row for s in signals.session_fixation])
+    lines += block("Request-scoped DB sessions/connections handed to background work",
+                   [s.row for s in signals.request_resource_in_background])
+    lines += block("Tasks started fire-and-forget", [s.row for s in signals.fire_and_forget_tasks])
+    lines += block("Response models that return secrets", [s.row for s in signals.sensitive_response_fields])
+    lines += block("Session/connection dependencies that leak on error", [s.row for s in signals.leaky_session_dependencies])
+    lines += block("ORM tables no migration creates", [s.row for s in signals.tables_without_migration])
     lines += block("Third-party services that receive application data (processors)",
                    [s.row for s in signals.data_processors])
     lines += block("Deployment pipeline hygiene", [s.row for s in signals.pipeline_hygiene])

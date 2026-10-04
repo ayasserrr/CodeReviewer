@@ -870,7 +870,7 @@ def test_severe_true_positives_must_reach_a_finding(workspace):
     )
     ws.static_by_id.update({cve.id: cve, style.id: style})
     dependencies = ws.config.category("dependencies")
-    assert [g[1] for g in ws.untriaged_groups("dependencies")] == ["GHSA-abcd-1234", "GHSA-low"]
+    assert [g[1] for g in ws.untriaged_groups("dependencies")] == ["multipartlib", "otherlib"]  # grouped per package
     ws.triage_static(
         dependencies,
         _TriageArgs(finding_ids=["sf-cve", "sf-low"], verdict="true_positive", reason="pinned in requirements.txt"),
@@ -1047,3 +1047,32 @@ def test_client_only_evidence_is_outside_a_backend_review(workspace):
         ),
     )
     assert ok.startswith("Recorded ")
+
+
+def test_dependency_advisories_are_triaged_per_package(workspace):
+    from helpers.review_workspace import _TriageRuleArgs
+
+    ws = workspace
+    advisories = [
+        StaticFinding(
+            id=f"sf-{n}",
+            tool="pip_audit",
+            file="requirements.txt",
+            line=None,
+            severity="high",
+            category=f"GHSA-{n}",
+            message=f"multipartlib 0.0.5: advisory {n}",
+        )
+        for n in range(5)
+    ]
+    ws.static_by_id.update({f.id: f for f in advisories})
+    assert [(tool, rule, count) for tool, rule, count in ws.untriaged_groups("dependencies")] == [
+        ("pip_audit", "multipartlib", 5)
+    ]
+    out = ws.triage_rule(
+        ws.config.category("dependencies"),
+        _TriageRuleArgs(
+            tool="pip_audit", rule="multipartlib", verdict="true_positive", reason="pinned in requirements.txt"
+        ),
+    )
+    assert out.startswith("Triaged 5 as true_positive")

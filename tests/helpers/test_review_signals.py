@@ -742,3 +742,35 @@ async def csrf_middleware(request, handler):
     assert rows == [
         ("`csrf_middleware` is defined but applied nowhere (not registered, not called) (app/middlewares.py:8)")
     ]
+
+
+def test_scripts_that_stamp_the_schema_without_migrating(tmp_path: Path):
+    files = {
+        "app/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+        "migrate.sh": "#!/bin/sh\n# alembic stamp head  (old)\nalembic upgrade head\nalembic stamp head\n",
+        "deploy/entrypoint.sh": "python manage.py migrate --fake-initial\n",
+    }
+    entries = []
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+        entries.append(
+            FileEntry(
+                path=rel,
+                language="Python" if rel.endswith(".py") else "Shell",
+                size_bytes=len(text),
+                lines=text.count("\n"),
+            )
+        )
+    manifest = RepositoryManifest(
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
+    )
+    rows = [(s.file, s.line) for s in build_review_maps(tmp_path, manifest).signals.schema_marked_not_migrated]
+    assert sorted(rows) == [("migrate.sh", 4)]

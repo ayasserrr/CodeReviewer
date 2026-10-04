@@ -451,6 +451,7 @@ class RuntimeSignals:
     tables_without_migration: list[Signal] = field(default_factory=list)  # ORM tables no migration creates
     lossy_text_cleaning: list[Signal] = field(default_factory=list)  # cleaners that rewrite identifier characters
     unwired_security_controls: list[Signal] = field(default_factory=list)  # protections defined but applied nowhere
+    schema_marked_not_migrated: list[Signal] = field(default_factory=list)  # scripts that stamp/fake migrations
     data_processors: list[Signal] = field(default_factory=list)  # third-party services that receive app data
     pipeline_hygiene: list[Signal] = field(default_factory=list)  # CI/deploy script practices
     # Functions combining several kinds of side effect (db write, network, files, subprocess,
@@ -1035,6 +1036,34 @@ def _pipeline_hygiene(repo_path: Path, manifest: RepositoryManifest, signals: Ru
             if match:
                 line = text.count("\n", 0, match.start()) + 1
                 signals.pipeline_hygiene.append(Signal(entry.path, line, what))
+
+
+_SCHEMA_STAMP = (
+    (r"alembic\s+(-\S+\s+\S+\s+)*stamp\b", "alembic stamp marks the schema as migrated without running migrations"),
+    (r"\bmigrate\b[^\n]*--fake(?![-\w])", "Django migrate --fake marks migrations as applied without running them"),
+    (r"\bflyway\b[^\n]*\bbaseline\b", "flyway baseline marks the schema version without running migrations"),
+    (r"\bcommand\.stamp\(", "alembic command.stamp() marks the schema as migrated without running migrations"),
+)
+_OPS_FILE = re.compile(
+    r"(?i)\.(sh|bash|ya?ml|py|cfg|toml|ini)$|(^|/)(makefile|procfile|dockerfile[^/]*|entrypoint[^/]*)$"
+)
+
+
+def _schema_stamps(repo_path: Path, manifest: RepositoryManifest, signals: RuntimeSignals) -> None:
+    """Deploy/ops scripts that record a schema version without applying it: on an existing or
+    fresh database the recorded version and the real tables then disagree."""
+    for entry in manifest.files:
+        if not _OPS_FILE.search(entry.path) or "node_modules" in entry.path or is_test_file(entry.path):
+            continue
+        text = _read(repo_path, entry.path)
+        for pattern, what in _SCHEMA_STAMP:
+            for match in re.finditer(pattern, text):
+                line_start = text.rfind("\n", 0, match.start()) + 1
+                if text[line_start : match.start()].lstrip().startswith("#"):
+                    continue
+                signals.schema_marked_not_migrated.append(
+                    Signal(entry.path, text.count("\n", 0, match.start()) + 1, what)
+                )
 
 
 def _infra_texts(repo_path: Path, manifest: RepositoryManifest) -> list[str]:
@@ -1891,6 +1920,7 @@ def build_runtime_signals(
         ("backend", lambda: _backend_signals(files, live, repo_path, manifest, signals)),
         ("lossy_text_cleaning", lambda: _lossy_text_cleaning(files, live, signals)),
         ("unwired_security_controls", lambda: _unwired_security_controls(files, live, signals)),
+        ("schema_stamps", lambda: _schema_stamps(repo_path, manifest, signals)),
     ):
         try:
             step()
@@ -2007,6 +2037,10 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
     lines += block("ORM tables no migration creates", [s.row for s in signals.tables_without_migration])
     lines += block("Text cleaners that rewrite identifier characters", [s.row for s in signals.lossy_text_cleaning])
     lines += block("Security controls defined but applied nowhere", [s.row for s in signals.unwired_security_controls])
+    lines += block(
+        "Scripts that mark the schema as migrated without migrating",
+        [s.row for s in signals.schema_marked_not_migrated],
+    )
     lines += block(
         "Third-party services that receive application data (processors)", [s.row for s in signals.data_processors]
     )

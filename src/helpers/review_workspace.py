@@ -149,6 +149,14 @@ _PROCESS_DEATH = re.compile(
 )
 
 
+def _group_key(finding) -> str:
+    """Triage group of a static finding: its rule id, except for dependency advisories, which are
+    grouped by package (one package often has dozens of advisories, each with its own id)."""
+    if finding.tool == "pip_audit" and finding.message:
+        return finding.message.split()[0].lower()
+    return finding.category
+
+
 def _cleanup_only_reason(claim: str, note: str) -> str | None:
     """A lock/flag/job that survives the process is not made safe by cleanup code: ``finally`` and
     ``except`` do not run when the process is killed, restarted or redeployed mid-job."""
@@ -516,7 +524,13 @@ class _TriageArgs(BaseModel):
 
 class _TriageRuleArgs(BaseModel):
     tool: str = Field(..., description="Tool name, e.g. 'ruff'.")
-    rule: str = Field(..., description="Exact rule/check id, e.g. 'E501' or 'B008'.")
+    rule: str = Field(
+        ...,
+        description=(
+            "Exact rule/check id, e.g. 'E501' or 'B008'. For dependency scanners (pip_audit) the package name "
+            "also works and covers every advisory of that package in one call."
+        ),
+    )
     verdict: Literal["true_positive", "false_positive", "low_value"]
     reason: str = Field(..., description="Why this verdict holds for the whole rule group — cite what you sampled.")
     file_glob: str | None = Field(None, description="Optionally restrict to paths matching this fnmatch pattern.")
@@ -1232,7 +1246,7 @@ class ReviewWorkspace:
             f.id
             for f in self.static_by_id.values()
             if f.tool == args.tool
-            and f.category == args.rule
+            and (f.category == args.rule or _group_key(f) == args.rule.lower())
             and f.id not in self.triage
             and (not glob or fnmatch.fnmatch(f.file, glob))
         ]
@@ -1599,6 +1613,11 @@ class ReviewWorkspace:
             )
         if category_id == "integration":
             add(
+                "Scripts that record a schema version without applying it — what does a fresh or existing "
+                "database look like after this runs?",
+                rows(sig.schema_marked_not_migrated),
+            )
+            add(
                 "ORM tables no migration creates — a fresh or production database will not have them",
                 rows(sig.tables_without_migration),
             )
@@ -1828,7 +1847,7 @@ class ReviewWorkspace:
             pending = severe
         if not pending:
             return []
-        groups = Counter((f.tool, f.category) for f in pending)
+        groups = Counter((f.tool, _group_key(f)) for f in pending)
         return [(tool, rule, count) for (tool, rule), count in groups.most_common()]
 
     def unrecorded_true_positives(self, category_id: str) -> list[str]:

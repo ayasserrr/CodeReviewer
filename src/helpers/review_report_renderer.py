@@ -122,7 +122,9 @@ def render_report(report: DeepReviewReport) -> str:
         out.append("")
         out.append(
             "**Not independently verified:** "
-            + ", ".join(f"{n} {sev}" for sev, n in sorted(unverified.items(), key=lambda kv: SEVERITY_ORDER.index(kv[0])))
+            + ", ".join(
+                f"{n} {sev}" for sev, n in sorted(unverified.items(), key=lambda kv: SEVERITY_ORDER.index(kv[0]))
+            )
             + " — marked *unverified* below; treat them as the specialist's claim until a reviewer confirms them."
         )
     out.append("")
@@ -153,7 +155,9 @@ def render_report(report: DeepReviewReport) -> str:
         )
         out.append("")
         if not report.kpi_assessments:
-            out.append("_The security specialist did not complete the KPI checklist; treat every item as not verified._")
+            out.append(
+                "_The security specialist did not complete the KPI checklist; treat every item as not verified._"
+            )
             out.append("")
         for index, kpi in enumerate(report.kpi_assessments, start=1):
             evidence = ", ".join(f"`{e.label}`" for e in kpi.evidence[:6])
@@ -211,12 +215,17 @@ def render_report(report: DeepReviewReport) -> str:
             out.append(_verification_line(finding))
             out.append("")
         merged_elsewhere = [
-            m for m in report.merged_findings
-            if m.category_id == category.id and findings and finding_numbers.get(m.primary_id, "").split(".")[0] != str(number)
+            m
+            for m in report.merged_findings
+            if m.category_id == category.id
+            and findings
+            and finding_numbers.get(m.primary_id, "").split(".")[0] != str(number)
         ]
         if merged_elsewhere:
-            out.append("*Also found by this lane and merged into related findings:* " + "; ".join(
-                f"{m.title} → {finding_numbers.get(m.primary_id, m.primary_id)}" for m in merged_elsewhere))
+            out.append(
+                "*Also found by this lane and merged into related findings:* "
+                + "; ".join(f"{m.title} → {finding_numbers.get(m.primary_id, m.primary_id)}" for m in merged_elsewhere)
+            )
             out.append("")
         out.append("---")
         out.append("")
@@ -240,9 +249,12 @@ def render_report(report: DeepReviewReport) -> str:
     out.append("")
     failed = [tool for tool in report.static_summary if tool.status != "success"]
     if failed:
-        out.append("**Tools that did not run:** " + "; ".join(
-            f"`{tool.tool}` ({tool.status}: {(tool.error or 'no detail').replace('|', '/')})" for tool in failed
-        ))
+        out.append(
+            "**Tools that did not run:** "
+            + "; ".join(
+                f"`{tool.tool}` ({tool.status}: {(tool.error or 'no detail').replace('|', '/')})" for tool in failed
+            )
+        )
         out.append("")
     dismissed: dict[tuple[str, str], list[str]] = defaultdict(list)
     for triage in report.static_triage:
@@ -275,33 +287,47 @@ def render_report(report: DeepReviewReport) -> str:
         out.append("")
         out.append("| Stage | Covered |")
         out.append("|---|---|")
-        out.append(f"| Discovery | {cov.files_discovered} files found ({cov.source_files} source files) — every folder "
-                   "walked except dependency/build/VCS/cache directories |")
+        out.append(
+            f"| Discovery | {cov.files_discovered} files found ({cov.source_files} source files) — every folder "
+            "walked except dependency/build/VCS/cache directories |"
+        )
         tools = ", ".join(cov.static_tools_run) or "none"
-        out.append(f"| Static analysis | {cov.static_python_files} Python files to the Python tools, "
-                   f"{cov.static_code_files} source files to the cross-language tools; ran: {tools} |")
+        out.append(
+            f"| Static analysis | {cov.static_python_files} Python files to the Python tools, "
+            f"{cov.static_code_files} source files to the cross-language tools; ran: {tools} |"
+        )
         graph_gap = cov.python_files - cov.python_files_in_graph
-        out.append(f"| Dependency graph | {cov.python_files_in_graph} of {cov.python_files} Python files parsed"
-                   f"{f' ({graph_gap} not parsed, listed below)' if graph_gap > 0 and cov.python_not_in_graph else ''} |")
+        out.append(
+            f"| Dependency graph | {cov.python_files_in_graph} of {cov.python_files} Python files parsed"
+            f"{f' ({graph_gap} not parsed, listed below)' if graph_gap > 0 and cov.python_not_in_graph else ''} |"
+        )
         docs = ", ".join(f"`{d}`" for d in cov.system_docs)
-        out.append(f"| System description | {'AGENTS.md used as the intended logic: ' + docs if docs else 'no AGENTS.md in the repository'} |")
+        out.append(
+            f"| System description | {'AGENTS.md used as the intended logic: ' + docs if docs else 'no AGENTS.md in the repository'} |"
+        )
         pct = round(100 * cov.source_files_opened_by_agents / cov.source_files) if cov.source_files else 0
-        out.append(f"| Agents | {cov.source_files_opened_by_agents} of {cov.source_files} source files opened directly "
-                   f"({pct}%); the rest were covered through static analysis, the dependency graph, grep and the maps |")
+        out.append(
+            f"| Agents | {cov.source_files_opened_by_agents} of {cov.source_files} source files opened directly "
+            f"({pct}%); the rest were covered through static analysis, the dependency graph, grep and the maps |"
+        )
         if cov.lane_scopes:
             out.append("| Lane file scopes | " + "; ".join(cov.lane_scopes) + " |")
         if report.hypotheses:
             resolved = sum(1 for h in report.hypotheses if not h.endswith("[not resolved]"))
-            out.append(f"| Agent reasoning | {len(report.hypotheses)} repository-specific hypotheses formed by the "
-                       f"specialists ({resolved} resolved, Appendix D); {report.own_investigation} of "
-                       f"{len(report.findings)} findings came from the agents' own investigation, not from a "
-                       "static lead or tool hit |")
+            out.append(
+                f"| Agent reasoning | {len(report.hypotheses)} repository-specific hypotheses formed by the "
+                f"specialists ({resolved} resolved, Appendix D); {report.own_investigation} of "
+                f"{len(report.findings)} findings came from the agents' own investigation, not from a "
+                "static lead or tool hit |"
+            )
         out.append("")
         warnings = []
         if cov.traversal_timed_out:
             warnings.append("the filesystem walk hit its time budget — files beyond that point were not discovered")
         if cov.discovery_timed_out:
-            warnings.append("discovery hit its time budget — every file is still listed, but late files were not AST-parsed")
+            warnings.append(
+                "discovery hit its time budget — every file is still listed, but late files were not AST-parsed"
+            )
         if cov.static_tools_failed:
             warnings.append("static tools that did not run: " + ", ".join(cov.static_tools_failed))
         if cov.unreadable_directories:
@@ -310,11 +336,15 @@ def render_report(report: DeepReviewReport) -> str:
             out.append(f"> **Coverage warning:** {warning}.")
             out.append("")
         if cov.python_not_in_graph:
-            out.append("*Python files not in the dependency graph:* " + "; ".join(f"`{f}`" for f in cov.python_not_in_graph))
+            out.append(
+                "*Python files not in the dependency graph:* " + "; ".join(f"`{f}`" for f in cov.python_not_in_graph)
+            )
             out.append("")
         if report.open_leads:
-            out.append(f"> **Coverage warning:** {len(report.open_leads)} mandatory lead group(s) were left open — the "
-                       "specialist neither recorded nor dismissed them. Review these by hand:")
+            out.append(
+                f"> **Coverage warning:** {len(report.open_leads)} mandatory lead group(s) were left open — the "
+                "specialist neither recorded nor dismissed them. Review these by hand:"
+            )
             out.append("")
             out.extend(f"- {row[:400]}" for row in report.open_leads)
             out.append("")
@@ -334,8 +364,10 @@ def render_report(report: DeepReviewReport) -> str:
         )
         out.append("")
         for item in report.inventory:
-            out.append(f"**{item.title}** ({len([r for r in item.rows if not r.startswith('... ')])}"
-                       f"{'+' if any(r.startswith('... ') for r in item.rows) else ''})")
+            out.append(
+                f"**{item.title}** ({len([r for r in item.rows if not r.startswith('... ')])}"
+                f"{'+' if any(r.startswith('... ') for r in item.rows) else ''})"
+            )
             if item.note:
                 out.append(f"*{item.note}*")
             out.append("")
@@ -348,8 +380,10 @@ def render_report(report: DeepReviewReport) -> str:
     if report.rejected_findings:
         out.append("## Appendix B. Claims rejected by independent verification")
         out.append("")
-        out.append("Recorded by a specialist, then disproved against the code by a second agent. Listed so the "
-                   "rejection itself can be audited.")
+        out.append(
+            "Recorded by a specialist, then disproved against the code by a second agent. Listed so the "
+            "rejection itself can be audited."
+        )
         out.append("")
         for finding in sorted(report.rejected_findings, key=lambda f: (f.category_id, f.id)):
             reason = finding.verification.note if finding.verification else ""
@@ -371,8 +405,10 @@ def render_report(report: DeepReviewReport) -> str:
     if report.hypotheses:
         out.append("## Appendix D. Hypotheses the specialists formed and tested")
         out.append("")
-        out.append("Each specialist first modelled the system and listed what could be wrong in THIS repository; "
-                   "every hypothesis was then confirmed (linked finding) or ruled out with the code that makes it safe.")
+        out.append(
+            "Each specialist first modelled the system and listed what could be wrong in THIS repository; "
+            "every hypothesis was then confirmed (linked finding) or ruled out with the code that makes it safe."
+        )
         out.append("")
         out.extend(f"- {row[:500]}" for row in report.hypotheses)
         out.append("")
@@ -394,11 +430,7 @@ def render_report(report: DeepReviewReport) -> str:
     incomplete = [run for run in report.agent_runs if run.status not in ("completed", "skipped")]
     if incomplete:
         out.append("")
-        out.append(
-            "*Incomplete agents: "
-            + "; ".join(f"{run.agent} ({run.status})" for run in incomplete)
-            + ".*"
-        )
+        out.append("*Incomplete agents: " + "; ".join(f"{run.agent} ({run.status})" for run in incomplete) + ".*")
     if summary.verification_note:
         out.append("")
         out.append(f"*Verification note: {summary.verification_note}*")

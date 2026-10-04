@@ -34,9 +34,7 @@ class TestCloneRepositoryReal:
 
         clone_repository(base_url, local_git_repo.stem, "main", "fake-token", dest, timeout_seconds=30)
 
-        result = subprocess.run(
-            ["git", "-C", str(dest), "rev-list", "--count", "HEAD"], capture_output=True, text=True
-        )
+        result = subprocess.run(["git", "-C", str(dest), "rev-list", "--count", "HEAD"], capture_output=True, text=True)
         assert result.stdout.strip() == "1"  # depth 1
 
     def test_nonexistent_source_raises_network_error(self, tmp_path: Path):
@@ -48,9 +46,7 @@ class TestCloneRepositoryReal:
         dest = tmp_path / "clone-dest"
         base_url = f"file:///{local_git_repo.parent.as_posix()}"
         with pytest.raises(NetworkError):
-            clone_repository(
-                base_url, local_git_repo.stem, "no-such-branch", "fake-token", dest, timeout_seconds=30
-            )
+            clone_repository(base_url, local_git_repo.stem, "no-such-branch", "fake-token", dest, timeout_seconds=30)
 
     def test_never_embeds_token_in_clone_url(self, local_git_repo: Path, tmp_path: Path):
         dest = tmp_path / "clone-dest"
@@ -80,9 +76,8 @@ class TestCloneRepositoryMocked:
             stdout="",
             stderr="remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://gitlab.example.com/x'",
         )
-        with patch("subprocess.run", return_value=fake_result):
-            with pytest.raises(AuthenticationError) as exc_info:
-                clone_repository("https://gitlab.example.com", "group/project", "main", "token", dest, 30)
+        with patch("subprocess.run", return_value=fake_result), pytest.raises(AuthenticationError) as exc_info:
+            clone_repository("https://gitlab.example.com", "group/project", "main", "token", dest, 30)
         assert "HTTP Basic: Access denied" in str(exc_info.value)
 
     def test_generic_failure_raises_network_error(self, tmp_path: Path):
@@ -90,9 +85,8 @@ class TestCloneRepositoryMocked:
         fake_result = subprocess.CompletedProcess(
             args=["git", "clone"], returncode=128, stdout="", stderr="fatal: unable to access: connection reset"
         )
-        with patch("subprocess.run", return_value=fake_result):
-            with pytest.raises(NetworkError):
-                clone_repository("https://gitlab.example.com", "group/project", "main", "token", dest, 30)
+        with patch("subprocess.run", return_value=fake_result), pytest.raises(NetworkError):
+            clone_repository("https://gitlab.example.com", "group/project", "main", "token", dest, 30)
 
     def test_redacts_token_from_error_message(self, tmp_path: Path):
         dest = tmp_path / "clone-dest"
@@ -104,9 +98,7 @@ class TestCloneRepositoryMocked:
         )
         with patch("subprocess.run", return_value=fake_result):
             with pytest.raises((AuthenticationError, NetworkError)) as exc_info:
-                clone_repository(
-                    "https://gitlab.example.com", "group/project", "main", "super-secret-token", dest, 30
-                )
+                clone_repository("https://gitlab.example.com", "group/project", "main", "super-secret-token", dest, 30)
         assert "super-secret-token" not in str(exc_info.value)
 
 
@@ -145,9 +137,8 @@ class TestGetHeadSha:
 
     def test_malformed_output_raises_disk_error(self, local_git_repo: Path):
         fake_result = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="not-a-sha\n", stderr="")
-        with patch("subprocess.run", return_value=fake_result):
-            with pytest.raises(DiskError):
-                get_head_sha(local_git_repo, timeout_seconds=30)
+        with patch("subprocess.run", return_value=fake_result), pytest.raises(DiskError):
+            get_head_sha(local_git_repo, timeout_seconds=30)
 
 
 class TestGetCurrentBranch:
@@ -156,6 +147,5 @@ class TestGetCurrentBranch:
 
     def test_failure_raises_disk_error(self, tmp_path: Path):
         fake_result = subprocess.CompletedProcess(args=["git"], returncode=1, stdout="", stderr="fatal: not a repo")
-        with patch("subprocess.run", return_value=fake_result):
-            with pytest.raises(DiskError):
-                get_current_branch(tmp_path, timeout_seconds=30)
+        with patch("subprocess.run", return_value=fake_result), pytest.raises(DiskError):
+            get_current_branch(tmp_path, timeout_seconds=30)

@@ -86,9 +86,7 @@ class ReviewReportRepository:
         )
         return result.rowcount or 0
 
-    async def list_for_user(
-        self, user_id: UUID, page: int = 1, page_size: int = 20
-    ) -> list[tuple[ReviewReport, str]]:
+    async def list_for_user(self, user_id: UUID, page: int = 1, page_size: int = 20) -> list[tuple[ReviewReport, str]]:
         """Newest-first reviews across every repository ``user_id`` owns, with the repository name.
 
         The heavy ``report_data``/``report_markdown`` columns are deferred —

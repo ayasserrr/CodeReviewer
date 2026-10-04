@@ -46,12 +46,27 @@ _MODEL_CTOR = re.compile(
     r"\w*Embeddings|SentenceTransformer|CrossEncoder|GenerativeModel|ModelInference|init_chat_model)$"
 )
 _MODEL_RECEIVER = re.compile(r"(?i)(^|_)(llms?|chat|model|embedder|embeddings?|encoder|client|agent)(_|\d|$)")
-_SYNC_MODEL_METHODS = frozenset({
-    "invoke", "generate", "predict", "batch", "stream", "embed_query", "embed_documents", "encode",
-    "generate_content", "chat", "complete", "create", "transcribe", "run",
-})
-_ASYNC_MODEL_METHODS = frozenset({"ainvoke", "agenerate", "apredict", "abatch", "astream", "aembed_query",
-                                  "aembed_documents", "astream_events"})
+_SYNC_MODEL_METHODS = frozenset(
+    {
+        "invoke",
+        "generate",
+        "predict",
+        "batch",
+        "stream",
+        "embed_query",
+        "embed_documents",
+        "encode",
+        "generate_content",
+        "chat",
+        "complete",
+        "create",
+        "transcribe",
+        "run",
+    }
+)
+_ASYNC_MODEL_METHODS = frozenset(
+    {"ainvoke", "agenerate", "apredict", "abatch", "astream", "aembed_query", "aembed_documents", "astream_events"}
+)
 _USAGE_READ = re.compile(
     r"usage_metadata|response_metadata|token_usage|get_openai_callback|prompt_tokens|completion_tokens|"
     r"input_tokens|output_tokens|total_tokens|UsageMetadataCallbackHandler"
@@ -59,8 +74,12 @@ _USAGE_READ = re.compile(
 _OFFLOAD = frozenset({"to_thread", "run_in_executor", "run_in_threadpool", "run_sync", "submit", "map", "apply_async"})
 _HEALTH_PATH = re.compile(r"(?i)(^|/)(health|healthz|healthcheck|ready|readiness|live|liveness|ping)$")
 _RESPONSE_CTORS = frozenset({"dict", "JSONResponse", "Response", "PlainTextResponse", "ORJSONResponse", "jsonify"})
-_ROUTE_TEST = re.compile(r"TestClient|AsyncClient\(|httpx\.|ASGITransport|supertest|request\(app|client\.(get|post|put|delete)\(")
-_TEST_FRAMEWORK = re.compile(r"(?i)^(pytest|pytest-[\w-]+|unittest2|nose2?|hypothesis|jest|vitest|mocha|playwright|@playwright/test|cypress|@testing-library/[\w-]+)$")
+_ROUTE_TEST = re.compile(
+    r"TestClient|AsyncClient\(|httpx\.|ASGITransport|supertest|request\(app|client\.(get|post|put|delete)\("
+)
+_TEST_FRAMEWORK = re.compile(
+    r"(?i)^(pytest|pytest-[\w-]+|unittest2|nose2?|hypothesis|jest|vitest|mocha|playwright|@playwright/test|cypress|@testing-library/[\w-]+)$"
+)
 _CI_TEST_STEP = re.compile(
     r"(?i)\b(pytest|unittest|tox|nox|(npm|yarn|pnpm)( run)? test|vitest|jest|go test|mvn (test|verify)|gradle\w* test|"
     r"ruff|flake8|pylint|eslint|mypy|pyright|bandit|semgrep|trivy|snyk|pip-audit|npm audit|sonar\w*)\b"
@@ -74,93 +93,297 @@ _EXECUTORS = frozenset({"ThreadPoolExecutor", "ProcessPoolExecutor", "run_in_exe
 # Controls a production system needs; absent everywhere = a lead for the owning lane.
 # (lane, label, evidence regex, mention regex, applies-when)
 _CONTROLS = (
-    ("llm", "a per-user / per-session / per-request token or cost budget for model calls",
-     (
-         r"(?i)token_?budget|cost_?(limit|budget)|max_?input_?tokens|trim_messages|max_context|usage_?(limit|quota)|"
-         r"tokens_?per_?(user|session|day)"
-     ),
-     r"(?i)budget|quota|cost limit|token limit|per[- ]user|per[- ]session", "llm"),
-    ("secrets", "startup validation of required configuration (the app refuses to boot without SECRET_KEY, DB, keys)",
-     (
-         r"(?i)\bBaseSettings\b|validate_(settings|config|env)|raise\s+\w*Error\(.{0,80}(not set|missing|required)|"
-         r"sys\.exit\(.{0,40}(env|config)"
-     ),
-     r"(?i)startup validation|validat\w* (at|on) (startup|boot)|refuse\w* to (start|boot)|boots? (with|misconfigured)",
-     "env"),
-    ("llm", "cost attribution — token usage recorded per user / job / request / session",
-     r"(?i)(usage|tokens?|cost)\w*\s*[,(].{0,80}(user_?(id|email)|job_?id|request_?id|session_?id)",
-     r"(?i)attribut|per[- ](user|job|request|session)|cost", "llm"),
-    ("security", "an audit trail of who viewed or changed personal records",
-     r"(?i)audit_?log|AuditLog|audit_?trail|access_?log_?(entry|record)|viewed_by|activity_?log|log_access",
-     r"(?i)audit", "pii"),
-    ("security", "a retention / deletion policy for personal data (erasure of documents, rows and derived vectors)",
-     r"(?i)retention|purge_|erase_|right_to_(be_forgotten|erasure)|anonymi[sz]e|gdpr|delete_after|expire_after",
-     r"(?i)retention|deletion|erasure|purge|gdpr|lifecycle", "pii"),
-    ("llm", "an evaluation / regression set for model-produced scores (known inputs with expected results)",
-     r"(?i)eval(uation)?_?(set|suite|dataset)|golden|ground_?truth|benchmark_|regression_?(set|test)|test_\w*scor",
-     r"(?i)evaluat|regression|golden|ground.truth|bias|fairness|accuracy", "scoring"),
-    ("llm", "human oversight of automated decisions (review / override before a model score rejects someone)",
-     r"(?i)human_?review|manual_?review|override_?(score|decision)|approved_by|reviewed_by|requires_approval",
-     r"(?i)human|oversight|override|automated decision", "scoring"),
-    ("observability", "backups / disaster recovery for the database, vector store and uploaded files",
-     r"(?i)pg_dump|pg_basebackup|\bbackup|snapshot_?(policy|schedule)|restic|velero|barman|wal-g|pgbackrest|disaster.recovery",
-     r"(?i)backup|disaster|recover|durab", "stateful"),
-    ("inputs", "per-user / per-IP upload or job quotas",
-     r"(?i)quota|max_?uploads|upload_?limit|max_?files_?per|max_?jobs|jobs_?per_?user|daily_?limit",
-     r"(?i)quota|per[- ]user|job[- ]creation|limit on (jobs|uploads)", "uploads"),
-    ("inputs", "cancellation of a running processing job",
-     r"(?i)\bcancel(led|lation|_job|_task|_run)?\b|abort_?(job|task)|\.revoke\(",
-     r"(?i)cancel", "jobs"),
-    ("inputs", "retry with backoff around external / model calls",
-     r"(?i)\btenacity\b|\bbackoff\b|exponential|Retry\(|retry_?(policy|with|delay)|stop_after_attempt",
-     r"(?i)retr(y|ies)|backoff", "jobs"),
+    (
+        "llm",
+        "a per-user / per-session / per-request token or cost budget for model calls",
+        (
+            r"(?i)token_?budget|cost_?(limit|budget)|max_?input_?tokens|trim_messages|max_context|usage_?(limit|quota)|"
+            r"tokens_?per_?(user|session|day)"
+        ),
+        r"(?i)budget|quota|cost limit|token limit|per[- ]user|per[- ]session",
+        "llm",
+    ),
+    (
+        "secrets",
+        "startup validation of required configuration (the app refuses to boot without SECRET_KEY, DB, keys)",
+        (
+            r"(?i)\bBaseSettings\b|validate_(settings|config|env)|raise\s+\w*Error\(.{0,80}(not set|missing|required)|"
+            r"sys\.exit\(.{0,40}(env|config)"
+        ),
+        r"(?i)startup validation|validat\w* (at|on) (startup|boot)|refuse\w* to (start|boot)|boots? (with|misconfigured)",
+        "env",
+    ),
+    (
+        "llm",
+        "cost attribution — token usage recorded per user / job / request / session",
+        r"(?i)(usage|tokens?|cost)\w*\s*[,(].{0,80}(user_?(id|email)|job_?id|request_?id|session_?id)",
+        r"(?i)attribut|per[- ](user|job|request|session)|cost",
+        "llm",
+    ),
+    (
+        "security",
+        "an audit trail of who viewed or changed personal records",
+        r"(?i)audit_?log|AuditLog|audit_?trail|access_?log_?(entry|record)|viewed_by|activity_?log|log_access",
+        r"(?i)audit",
+        "pii",
+    ),
+    (
+        "security",
+        "a retention / deletion policy for personal data (erasure of documents, rows and derived vectors)",
+        r"(?i)retention|purge_|erase_|right_to_(be_forgotten|erasure)|anonymi[sz]e|gdpr|delete_after|expire_after",
+        r"(?i)retention|deletion|erasure|purge|gdpr|lifecycle",
+        "pii",
+    ),
+    (
+        "llm",
+        "an evaluation / regression set for model-produced scores (known inputs with expected results)",
+        r"(?i)eval(uation)?_?(set|suite|dataset)|golden|ground_?truth|benchmark_|regression_?(set|test)|test_\w*scor",
+        r"(?i)evaluat|regression|golden|ground.truth|bias|fairness|accuracy",
+        "scoring",
+    ),
+    (
+        "llm",
+        "human oversight of automated decisions (review / override before a model score rejects someone)",
+        r"(?i)human_?review|manual_?review|override_?(score|decision)|approved_by|reviewed_by|requires_approval",
+        r"(?i)human|oversight|override|automated decision",
+        "scoring",
+    ),
+    (
+        "observability",
+        "backups / disaster recovery for the database, vector store and uploaded files",
+        r"(?i)pg_dump|pg_basebackup|\bbackup|snapshot_?(policy|schedule)|restic|velero|barman|wal-g|pgbackrest|disaster.recovery",
+        r"(?i)backup|disaster|recover|durab",
+        "stateful",
+    ),
+    (
+        "inputs",
+        "per-user / per-IP upload or job quotas",
+        r"(?i)quota|max_?uploads|upload_?limit|max_?files_?per|max_?jobs|jobs_?per_?user|daily_?limit",
+        r"(?i)quota|per[- ]user|job[- ]creation|limit on (jobs|uploads)",
+        "uploads",
+    ),
+    (
+        "inputs",
+        "cancellation of a running processing job",
+        r"(?i)\bcancel(led|lation|_job|_task|_run)?\b|abort_?(job|task)|\.revoke\(",
+        r"(?i)cancel",
+        "jobs",
+    ),
+    (
+        "inputs",
+        "retry with backoff around external / model calls",
+        r"(?i)\btenacity\b|\bbackoff\b|exponential|Retry\(|retry_?(policy|with|delay)|stop_after_attempt",
+        r"(?i)retr(y|ies)|backoff",
+        "jobs",
+    ),
 )
-_CI_FILE_NAMES = frozenset({".gitlab-ci.yml", "azure-pipelines.yml", "bitbucket-pipelines.yml", ".drone.yml",
-                            "cloudbuild.yaml", "cloudbuild.yml"})
+_CI_FILE_NAMES = frozenset(
+    {
+        ".gitlab-ci.yml",
+        "azure-pipelines.yml",
+        "bitbucket-pipelines.yml",
+        ".drone.yml",
+        "cloudbuild.yaml",
+        "cloudbuild.yml",
+    }
+)
 _JENKINS_STAGE = re.compile(r"""stage\s*\(\s*['"]([^'"]+)['"]""")
 _YAML_STAGE = re.compile(r"(?m)^\s*(?:-\s*)?(?:stage|name):\s*['\"]?([^'\"\n#]+)")
-_NAME_MODIFIERS = frozenset({
-    "async", "sync", "all", "new", "old", "legacy", "v1", "v2", "v3", "impl", "internal", "helper", "fitz",
-    "pymupdf", "pdfplumber", "pypdf", "fast", "simple", "uploaded", "upload", "external", "tmp", "temp", "wrapper",
-    "base", "default", "the", "a", "func", "fn", "local", "orig", "original", "alt", "2", "3",
-})
-_GENERIC_NAMES = frozenset({"main", "run", "get", "post", "setup", "teardown", "create_app", "health", "root", "index",
-                            "lifespan", "startup", "shutdown", "init", "list", "delete", "update", "create", "handler"})
+_NAME_MODIFIERS = frozenset(
+    {
+        "async",
+        "sync",
+        "all",
+        "new",
+        "old",
+        "legacy",
+        "v1",
+        "v2",
+        "v3",
+        "impl",
+        "internal",
+        "helper",
+        "fitz",
+        "pymupdf",
+        "pdfplumber",
+        "pypdf",
+        "fast",
+        "simple",
+        "uploaded",
+        "upload",
+        "external",
+        "tmp",
+        "temp",
+        "wrapper",
+        "base",
+        "default",
+        "the",
+        "a",
+        "func",
+        "fn",
+        "local",
+        "orig",
+        "original",
+        "alt",
+        "2",
+        "3",
+    }
+)
+_GENERIC_NAMES = frozenset(
+    {
+        "main",
+        "run",
+        "get",
+        "post",
+        "setup",
+        "teardown",
+        "create_app",
+        "health",
+        "root",
+        "index",
+        "lifespan",
+        "startup",
+        "shutdown",
+        "init",
+        "list",
+        "delete",
+        "update",
+        "create",
+        "handler",
+    }
+)
 _SUBPROCESS_CALLS = frozenset({"run", "check_output", "check_call", "call"})
 
 # Packages that do the same job; two or more of one family declared together is a lead.
 _LIBRARY_FAMILIES: dict[str, frozenset[str]] = {
-    "PDF parsing": frozenset({"pypdf2", "pypdf", "pymupdf", "fitz", "pdfplumber", "pdfminer.six", "pdfminer", "pypdfium2",
-                              "pikepdf", "pdftotext", "tika"}),
+    "PDF parsing": frozenset(
+        {
+            "pypdf2",
+            "pypdf",
+            "pymupdf",
+            "fitz",
+            "pdfplumber",
+            "pdfminer.six",
+            "pdfminer",
+            "pypdfium2",
+            "pikepdf",
+            "pdftotext",
+            "tika",
+        }
+    ),
     "PostgreSQL drivers": frozenset({"psycopg2", "psycopg2-binary", "psycopg", "psycopg-binary", "asyncpg", "pg8000"}),
     "HTTP clients (Python)": frozenset({"requests", "httpx", "aiohttp", "urllib3", "pycurl"}),
     "Word documents": frozenset({"python-docx", "docx2txt", "docx2pdf", "mammoth", "docx"}),
     "JWT libraries": frozenset({"pyjwt", "python-jose", "authlib", "jwcrypto"}),
-    "Vector stores": frozenset({"chromadb", "faiss-cpu", "faiss-gpu", "qdrant-client", "pinecone-client", "pinecone",
-                                "weaviate-client", "pymilvus", "lancedb"}),
+    "Vector stores": frozenset(
+        {
+            "chromadb",
+            "faiss-cpu",
+            "faiss-gpu",
+            "qdrant-client",
+            "pinecone-client",
+            "pinecone",
+            "weaviate-client",
+            "pymilvus",
+            "lancedb",
+        }
+    ),
     "Speech-to-text": frozenset({"openai-whisper", "faster-whisper", "whisper", "speechrecognition", "vosk"}),
     "HTTP clients (JS)": frozenset({"axios", "node-fetch", "ky", "superagent", "got"}),
     "Date libraries (JS)": frozenset({"moment", "dayjs", "date-fns", "luxon"}),
     "Spreadsheet export (JS)": frozenset({"xlsx", "exceljs", "sheetjs"}),
 }
 # Packages used without an import of their own name (CLI tools, plugins, drivers named in URLs).
-_NOT_IMPORTED_BY_DESIGN = frozenset({
-    "uvicorn", "gunicorn", "hypercorn", "pytest", "black", "ruff", "mypy", "isort", "flake8", "pylint", "pre-commit",
-    "setuptools", "wheel", "pip", "alembic", "python-multipart", "email-validator", "bcrypt", "cryptography",
-    "psycopg2", "psycopg2-binary", "psycopg", "psycopg-binary", "asyncpg", "pymysql", "aiosqlite", "mysqlclient",
-    "sentencepiece", "torch", "tokenizers", "accelerate", "einops", "protobuf", "grpcio", "watchfiles", "uvloop",
-    "httptools", "websockets", "python-dotenv", "tzdata", "certifi", "typing-extensions", "greenlet", "coverage",
-    "pytest-asyncio", "pytest-cov", "httpx", "gevent", "eventlet", "passlib", "argon2-cffi", "jinja2", "openpyxl",
-    "xlsxwriter", "lxml", "pydantic-settings", "types-requests", "sqlalchemy-utils",
-})
+_NOT_IMPORTED_BY_DESIGN = frozenset(
+    {
+        "uvicorn",
+        "gunicorn",
+        "hypercorn",
+        "pytest",
+        "black",
+        "ruff",
+        "mypy",
+        "isort",
+        "flake8",
+        "pylint",
+        "pre-commit",
+        "setuptools",
+        "wheel",
+        "pip",
+        "alembic",
+        "python-multipart",
+        "email-validator",
+        "bcrypt",
+        "cryptography",
+        "psycopg2",
+        "psycopg2-binary",
+        "psycopg",
+        "psycopg-binary",
+        "asyncpg",
+        "pymysql",
+        "aiosqlite",
+        "mysqlclient",
+        "sentencepiece",
+        "torch",
+        "tokenizers",
+        "accelerate",
+        "einops",
+        "protobuf",
+        "grpcio",
+        "watchfiles",
+        "uvloop",
+        "httptools",
+        "websockets",
+        "python-dotenv",
+        "tzdata",
+        "certifi",
+        "typing-extensions",
+        "greenlet",
+        "coverage",
+        "pytest-asyncio",
+        "pytest-cov",
+        "httpx",
+        "gevent",
+        "eventlet",
+        "passlib",
+        "argon2-cffi",
+        "jinja2",
+        "openpyxl",
+        "xlsxwriter",
+        "lxml",
+        "pydantic-settings",
+        "types-requests",
+        "sqlalchemy-utils",
+    }
+)
 _IMPORT_ALIASES = {
-    "pymupdf": "fitz", "python-docx": "docx", "python-jose": "jose", "pyjwt": "jwt", "beautifulsoup4": "bs4",
-    "pyyaml": "yaml", "scikit-learn": "sklearn", "pillow": "PIL", "opencv-python": "cv2", "opencv-python-headless": "cv2",
-    "python-dotenv": "dotenv", "pypdf2": "PyPDF2", "openai-whisper": "whisper", "faster-whisper": "faster_whisper",
-    "sentence-transformers": "sentence_transformers", "google-generativeai": "google.generativeai",
-    "langchain-community": "langchain_community", "tavily-python": "tavily", "pdfminer.six": "pdfminer",
-    "speechrecognition": "speech_recognition", "webdriver-manager": "webdriver_manager", "qdrant-client": "qdrant_client",
-    "faiss-cpu": "faiss", "faiss-gpu": "faiss", "msal": "msal", "zeep": "zeep", "chromadb": "chromadb",
+    "pymupdf": "fitz",
+    "python-docx": "docx",
+    "python-jose": "jose",
+    "pyjwt": "jwt",
+    "beautifulsoup4": "bs4",
+    "pyyaml": "yaml",
+    "scikit-learn": "sklearn",
+    "pillow": "PIL",
+    "opencv-python": "cv2",
+    "opencv-python-headless": "cv2",
+    "python-dotenv": "dotenv",
+    "pypdf2": "PyPDF2",
+    "openai-whisper": "whisper",
+    "faster-whisper": "faster_whisper",
+    "sentence-transformers": "sentence_transformers",
+    "google-generativeai": "google.generativeai",
+    "langchain-community": "langchain_community",
+    "tavily-python": "tavily",
+    "pdfminer.six": "pdfminer",
+    "speechrecognition": "speech_recognition",
+    "webdriver-manager": "webdriver_manager",
+    "qdrant-client": "qdrant_client",
+    "faiss-cpu": "faiss",
+    "faiss-gpu": "faiss",
+    "msal": "msal",
+    "zeep": "zeep",
+    "chromadb": "chromadb",
 }
 
 
@@ -204,8 +427,12 @@ class RuntimeSignals:
     query_credentials: list[Signal] = field(default_factory=list)  # API keys/tokens read from the query string
     executor_nesting: list[Signal] = field(default_factory=list)
     absent_controls: list[tuple[str, str, str]] = field(default_factory=list)  # (lane, label, mention regex)
-    packaged_artifacts: list[Signal] = field(default_factory=list)  # secrets / personal data shipped in the image or tree
-    deploy_env: list[Signal] = field(default_factory=list)  # env keys in deploy manifests: duplicates, local/dev targets
+    packaged_artifacts: list[Signal] = field(
+        default_factory=list
+    )  # secrets / personal data shipped in the image or tree
+    deploy_env: list[Signal] = field(
+        default_factory=list
+    )  # env keys in deploy manifests: duplicates, local/dev targets
     unbounded_reads: list[Signal] = field(default_factory=list)
     startup_fragility: list[Signal] = field(default_factory=list)
     whole_file_rewrites: list[Signal] = field(default_factory=list)
@@ -214,7 +441,9 @@ class RuntimeSignals:
     supply_chain: list[Signal] = field(default_factory=list)  # missing lockfiles, unpinned base images
     naive_datetimes: list[Signal] = field(default_factory=list)
     session_fixation: list[Signal] = field(default_factory=list)  # identity put into a session that is never renewed
-    request_resource_in_background: list[Signal] = field(default_factory=list)  # request-scoped db/session handed to later work
+    request_resource_in_background: list[Signal] = field(
+        default_factory=list
+    )  # request-scoped db/session handed to later work
     fire_and_forget_tasks: list[Signal] = field(default_factory=list)  # create_task() result dropped
     sensitive_response_fields: list[Signal] = field(default_factory=list)  # response models carrying secrets
     leaky_session_dependencies: list[Signal] = field(default_factory=list)  # yielded sessions with no finally/close
@@ -280,7 +509,9 @@ def _is_test_file(path: str) -> bool:
     name = parts[-1]
     return (
         any(p in ("tests", "test", "testing", "__tests__", "e2e") for p in parts[:-1])
-        or name.startswith("test_") or name.endswith(("_test.py", "_tests.py")) or name in ("conftest.py", "test.py", "tests.py")
+        or name.startswith("test_")
+        or name.endswith(("_test.py", "_tests.py"))
+        or name in ("conftest.py", "test.py", "tests.py")
         or bool(re.search(r"\.(test|spec)\.[jt]sx?$", name))
     )
 
@@ -296,7 +527,13 @@ def _model_objects(files) -> set[str]:
     for py in files:
         for node in py.tree.body:
             value = getattr(node, "value", None)
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+            targets = (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+                if isinstance(node, ast.AnnAssign)
+                else []
+            )
             if isinstance(value, ast.Call) and _MODEL_CTOR.match(_dotted(value.func).split(".")[-1]):
                 names |= {t.id for t in targets if isinstance(t, ast.Name)}
     return names
@@ -326,8 +563,10 @@ def _is_generation_call(call: ast.Call, model_names: set[str]) -> bool:
     if not isinstance(call.func, ast.Attribute) or "embed" in call.func.attr or call.func.attr == "encode":
         return False
     if call.func.attr in _ASYNC_MODEL_METHODS:
-        return bool(_MODEL_RECEIVER.search(_dotted(call.func.value).split(".")[-1] or "")) or \
-            _dotted(call.func.value).split(".")[-1] in model_names
+        return (
+            bool(_MODEL_RECEIVER.search(_dotted(call.func.value).split(".")[-1] or ""))
+            or _dotted(call.func.value).split(".")[-1] in model_names
+        )
     return _is_sync_model_call(call, model_names)
 
 
@@ -340,7 +579,9 @@ def _llm_signals(files, live: set[str], signals: RuntimeSignals) -> None:
             if isinstance(value, ast.Call):
                 ctor = _dotted(value.func).split(".")[-1]
                 if _MODEL_CTOR.match(ctor):
-                    signals.model_clients_at_import.append(Signal(py.path, node.lineno, f"{ctor}(...) built at import time"))
+                    signals.model_clients_at_import.append(
+                        Signal(py.path, node.lineno, f"{ctor}(...) built at import time")
+                    )
 
     # 2. sync functions that (transitively) reach a sync model call
     defs: dict[str, list[tuple[str, ast.AST]]] = defaultdict(list)
@@ -384,8 +625,10 @@ def _llm_signals(files, live: set[str], signals: RuntimeSignals) -> None:
             if not isinstance(fn, ast.AsyncFunctionDef):
                 continue
             offloaded = {
-                id(arg) for node in _own_nodes(fn) if isinstance(node, ast.Call)
-                and _dotted(node.func).split(".")[-1] in _OFFLOAD for arg in ast.walk(node)
+                id(arg)
+                for node in _own_nodes(fn)
+                if isinstance(node, ast.Call) and _dotted(node.func).split(".")[-1] in _OFFLOAD
+                for arg in ast.walk(node)
             }
             for node in _own_nodes(fn):
                 if not isinstance(node, ast.Call) or id(node) in offloaded or (py.path, node.lineno) in seen:
@@ -398,7 +641,9 @@ def _llm_signals(files, live: set[str], signals: RuntimeSignals) -> None:
                 else:
                     continue
                 seen.add((py.path, node.lineno))
-                signals.blocking_in_async.append(Signal(py.path, node.lineno, f"async {fn.name}() runs {what} on the event loop"))
+                signals.blocking_in_async.append(
+                    Signal(py.path, node.lineno, f"async {fn.name}() runs {what} on the event loop")
+                )
 
     # 4. agent loops re-sending a growing message list; unbounded tool outputs; usage never read
     for py in files:
@@ -412,29 +657,54 @@ def _llm_signals(files, live: set[str], signals: RuntimeSignals) -> None:
                 grown, sent = set(), []
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
-                        if sub.func.attr in ("append", "extend", "add_messages") and isinstance(sub.func.value, ast.Name):
+                        if sub.func.attr in ("append", "extend", "add_messages") and isinstance(
+                            sub.func.value, ast.Name
+                        ):
                             grown.add(sub.func.value.id)
-                        if (sub.func.attr in _ASYNC_MODEL_METHODS or sub.func.attr in ("invoke", "stream")) and sub.args \
-                                and isinstance(sub.args[0], ast.Name):
+                        if (
+                            (sub.func.attr in _ASYNC_MODEL_METHODS or sub.func.attr in ("invoke", "stream"))
+                            and sub.args
+                            and isinstance(sub.args[0], ast.Name)
+                        ):
                             sent.append((sub.args[0].id, sub.lineno))
-                    if isinstance(sub, ast.AugAssign) and isinstance(sub.target, ast.Name) and isinstance(sub.op, ast.Add):
+                    if (
+                        isinstance(sub, ast.AugAssign)
+                        and isinstance(sub.target, ast.Name)
+                        and isinstance(sub.op, ast.Add)
+                    ):
                         grown.add(sub.target.id)
-                    if isinstance(sub, ast.Assign) and isinstance(sub.value, ast.BinOp) and isinstance(sub.value.op, ast.Add):
+                    if (
+                        isinstance(sub, ast.Assign)
+                        and isinstance(sub.value, ast.BinOp)
+                        and isinstance(sub.value.op, ast.Add)
+                    ):
                         left = sub.value.left
                         while isinstance(left, ast.BinOp):
                             left = left.left
-                        grown |= {t.id for t in sub.targets if isinstance(t, ast.Name)
-                                  and isinstance(left, ast.Name) and left.id == t.id}
+                        grown |= {
+                            t.id
+                            for t in sub.targets
+                            if isinstance(t, ast.Name) and isinstance(left, ast.Name) and left.id == t.id
+                        }
                 hit = next(((name, line) for name, line in sent if name in grown), None)
                 if hit:
-                    signals.agent_loops.append(Signal(
-                        py.path, node.lineno,
-                        f"loop re-sends the growing `{hit[0]}` list to the model every round (call at line {hit[1]})",
-                    ))
+                    signals.agent_loops.append(
+                        Signal(
+                            py.path,
+                            node.lineno,
+                            f"loop re-sends the growing `{hit[0]}` list to the model every round (call at line {hit[1]})",
+                        )
+                    )
             if isinstance(node, ast.Call) and _dotted(node.func).split(".")[-1] == "ToolMessage":
-                content = next((k.value for k in node.keywords if k.arg == "content"), node.args[0] if node.args else None)
+                content = next(
+                    (k.value for k in node.keywords if k.arg == "content"), node.args[0] if node.args else None
+                )
                 if isinstance(content, ast.Call) and _dotted(content.func).split(".")[-1] in (
-                    "str", "dumps", "model_dump_json", "json", "repr"
+                    "str",
+                    "dumps",
+                    "model_dump_json",
+                    "json",
+                    "repr",
                 ):
                     signals.unbounded_tool_output.append(
                         Signal(py.path, node.lineno, "tool result passed to the model whole (no size bound)")
@@ -442,7 +712,11 @@ def _llm_signals(files, live: set[str], signals: RuntimeSignals) -> None:
         if invokes:
             signals.model_call_files += 1
             if not _USAGE_READ.search(py.text):
-                first = next(n.lineno for n in ast.walk(py.tree) if isinstance(n, ast.Call) and _is_generation_call(n, model_names))
+                first = next(
+                    n.lineno
+                    for n in ast.walk(py.tree)
+                    if isinstance(n, ast.Call) and _is_generation_call(n, model_names)
+                )
                 signals.usage_never_read.append(
                     Signal(py.path, first, f"{invokes} model call(s); token usage is never read in this file")
                 )
@@ -458,8 +732,11 @@ def _observability_signals(files, live: set[str], routes, signals: RuntimeSignal
     for py in files:
         if py.path not in live:
             continue
-        n = sum(1 for node in ast.walk(py.tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "print")
+        n = sum(
+            1
+            for node in ast.walk(py.tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print"
+        )
         if n:
             counts.append((py.path, n))
     signals.print_live = sorted(counts, key=lambda row: -row[1])
@@ -475,8 +752,13 @@ def _observability_signals(files, live: set[str], routes, signals: RuntimeSignal
         calls = {_dotted(n.func).split(".")[-1] for n in _own_nodes(fn) if isinstance(n, ast.Call)}
         awaits = any(isinstance(n, ast.Await) for n in _own_nodes(fn))
         if not awaits and calls <= _RESPONSE_CTORS:
-            signals.static_health.append(Signal(route.file, route.line,
-                                                f"{route.method} {route.path} returns a constant without checking any dependency"))
+            signals.static_health.append(
+                Signal(
+                    route.file,
+                    route.line,
+                    f"{route.method} {route.path} returns a constant without checking any dependency",
+                )
+            )
 
     for py in files:
         for node in ast.walk(py.tree):
@@ -496,7 +778,11 @@ def _structure_signals(files, live: set[str], routes, signals: RuntimeSignals) -
     started_on_executor: set[str] = set()
     for py in files:
         for node in ast.walk(py.tree):
-            if isinstance(node, ast.Call) and _dotted(node.func).split(".")[-1] in ("to_thread", "run_in_executor", "submit"):
+            if isinstance(node, ast.Call) and _dotted(node.func).split(".")[-1] in (
+                "to_thread",
+                "run_in_executor",
+                "submit",
+            ):
                 args = node.args[1:] if _dotted(node.func).endswith("run_in_executor") else node.args[:1]
                 for arg in args:
                     name = _dotted(arg).split(".")[-1]
@@ -510,24 +796,52 @@ def _structure_signals(files, live: set[str], routes, signals: RuntimeSignals) -
                 callee = _dotted(node.func)
                 last = callee.split(".")[-1]
                 # credentials read from the query string
-                if last == "get" and callee.endswith("query_params.get") and node.args and isinstance(node.args[0], ast.Constant) \
-                        and _CREDENTIAL_NAME.search(str(node.args[0].value)):
-                    signals.query_credentials.append(Signal(py.path, node.lineno, f"reads `{node.args[0].value}` from the query string"))
-                if last == "ThreadPoolExecutor" and any(
-                    k.arg == "max_workers" and isinstance(k.value, ast.Constant) and k.value.value == 1 for k in node.keywords
+                if (
+                    last == "get"
+                    and callee.endswith("query_params.get")
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and _CREDENTIAL_NAME.search(str(node.args[0].value))
                 ):
-                    signals.executor_nesting.append(Signal(py.path, node.lineno, "ThreadPoolExecutor(max_workers=1) — a thread pool of one"))
-            elif isinstance(node, ast.Subscript) and _dotted(node.value).endswith("query_params") \
-                    and isinstance(node.slice, ast.Constant) and _CREDENTIAL_NAME.search(str(node.slice.value)):
-                signals.query_credentials.append(Signal(py.path, node.lineno, f"reads `{node.slice.value}` from the query string"))
+                    signals.query_credentials.append(
+                        Signal(py.path, node.lineno, f"reads `{node.args[0].value}` from the query string")
+                    )
+                if last == "ThreadPoolExecutor" and any(
+                    k.arg == "max_workers" and isinstance(k.value, ast.Constant) and k.value.value == 1
+                    for k in node.keywords
+                ):
+                    signals.executor_nesting.append(
+                        Signal(py.path, node.lineno, "ThreadPoolExecutor(max_workers=1) — a thread pool of one")
+                    )
+            elif (
+                isinstance(node, ast.Subscript)
+                and _dotted(node.value).endswith("query_params")
+                and isinstance(node.slice, ast.Constant)
+                and _CREDENTIAL_NAME.search(str(node.slice.value))
+            ):
+                signals.query_credentials.append(
+                    Signal(py.path, node.lineno, f"reads `{node.slice.value}` from the query string")
+                )
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 args = node.args.args + node.args.kwonlyargs
-                defaults = [None] * (len(node.args.args) - len(node.args.defaults)) + list(node.args.defaults) + list(node.args.kw_defaults)
+                defaults = (
+                    [None] * (len(node.args.args) - len(node.args.defaults))
+                    + list(node.args.defaults)
+                    + list(node.args.kw_defaults)
+                )
                 for arg, default in zip(args, defaults, strict=False):
-                    if isinstance(default, ast.Call) and _dotted(default.func).split(".")[-1] == "Query" and (
-                        _CREDENTIAL_NAME.search(arg.arg)
-                        or any(k.arg == "alias" and isinstance(k.value, ast.Constant) and _CREDENTIAL_NAME.search(str(k.value.value))
-                               for k in default.keywords)
+                    if (
+                        isinstance(default, ast.Call)
+                        and _dotted(default.func).split(".")[-1] == "Query"
+                        and (
+                            _CREDENTIAL_NAME.search(arg.arg)
+                            or any(
+                                k.arg == "alias"
+                                and isinstance(k.value, ast.Constant)
+                                and _CREDENTIAL_NAME.search(str(k.value.value))
+                                for k in default.keywords
+                            )
+                        )
                     ):
                         signals.query_credentials.append(
                             Signal(py.path, arg.lineno, f"{node.name}() accepts `{arg.arg}` as a query parameter")
@@ -535,11 +849,14 @@ def _structure_signals(files, live: set[str], routes, signals: RuntimeSignals) -
                 if node.name in started_on_executor:
                     for sub in _own_nodes(node):
                         if isinstance(sub, ast.Call) and _dotted(sub.func).split(".")[-1] in _EXECUTORS:
-                            signals.executor_nesting.append(Signal(
-                                py.path, sub.lineno,
-                                f"{node.name}() already runs on an executor and starts another one "
-                                f"({_dotted(sub.func).split('.')[-1]})",
-                            ))
+                            signals.executor_nesting.append(
+                                Signal(
+                                    py.path,
+                                    sub.lineno,
+                                    f"{node.name}() already runs on an executor and starts another one "
+                                    f"({_dotted(sub.func).split('.')[-1]})",
+                                )
+                            )
                             break
 
 
@@ -549,8 +866,10 @@ _PII_WORDS = re.compile(
 )
 _SCORING = re.compile(r"(?i)\bdef\s+\w*(score|rank|rerank|classify|approve|decide|eligib|rating|risk)\w*\s*\(")
 _STATEFUL = re.compile(r"(?i)sqlalchemy|psycopg|asyncpg|chromadb|pymongo|redis|create_engine|qdrant|faiss")
-_INFRA_FILE = re.compile(r"(?i)(dockerfile|jenkins|\.nomad$|\.hcl$|compose\.ya?ml$|\.gitlab-ci|\.github/workflows/|(^|/)k8s/|"
-                         r"(^|/)helm/|(^|/)deploy/|(^|/)infra/|\.sh$|\.tf$)")
+_INFRA_FILE = re.compile(
+    r"(?i)(dockerfile|jenkins|\.nomad$|\.hcl$|compose\.ya?ml$|\.gitlab-ci|\.github/workflows/|(^|/)k8s/|"
+    r"(^|/)helm/|(^|/)deploy/|(^|/)infra/|\.sh$|\.tf$)"
+)
 
 
 def _absent_controls(files, live: set[str], routes, signals: RuntimeSignals, infra: list[str] | None = None) -> None:
@@ -583,8 +902,19 @@ _TEST_CREDENTIAL = re.compile(r"""(?i)(password|passwd|pwd|secret|api_?key)\s*[:
 _ENV_BLOCK = re.compile(r"(?ms)^\s*env\s*\{(.*?)^\s*\}")
 _HCL_ASSIGN = re.compile(r"""^\s*"?([A-Z][A-Z0-9_]*)"?\s*=\s*"?([^"\n]*)""")
 _COMPOSE_ENV = re.compile(r"""^\s*-?\s*([A-Z][A-Z0-9_]*)\s*[=:]\s*['"]?([^'"\n]*)""")
-_LOCKFILES = ("poetry.lock", "Pipfile.lock", "uv.lock", "pdm.lock", "requirements.lock", "requirements-lock.txt",
-              "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "npm-shrinkwrap.json")
+_LOCKFILES = (
+    "poetry.lock",
+    "Pipfile.lock",
+    "uv.lock",
+    "pdm.lock",
+    "requirements.lock",
+    "requirements-lock.txt",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lockb",
+    "npm-shrinkwrap.json",
+)
 
 
 def _read(repo_path: Path, rel: str, limit: int = 400_000) -> str:
@@ -602,11 +932,11 @@ def _artifact_signals(repo_path: Path, manifest: RepositoryManifest, signals: Ru
         if lower.endswith(_PERSONAL_DOC_EXT) and _PERSONAL_DOC_DIR.search(lower):
             docs[str(PurePosixPath(path).parent)] += 1
         elif lower.endswith(_ARCHIVE_EXT):
-            signals.packaged_artifacts.append(Signal(path, 0, "archive committed to the repository (what does it ship?)"))
+            signals.packaged_artifacts.append(
+                Signal(path, 0, "archive committed to the repository (what does it ship?)")
+            )
     for directory, n in sorted(docs.items(), key=lambda kv: -kv[1]):
-        signals.packaged_artifacts.append(
-            Signal(directory, 0, f"{n} user documents stored in the source tree")
-        )
+        signals.packaged_artifacts.append(Signal(directory, 0, f"{n} user documents stored in the source tree"))
     for path in paths:
         name = PurePosixPath(path).name.lower()
         if not (name == "dockerfile" or name.startswith("dockerfile.") or name.endswith(".dockerfile")):
@@ -628,8 +958,14 @@ def _artifact_signals(repo_path: Path, manifest: RepositoryManifest, signals: Ru
             match = re.match(r"(?i)^\s*FROM\s+(\S+)", line)
             if match:
                 image = match.group(1)
-                if image.lower() != "scratch" and "@sha256:" not in image and (":" not in image.split("/")[-1] or image.endswith(":latest")):
-                    signals.supply_chain.append(Signal(path, n, f"base image `{image}` is not pinned to a version/digest"))
+                if (
+                    image.lower() != "scratch"
+                    and "@sha256:" not in image
+                    and (":" not in image.split("/")[-1] or image.endswith(":latest"))
+                ):
+                    signals.supply_chain.append(
+                        Signal(path, n, f"base image `{image}` is not pinned to a version/digest")
+                    )
 
 
 _PROCESSORS = (
@@ -654,7 +990,10 @@ _PIPELINE_SMELLS = (
     (r"(?i)curl[^\n|]*\|\s*(ba|z)?sh\b", "pipes a downloaded script straight into a shell"),
     (r"(?i)\bchmod\s+(-R\s+)?777\b", "chmod 777"),
     (r"(?i)echo\s+[^\n]*\$\{?\w*(PASSWORD|TOKEN|SECRET|API_?KEY)", "echoes a secret into the build log"),
-    (r"(?i)(image\s*[:=]\s*\S+:latest|docker\s+(pull|run)\s+\S+:latest)", "deploys an image by the mutable :latest tag"),
+    (
+        r"(?i)(image\s*[:=]\s*\S+:latest|docker\s+(pull|run)\s+\S+:latest)",
+        "deploys an image by the mutable :latest tag",
+    ),
     (r"(?i)--privileged\b", "runs a container with --privileged"),
     (r"(?i)sed\s+-i[^\n]*(password|secret|token|key)", "edits secrets into files with sed"),
 )
@@ -694,8 +1033,11 @@ def _pipeline_hygiene(repo_path: Path, manifest: RepositoryManifest, signals: Ru
 
 
 def _infra_texts(repo_path: Path, manifest: RepositoryManifest) -> list[str]:
-    return [_read(repo_path, f.path, 100_000) for f in manifest.files
-            if _INFRA_FILE.search(f.path) and "node_modules" not in f.path][:200]
+    return [
+        _read(repo_path, f.path, 100_000)
+        for f in manifest.files
+        if _INFRA_FILE.search(f.path) and "node_modules" not in f.path
+    ][:200]
 
 
 def _deploy_env_signals(repo_path: Path, manifest: RepositoryManifest, signals: RuntimeSignals) -> None:
@@ -731,16 +1073,25 @@ def _deploy_env_signals(repo_path: Path, manifest: RepositoryManifest, signals: 
                 signals.deploy_env.append(Signal(entry.path, idx + 1, f"{key}: {'; '.join(flags)} (value not shown)"))
         for n, line in enumerate(lines, start=1):
             if re.match(r"(?i)^\s*privileged\s*[:=]\s*true", line):
-                signals.deploy_env.append(Signal(entry.path, n, "container runs privileged (full host access if compromised)"))
+                signals.deploy_env.append(
+                    Signal(entry.path, n, "container runs privileged (full host access if compromised)")
+                )
             elif is_hcl and re.match(r"^\s*count\s*=\s*1\s*$", line):
                 signals.deploy_env.append(Signal(entry.path, n, "job pinned to a single instance (count = 1)"))
         for key, nums in seen.items():
             if len(nums) > 1:
-                signals.deploy_env.append(Signal(entry.path, nums[0], f"{key} set {len(nums)} times (lines {', '.join(map(str, nums))}) — last writer wins"))
+                signals.deploy_env.append(
+                    Signal(
+                        entry.path,
+                        nums[0],
+                        f"{key} set {len(nums)} times (lines {', '.join(map(str, nums))}) — last writer wins",
+                    )
+                )
 
 
-def _production_signals(files, live: set[str], edges, repo_path: Path, manifest: RepositoryManifest,
-                        signals: RuntimeSignals) -> None:
+def _production_signals(
+    files, live: set[str], edges, repo_path: Path, manifest: RepositoryManifest, signals: RuntimeSignals
+) -> None:
     for py in files:
         is_live = py.path in live
         for fn in _functions(py.tree):
@@ -749,16 +1100,29 @@ def _production_signals(files, live: set[str], edges, repo_path: Path, manifest:
                 if isinstance(node, ast.Call):
                     callee = _dotted(node.func)
                     last = callee.split(".")[-1]
-                    if last in ("load", "loads") and callee.startswith("json") or re.match(r"(?i)^_?(read|load)_\w*(snapshot|state|file|json|progress|store)", last):
+                    if (last in ("load", "loads") and callee.startswith("json")) or re.match(
+                        r"(?i)^_?(read|load)_\w*(snapshot|state|file|json|progress|store)", last
+                    ):
                         loads = True
-                    elif last in ("dump", "dumps") and callee.startswith("json") or re.match(r"(?i)^_?(write|save|dump|persist)_\w*(snapshot|state|file|json|progress|store)", last):
+                    elif (last in ("dump", "dumps") and callee.startswith("json")) or re.match(
+                        r"(?i)^_?(write|save|dump|persist)_\w*(snapshot|state|file|json|progress|store)", last
+                    ):
                         dumps = True
                     elif last in ("append", "extend"):
                         grows = True
-            if is_live and loads and dumps and (grows or re.search(r"(?i)progress|snapshot|event|append|record", fn.name)):
-                signals.whole_file_rewrites.append(Signal(
-                    py.path, fn.lineno, f"{fn.name}() reads a whole JSON document, changes it and writes it all back"
-                ))
+            if (
+                is_live
+                and loads
+                and dumps
+                and (grows or re.search(r"(?i)progress|snapshot|event|append|record", fn.name))
+            ):
+                signals.whole_file_rewrites.append(
+                    Signal(
+                        py.path,
+                        fn.lineno,
+                        f"{fn.name}() reads a whole JSON document, changes it and writes it all back",
+                    )
+                )
             if not is_live:
                 continue
             whole = re.match(r"(?i)^_?(get|list|load|fetch|read)_all", fn.name)
@@ -777,8 +1141,10 @@ def _production_signals(files, live: set[str], edges, repo_path: Path, manifest:
                 signals.naive_datetimes.append(Signal(py.path, node.lineno, f"{callee}() returns a naive datetime"))
             elif last == "now" and callee.endswith("datetime.now") and not node.args and not node.keywords:
                 signals.naive_datetimes.append(Signal(py.path, node.lineno, "datetime.now() without a timezone"))
-            elif last in ("listdir", "scandir", "walk", "iterdir", "glob", "rglob") and callee.split(".")[0] in ("os", "glob", "Path") \
-                    or last in ("iterdir", "rglob") and isinstance(node.func, ast.Attribute):
+            elif (
+                last in ("listdir", "scandir", "walk", "iterdir", "glob", "rglob")
+                and callee.split(".")[0] in ("os", "glob", "Path")
+            ) or (last in ("iterdir", "rglob") and isinstance(node.func, ast.Attribute)):
                 signals.unbounded_reads.append(Signal(py.path, node.lineno, f"{callee}() scans a whole directory"))
 
     # startup: lifespan / startup handlers in app roots, and model clients built at import in live modules
@@ -793,17 +1159,26 @@ def _production_signals(files, live: set[str], edges, repo_path: Path, manifest:
             for node in _own_nodes(fn):
                 if isinstance(node, ast.Call) and id(node) not in guarded:
                     callee = _dotted(node.func).split(".")[-1]
-                    if re.search(r"(?i)(load|init|warm|preload|connect|get_.*(model|index|store|client|embedding)|build)", callee):
-                        signals.startup_fragility.append(Signal(
-                            py.path, node.lineno,
-                            f"startup runs {callee}() with no error handling — if it fails the whole API does not start",
-                        ))
+                    if re.search(
+                        r"(?i)(load|init|warm|preload|connect|get_.*(model|index|store|client|embedding)|build)", callee
+                    ):
+                        signals.startup_fragility.append(
+                            Signal(
+                                py.path,
+                                node.lineno,
+                                f"startup runs {callee}() with no error handling — if it fails the whole API does not start",
+                            )
+                        )
     live_clients = [s for s in signals.model_clients_at_import if s.file in live]
     for s in live_clients:
-        signals.startup_fragility.append(Signal(
-            s.file, s.line, f"{s.text.split(' built', 1)[0]} constructed when the module is imported — a provider/network "
-            "failure breaks every import of it",
-        ))
+        signals.startup_fragility.append(
+            Signal(
+                s.file,
+                s.line,
+                f"{s.text.split(' built', 1)[0]} constructed when the module is imported — a provider/network "
+                "failure breaks every import of it",
+            )
+        )
 
     # layering: top-level packages that import each other both ways
     def layer(path: str) -> str:
@@ -844,13 +1219,18 @@ def _production_signals(files, live: set[str], edges, repo_path: Path, manifest:
             reqs = [r for r in reqs if r and not r.startswith(("-", "git+", "http"))]
             unpinned = [r for r in reqs if "==" not in r]
             if not any(prefix + lock in names for lock in _LOCKFILES) and (unpinned or "--hash" not in text):
-                signals.supply_chain.append(Signal(
-                    entry.path, 1,
-                    f"no lockfile next to it; {len(unpinned)} of {len(reqs)} requirements unpinned, transitive versions float",
-                ))
+                signals.supply_chain.append(
+                    Signal(
+                        entry.path,
+                        1,
+                        f"no lockfile next to it; {len(unpinned)} of {len(reqs)} requirements unpinned, transitive versions float",
+                    )
+                )
         elif name == "package.json" and "node_modules" not in entry.path:
             if not any(prefix + lock in names for lock in _LOCKFILES):
-                signals.supply_chain.append(Signal(entry.path, 1, "no package-lock/yarn/pnpm lockfile next to package.json"))
+                signals.supply_chain.append(
+                    Signal(entry.path, 1, "no package-lock/yarn/pnpm lockfile next to package.json")
+                )
 
 
 # ----------------------------------------------------------------------
@@ -865,8 +1245,11 @@ def _ci_files(manifest: RepositoryManifest) -> list[str]:
         lower = path.lower()
         name = PurePosixPath(lower).name
         if (
-            name.startswith("jenkinsfile") or "/jenkins/" in f"/{lower}" or name in _CI_FILE_NAMES
-            or lower.startswith((".github/workflows/", ".circleci/")) or "/.github/workflows/" in lower
+            name.startswith("jenkinsfile")
+            or "/jenkins/" in f"/{lower}"
+            or name in _CI_FILE_NAMES
+            or lower.startswith((".github/workflows/", ".circleci/"))
+            or "/.github/workflows/" in lower
         ):
             out.append(path)
     return sorted(out)
@@ -890,9 +1273,14 @@ def _testing_signals(repo_path: Path, manifest: RepositoryManifest, deps, signal
             continue
         stages = _JENKINS_STAGE.findall(text) or [s.strip() for s in _YAML_STAGE.findall(text)]
         stages = [st.strip() for st in stages if st.strip()]
-        signals.ci_pipelines.append(CiPipeline(
-            path, tuple(dict.fromkeys(stages))[:15], bool(_CI_TEST_STEP.search(text)), bool(_CI_SCAN_STEP.search(text))
-        ))
+        signals.ci_pipelines.append(
+            CiPipeline(
+                path,
+                tuple(dict.fromkeys(stages))[:15],
+                bool(_CI_TEST_STEP.search(text)),
+                bool(_CI_SCAN_STEP.search(text)),
+            )
+        )
 
 
 # ----------------------------------------------------------------------
@@ -1014,12 +1402,18 @@ def _parallel_implementations(files, live: set[str], signals: RuntimeSignals) ->
         }
         if called & names:
             continue  # layers delegating to each other (router -> service -> crud), not copies
-        rows.append((
-            " / ".join(sorted(names)),
-            tuple(Signal(path, fn.lineno, f"{fn.name} ({(fn.end_lineno or fn.lineno) - fn.lineno + 1} lines)")
-                  for path, fn in members),
-        ))
-    signals.parallel_implementations = sorted(rows, key=lambda r: -sum(int(re.search(r"\((\d+)", s.text).group(1)) for s in r[1]))
+        rows.append(
+            (
+                " / ".join(sorted(names)),
+                tuple(
+                    Signal(path, fn.lineno, f"{fn.name} ({(fn.end_lineno or fn.lineno) - fn.lineno + 1} lines)")
+                    for path, fn in members
+                ),
+            )
+        )
+    signals.parallel_implementations = sorted(
+        rows, key=lambda r: -sum(int(re.search(r"\((\d+)", s.text).group(1)) for s in r[1])
+    )
 
 
 # ----------------------------------------------------------------------
@@ -1027,14 +1421,61 @@ def _parallel_implementations(files, live: set[str], signals: RuntimeSignals) ->
 # ----------------------------------------------------------------------
 
 
-_DB_WRITE = {"commit", "add", "add_all", "delete", "merge", "execute", "executemany", "bulk_save_objects", "flush",
-             "insert_one", "insert_many", "update_one", "update_many", "delete_one", "delete_many", "replace_one",
-             "bulk_write", "upsert", "save", "create", "update", "bulk_create", "bulk_update"}
+_DB_WRITE = {
+    "commit",
+    "add",
+    "add_all",
+    "delete",
+    "merge",
+    "execute",
+    "executemany",
+    "bulk_save_objects",
+    "flush",
+    "insert_one",
+    "insert_many",
+    "update_one",
+    "update_many",
+    "delete_one",
+    "delete_many",
+    "replace_one",
+    "bulk_write",
+    "upsert",
+    "save",
+    "create",
+    "update",
+    "bulk_create",
+    "bulk_update",
+}
 _HTTP_VERBS = {"get", "post", "put", "patch", "delete", "request", "send", "stream", "head"}
-_FS_WRITE = {"write_text", "write_bytes", "copyfileobj", "rmtree", "remove", "unlink", "rename", "replace",
-             "makedirs", "mkdir", "move", "copy", "copyfile", "dump"}
-_SPAWN = {"add_task", "create_task", "ensure_future", "submit", "delay", "apply_async", "enqueue", "send_task",
-          "start_soon", "Thread", "Process"}
+_FS_WRITE = {
+    "write_text",
+    "write_bytes",
+    "copyfileobj",
+    "rmtree",
+    "remove",
+    "unlink",
+    "rename",
+    "replace",
+    "makedirs",
+    "mkdir",
+    "move",
+    "copy",
+    "copyfile",
+    "dump",
+}
+_SPAWN = {
+    "add_task",
+    "create_task",
+    "ensure_future",
+    "submit",
+    "delay",
+    "apply_async",
+    "enqueue",
+    "send_task",
+    "start_soon",
+    "Thread",
+    "Process",
+}
 
 
 def _effects(func: ast.AST, model_names: set[str]) -> set[str]:
@@ -1045,14 +1486,17 @@ def _effects(func: ast.AST, model_names: set[str]) -> set[str]:
         callee = _dotted(node.func)
         parts = callee.split(".")
         last, root, base = parts[-1], parts[0], ".".join(parts[:-1]).lower()
-        if root in ("subprocess", "pty") or callee in ("os.system", "os.popen") or last.startswith(
-                "create_subprocess"):
+        if root in ("subprocess", "pty") or callee in ("os.system", "os.popen") or last.startswith("create_subprocess"):
             kinds.add("subprocess")
         elif root in ("requests", "httpx", "aiohttp", "urllib3") or (
-                last in _HTTP_VERBS and re.search(r"(client|http|api|requests)", base)):
+            last in _HTTP_VERBS and re.search(r"(client|http|api|requests)", base)
+        ):
             kinds.add("network")
-        elif last in ("sendmail", "send_message") or "smtp" in base or re.search(r"(?i)send_?(e?mail|sms|notification)",
-                                                                                  last):
+        elif (
+            last in ("sendmail", "send_message")
+            or "smtp" in base
+            or re.search(r"(?i)send_?(e?mail|sms|notification)", last)
+        ):
             kinds.add("messaging")
         elif _is_generation_call(node, model_names):
             kinds.add("model call")
@@ -1060,11 +1504,16 @@ def _effects(func: ast.AST, model_names: set[str]) -> set[str]:
             kinds.add("background work")
         elif last in ("acquire", "release") or re.search(r"(?i)lock", last):
             kinds.add("lock")
-        elif (last == "open" and any(
+        elif (
+            last == "open"
+            and any(
                 isinstance(a, ast.Constant) and isinstance(a.value, str) and set(a.value) & set("wax")
-                for a in node.args[1:2] + [k.value for k in node.keywords if k.arg == "mode"])) or (
-                last in _FS_WRITE and (root in ("os", "shutil", "json", "pickle") or "path" in base
-                                       or last.startswith("write"))):
+                for a in node.args[1:2] + [k.value for k in node.keywords if k.arg == "mode"]
+            )
+        ) or (
+            last in _FS_WRITE
+            and (root in ("os", "shutil", "json", "pickle") or "path" in base or last.startswith("write"))
+        ):
             kinds.add("file write")
         elif last in _DB_WRITE and re.search(r"(session|db|conn|cursor|collection|repo|table|objects|cur)\b", base):
             kinds.add("db write")
@@ -1072,8 +1521,21 @@ def _effects(func: ast.AST, model_names: set[str]) -> set[str]:
 
 
 _SESSION_IDENTITY_KEY = re.compile(r"(?i)^(user|uid|account|login|auth|member|customer|principal|role|is_admin)\w*$")
-_SESSION_RENEW = {"new_session", "regenerate", "regenerate_id", "cycle_key", "clear", "invalidate", "flush",
-                  "rotate", "renew", "login", "login_user", "remember", "set_session_id"}
+_SESSION_RENEW = {
+    "new_session",
+    "regenerate",
+    "regenerate_id",
+    "cycle_key",
+    "clear",
+    "invalidate",
+    "flush",
+    "rotate",
+    "renew",
+    "login",
+    "login_user",
+    "remember",
+    "set_session_id",
+}
 
 
 def _session_fixation(files, live: set[str], signals: RuntimeSignals) -> None:
@@ -1089,45 +1551,77 @@ def _session_fixation(files, live: set[str], signals: RuntimeSignals) -> None:
                     renewed = True
                 targets = node.targets if isinstance(node, ast.Assign) else []
                 for target in targets:
-                    if (isinstance(target, ast.Subscript) and "session" in _dotted(target.value).lower()
-                            and isinstance(target.slice, ast.Constant) and isinstance(target.slice.value, str)
-                            and _SESSION_IDENTITY_KEY.match(target.slice.value)):
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and "session" in _dotted(target.value).lower()
+                        and isinstance(target.slice, ast.Constant)
+                        and isinstance(target.slice.value, str)
+                        and _SESSION_IDENTITY_KEY.match(target.slice.value)
+                    ):
                         writes.append((node.lineno, target.slice.value))
             if writes and not renewed:
                 line, key = writes[0]
-                signals.session_fixation.append(Signal(
-                    py.path, line, f"`{func.name}` sets session['{key}'] without renewing the session"))
+                signals.session_fixation.append(
+                    Signal(py.path, line, f"`{func.name}` sets session['{key}'] without renewing the session")
+                )
 
 
 _REQUEST_RESOURCE = re.compile(r"(?i)(^|_)(db|session|conn|connection|cursor|tx|uow)(_|$)")
 _RESOURCE_TYPE = re.compile(r"(?i)session|connection|cursor|database|sessiondep|dbdep")
-_DEFERRED_CALL = {"add_task", "create_task", "ensure_future", "submit", "run_in_executor", "apply_async", "delay",
-                  "enqueue", "start_soon", "Thread", "Process", "call_later", "call_soon"}
+_DEFERRED_CALL = {
+    "add_task",
+    "create_task",
+    "ensure_future",
+    "submit",
+    "run_in_executor",
+    "apply_async",
+    "delay",
+    "enqueue",
+    "start_soon",
+    "Thread",
+    "Process",
+    "call_later",
+    "call_soon",
+}
 # Fields that never belong in a response (issued tokens do: a login response returns one).
-_SENSITIVE_FIELD = re.compile(r"(?i)^(hashed_?password|password(_hash|_digest)?|passwd|pwd_hash|client_secret|"
-                              r"secret(_key)?|api_?key(_hash)?|otp(_code|_secret)?|salt|private_?key|mfa_secret|"
-                              r"totp_secret|signing_key)$")
+_SENSITIVE_FIELD = re.compile(
+    r"(?i)^(hashed_?password|password(_hash|_digest)?|passwd|pwd_hash|client_secret|"
+    r"secret(_key)?|api_?key(_hash)?|otp(_code|_secret)?|salt|private_?key|mfa_secret|"
+    r"totp_secret|signing_key)$"
+)
 
 
 def _request_scoped_params(func) -> set[str]:
     """Parameters injected per request (``Depends(get_db)``, ``db: Session``, ``SessionDep``)."""
     args = func.args.args + func.args.kwonlyargs
-    defaults = [None] * (len(func.args.args) - len(func.args.defaults)) + list(func.args.defaults) + list(
-        func.args.kw_defaults)
+    defaults = (
+        [None] * (len(func.args.args) - len(func.args.defaults))
+        + list(func.args.defaults)
+        + list(func.args.kw_defaults)
+    )
     names = set()
     for arg, default in zip(args, defaults, strict=False):
         annotation = ast.unparse(arg.annotation) if arg.annotation is not None else ""
         injected = isinstance(default, ast.Call) and _dotted(default.func).endswith("Depends")
-        if (injected and (_REQUEST_RESOURCE.search(arg.arg) or _RESOURCE_TYPE.search(ast.unparse(default))
-                          or _RESOURCE_TYPE.search(annotation))) or (
-                "Depends" in annotation and _RESOURCE_TYPE.search(annotation)) or re.search(
-                r"(?i)^(Async)?Session(Dep)?$|^DbSession$|^SessionDep$", annotation):
+        if (
+            (
+                injected
+                and (
+                    _REQUEST_RESOURCE.search(arg.arg)
+                    or _RESOURCE_TYPE.search(ast.unparse(default))
+                    or _RESOURCE_TYPE.search(annotation)
+                )
+            )
+            or ("Depends" in annotation and _RESOURCE_TYPE.search(annotation))
+            or re.search(r"(?i)^(Async)?Session(Dep)?$|^DbSession$|^SessionDep$", annotation)
+        ):
             names.add(arg.arg)
     return names
 
 
-def _backend_signals(files, live: set[str], repo_path: Path, manifest: RepositoryManifest,
-                     signals: RuntimeSignals) -> None:
+def _backend_signals(
+    files, live: set[str], repo_path: Path, manifest: RepositoryManifest, signals: RuntimeSignals
+) -> None:
     response_models: set[str] = set()
     for py in files:
         for func in _functions(py.tree):
@@ -1144,14 +1638,23 @@ def _backend_signals(files, live: set[str], repo_path: Path, manifest: Repositor
             if isinstance(node, ast.ClassDef):
                 if node.name in response_models:
                     for item in node.body:
-                        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and \
-                                _SENSITIVE_FIELD.match(item.target.id):
-                            signals.sensitive_response_fields.append(Signal(
-                                py.path, item.lineno, f"response model {node.name} returns field `{item.target.id}`"))
+                        if (
+                            isinstance(item, ast.AnnAssign)
+                            and isinstance(item.target, ast.Name)
+                            and _SENSITIVE_FIELD.match(item.target.id)
+                        ):
+                            signals.sensitive_response_fields.append(
+                                Signal(
+                                    py.path, item.lineno, f"response model {node.name} returns field `{item.target.id}`"
+                                )
+                            )
                 for item in node.body:
-                    if (isinstance(item, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__tablename__"
-                                                             for t in item.targets)
-                            and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str)):
+                    if (
+                        isinstance(item, ast.Assign)
+                        and any(isinstance(t, ast.Name) and t.id == "__tablename__" for t in item.targets)
+                        and isinstance(item.value, ast.Constant)
+                        and isinstance(item.value.value, str)
+                    ):
                         tables[item.value.value] = (py.path, item.lineno)
         for func in _functions(py.tree):
             scoped = _request_scoped_params(func)
@@ -1161,36 +1664,64 @@ def _backend_signals(files, live: set[str], repo_path: Path, manifest: Repositor
                     continue
                 last = _dotted(node.func).split(".")[-1]
                 if scoped and last in _DEFERRED_CALL:
-                    passed = {n.id for a in [*node.args, *(k.value for k in node.keywords)]
-                              for n in ast.walk(a) if isinstance(n, ast.Name)} & scoped
+                    passed = {
+                        n.id
+                        for a in [*node.args, *(k.value for k in node.keywords)]
+                        for n in ast.walk(a)
+                        if isinstance(n, ast.Name)
+                    } & scoped
                     if passed:
-                        signals.request_resource_in_background.append(Signal(
-                            py.path, node.lineno, f"`{func.name}` passes request-scoped `{min(passed)}` to "
-                            f"{last}() — it is closed when the response is sent"))
+                        signals.request_resource_in_background.append(
+                            Signal(
+                                py.path,
+                                node.lineno,
+                                f"`{func.name}` passes request-scoped `{min(passed)}` to "
+                                f"{last}() — it is closed when the response is sent",
+                            )
+                        )
             for node in own:
-                if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
-                        and _dotted(node.value.func).split(".")[-1] in ("create_task", "ensure_future")):
-                    signals.fire_and_forget_tasks.append(Signal(
-                        py.path, node.lineno, f"`{func.name}` starts a task and drops the reference "
-                        "(it can be garbage-collected; its exception is never observed)"))
+                if (
+                    isinstance(node, ast.Expr)
+                    and isinstance(node.value, ast.Call)
+                    and _dotted(node.value.func).split(".")[-1] in ("create_task", "ensure_future")
+                ):
+                    signals.fire_and_forget_tasks.append(
+                        Signal(
+                            py.path,
+                            node.lineno,
+                            f"`{func.name}` starts a task and drops the reference "
+                            "(it can be garbage-collected; its exception is never observed)",
+                        )
+                    )
             yields = [n for n in own if isinstance(n, (ast.Yield, ast.YieldFrom))]
-            if yields and any(isinstance(n, ast.Call) and re.search(
-                    r"(?i)session|connect|engine\.begin|pool\.acquire", _dotted(n.func)) for n in own):
+            if yields and any(
+                isinstance(n, ast.Call)
+                and re.search(r"(?i)session|connect|engine\.begin|pool\.acquire", _dotted(n.func))
+                for n in own
+            ):
                 protected = any(isinstance(n, ast.Try) and n.finalbody for n in own) or any(
-                    isinstance(n, (ast.With, ast.AsyncWith)) for n in own)
+                    isinstance(n, (ast.With, ast.AsyncWith)) for n in own
+                )
                 if not protected:
-                    signals.leaky_session_dependencies.append(Signal(
-                        py.path, func.lineno, f"`{func.name}` yields a session/connection with no try/finally "
-                        "or context manager — an exception in the request leaks it"))
-    migration_texts = [_read(repo_path, e.path) for e in manifest.files
-                       if re.search(r"(?i)(^|/)(alembic|migrations?)/|\.sql$", e.path)]
+                    signals.leaky_session_dependencies.append(
+                        Signal(
+                            py.path,
+                            func.lineno,
+                            f"`{func.name}` yields a session/connection with no try/finally "
+                            "or context manager — an exception in the request leaks it",
+                        )
+                    )
+    migration_texts = [
+        _read(repo_path, e.path) for e in manifest.files if re.search(r"(?i)(^|/)(alembic|migrations?)/|\.sql$", e.path)
+    ]
     creates_at_startup = any(".create_all" in py.text for py in files if py.path in live)
     if migration_texts and tables and not creates_at_startup:
         blob = "\n".join(migration_texts)
         for table, (path, line) in sorted(tables.items()):
             if not re.search(rf"[\"'`]{re.escape(table)}[\"'`]|\b{re.escape(table)}\b\s*\(", blob):
-                signals.tables_without_migration.append(Signal(
-                    path, line, f"table `{table}` is defined in the models but no migration creates it"))
+                signals.tables_without_migration.append(
+                    Signal(path, line, f"table `{table}` is defined in the models but no migration creates it")
+                )
 
 
 _CLEANER_NAME = re.compile(r"(?i)(clean|normali[sz]e|sanitiz|preprocess|prepare_?text|scrub|tidy|correct)")
@@ -1206,8 +1737,9 @@ def _lossy_text_cleaning(files, live: set[str], signals: RuntimeSignals) -> None
             continue
         for func in _functions(py.tree):
             # Filename/path/slug sanitizers rewrite those characters on purpose (that is the safety).
-            if not _CLEANER_NAME.search(func.name) or re.search(r"(?i)file_?name|path|slug|key|url|header|sql",
-                                                                 func.name):
+            if not _CLEANER_NAME.search(func.name) or re.search(
+                r"(?i)file_?name|path|slug|key|url|header|sql", func.name
+            ):
                 continue
             for node in _own_nodes(func):
                 if not isinstance(node, ast.Call):
@@ -1217,16 +1749,26 @@ def _lossy_text_cleaning(files, live: set[str], signals: RuntimeSignals) -> None
                 is_replace = callee.endswith(".replace") and len(node.args) == 2
                 first = node.args[0] if node.args else None
                 pattern = first.value if (is_sub or is_replace) and isinstance(first, ast.Constant) else None
-                if isinstance(pattern, str) and _IDENTIFIER_CHARS.match(pattern) and not re.fullmatch(r"\\s\+?", pattern):
-                    signals.lossy_text_cleaning.append(Signal(
-                        py.path, node.lineno, f"`{func.name}` rewrites {pattern[:40]!r} in the text it cleans "
-                        "(emails, URLs, ids or dates inside it change)"))
+                if (
+                    isinstance(pattern, str)
+                    and _IDENTIFIER_CHARS.match(pattern)
+                    and not re.fullmatch(r"\\s\+?", pattern)
+                ):
+                    signals.lossy_text_cleaning.append(
+                        Signal(
+                            py.path,
+                            node.lineno,
+                            f"`{func.name}` rewrites {pattern[:40]!r} in the text it cleans "
+                            "(emails, URLs, ids or dates inside it change)",
+                        )
+                    )
 
 
 _SECURITY_CONTROL_NAME = re.compile(
     r"(?i)(csrf|xsrf|auth\w*_middleware|\w*_auth_middleware|authenticat\w*|authoriz\w*|login_required|"
     r"require_\w*(auth|login|role|admin|permission)|rate_?limit\w*|throttl\w*|security_headers?\w*|"
-    r"verify_(token|signature|webhook|api_key)\w*|check_(permission|access|owner)\w*|sanitiz\w*|escape_html)")
+    r"verify_(token|signature|webhook|api_key)\w*|check_(permission|access|owner)\w*|sanitiz\w*|escape_html)"
+)
 
 
 def _unwired_security_controls(files, live: set[str], signals: RuntimeSignals) -> None:
@@ -1243,8 +1785,13 @@ def _unwired_security_controls(files, live: set[str], signals: RuntimeSignals) -
                 continue
             uses = len(re.findall(rf"\b{re.escape(node.name)}\b", code))
             if uses <= 1:  # the definition itself
-                signals.unwired_security_controls.append(Signal(
-                    py.path, node.lineno, f"`{node.name}` is defined but applied nowhere (not registered, not called)"))
+                signals.unwired_security_controls.append(
+                    Signal(
+                        py.path,
+                        node.lineno,
+                        f"`{node.name}` is defined but applied nowhere (not registered, not called)",
+                    )
+                )
 
 
 def _risk_hotspots(files, live: set[str], routes, signals: RuntimeSignals, limit: int = 15) -> None:
@@ -1292,12 +1839,14 @@ def _risk_hotspots(files, live: set[str], routes, signals: RuntimeSignals, limit
             if len(kinds) < 2:
                 continue
             length = (getattr(func, "end_lineno", func.lineno) or func.lineno) - func.lineno + 1
-            broad = any(isinstance(n, ast.ExceptHandler) and (n.type is None or _dotted(n.type) in (
-                "Exception", "BaseException")) for n in _own_nodes(func))
+            broad = any(
+                isinstance(n, ast.ExceptHandler)
+                and (n.type is None or _dotted(n.type) in ("Exception", "BaseException"))
+                for n in _own_nodes(func)
+            )
             is_handler = (py.path, func.name) in handlers
             score = 2 * len(kinds) + (3 if is_handler else 0) + min(length / 40, 3) + (1 if broad else 0)
-            notes = sorted(kinds) + (["route handler"] if is_handler else []) + (
-                ["broad except"] if broad else [])
+            notes = sorted(kinds) + (["route handler"] if is_handler else []) + (["broad except"] if broad else [])
             scored.append((score, Signal(py.path, func.lineno, f"`{func.name}` ({', '.join(notes)}; {length} lines)")))
             if is_handler:
                 signals.hotspot_handlers.add((py.path, func.name))
@@ -1357,17 +1906,27 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
         "logging, health checks, tests/CI, dependency hygiene, parallel implementations.",
         "",
     ]
-    lines += block("Sync model / embedding work reached from async code (blocks the event loop)",
-                   [s.row for s in signals.blocking_in_async])
-    lines += block("Model / embedding clients constructed at import time", [s.row for s in signals.model_clients_at_import])
+    lines += block(
+        "Sync model / embedding work reached from async code (blocks the event loop)",
+        [s.row for s in signals.blocking_in_async],
+    )
+    lines += block(
+        "Model / embedding clients constructed at import time", [s.row for s in signals.model_clients_at_import]
+    )
     lines += block("Agent loops that re-send a growing message list", [s.row for s in signals.agent_loops])
-    lines += block("Tool outputs handed to the model with no size bound", [s.row for s in signals.unbounded_tool_output])
-    lines += block(f"Files that call a model but never read token usage (of {signals.model_call_files} calling files)",
-                   [s.row for s in signals.usage_never_read])
+    lines += block(
+        "Tool outputs handed to the model with no size bound", [s.row for s in signals.unbounded_tool_output]
+    )
+    lines += block(
+        f"Files that call a model but never read token usage (of {signals.model_call_files} calling files)",
+        [s.row for s in signals.usage_never_read],
+    )
     total = sum(n for _, n in signals.print_live)
     lines += block(f"print() calls in live modules ({total} calls)", [f"{f}: {n}" for f, n in signals.print_live], 25)
-    lines += block("Hotspots: functions combining several kinds of side effect (trace every failure path)",
-                   [s.row for s in signals.hotspots])
+    lines += block(
+        "Hotspots: functions combining several kinds of side effect (trace every failure path)",
+        [s.row for s in signals.hotspots],
+    )
     lines += block("Health endpoints that check nothing", [s.row for s in signals.static_health])
     lines += block("External commands run with no timeout", [s.row for s in signals.subprocess_no_timeout])
     lines += [
@@ -1379,44 +1938,75 @@ def render_runtime_signals(signals: RuntimeSignals) -> str:
         *[f"- {p}" for p in signals.test_files[:20]],
         "",
     ]
-    lines += block("CI / deploy pipelines",
-                   [f"{p.file}: stages {', '.join(p.stages) or '?'} — "
-                    + ("runs tests/lint" if p.runs_checks else "NO test, lint or scan step")
-                    + ("" if not p.runs_checks else "; security scan" if p.runs_scans else "; NO security/dependency scan")
-                    for p in signals.ci_pipelines])
-    lines += block("Libraries doing the same job", [f"{fam}: {', '.join(pkgs)} ({src})" for fam, pkgs, src in signals.duplicate_libraries])
-    lines += block("Declared dependencies nothing live imports", [f"{s.text} ({s.file})" for s in signals.unused_dependencies])
-    lines += block("Credentials accepted in the query string (they land in server/proxy logs and browser history)",
-                   [s.row for s in signals.query_credentials])
+    lines += block(
+        "CI / deploy pipelines",
+        [
+            f"{p.file}: stages {', '.join(p.stages) or '?'} — "
+            + ("runs tests/lint" if p.runs_checks else "NO test, lint or scan step")
+            + ("" if not p.runs_checks else "; security scan" if p.runs_scans else "; NO security/dependency scan")
+            for p in signals.ci_pipelines
+        ],
+    )
+    lines += block(
+        "Libraries doing the same job",
+        [f"{fam}: {', '.join(pkgs)} ({src})" for fam, pkgs, src in signals.duplicate_libraries],
+    )
+    lines += block(
+        "Declared dependencies nothing live imports", [f"{s.text} ({s.file})" for s in signals.unused_dependencies]
+    )
+    lines += block(
+        "Credentials accepted in the query string (they land in server/proxy logs and browser history)",
+        [s.row for s in signals.query_credentials],
+    )
     lines += block("Executor nesting / single-worker pools", [s.row for s in signals.executor_nesting])
-    lines += block("Production controls with no trace anywhere in the live code",
-                   [f"{label} (lane: {lane})" for lane, label, _ in signals.absent_controls])
-    lines += block("Secrets / personal data shipped with the code or baked into the image",
-                   [s.row if s.line else f"{s.text} ({s.file})" for s in signals.packaged_artifacts])
-    lines += block("Deploy manifests: duplicate env keys, local/dev targets, privileged or single-instance jobs",
-                   [s.row for s in signals.deploy_env])
+    lines += block(
+        "Production controls with no trace anywhere in the live code",
+        [f"{label} (lane: {lane})" for lane, label, _ in signals.absent_controls],
+    )
+    lines += block(
+        "Secrets / personal data shipped with the code or baked into the image",
+        [s.row if s.line else f"{s.text} ({s.file})" for s in signals.packaged_artifacts],
+    )
+    lines += block(
+        "Deploy manifests: duplicate env keys, local/dev targets, privileged or single-instance jobs",
+        [s.row for s in signals.deploy_env],
+    )
     lines += block("Unbounded reads (whole tables, whole directories)", [s.row for s in signals.unbounded_reads])
-    lines += block("All-or-nothing startup (heavy init with no error handling, clients built at import)",
-                   [s.row for s in signals.startup_fragility])
+    lines += block(
+        "All-or-nothing startup (heavy init with no error handling, clients built at import)",
+        [s.row for s in signals.startup_fragility],
+    )
     lines += block("Whole-file JSON rewrites per event", [s.row for s in signals.whole_file_rewrites])
-    lines += block("Layers importing each other both ways (layering violations)",
-                   [f"{a} <-> {b}: " + "; ".join(ex) for a, b, ex in signals.layer_cycles])
+    lines += block(
+        "Layers importing each other both ways (layering violations)",
+        [f"{a} <-> {b}: " + "; ".join(ex) for a, b, ex in signals.layer_cycles],
+    )
     lines += block("Tests that cannot fail / credentials in test scripts", [s.row for s in signals.weak_tests])
     lines += block("Supply chain: missing lockfiles, unpinned base images", [s.row for s in signals.supply_chain])
     lines += block("Naive datetimes (no timezone)", [s.row for s in signals.naive_datetimes])
-    lines += block("Identity written into a session that is never renewed (session fixation)",
-                   [s.row for s in signals.session_fixation])
-    lines += block("Request-scoped DB sessions/connections handed to background work",
-                   [s.row for s in signals.request_resource_in_background])
+    lines += block(
+        "Identity written into a session that is never renewed (session fixation)",
+        [s.row for s in signals.session_fixation],
+    )
+    lines += block(
+        "Request-scoped DB sessions/connections handed to background work",
+        [s.row for s in signals.request_resource_in_background],
+    )
     lines += block("Tasks started fire-and-forget", [s.row for s in signals.fire_and_forget_tasks])
     lines += block("Response models that return secrets", [s.row for s in signals.sensitive_response_fields])
-    lines += block("Session/connection dependencies that leak on error", [s.row for s in signals.leaky_session_dependencies])
+    lines += block(
+        "Session/connection dependencies that leak on error", [s.row for s in signals.leaky_session_dependencies]
+    )
     lines += block("ORM tables no migration creates", [s.row for s in signals.tables_without_migration])
     lines += block("Text cleaners that rewrite identifier characters", [s.row for s in signals.lossy_text_cleaning])
     lines += block("Security controls defined but applied nowhere", [s.row for s in signals.unwired_security_controls])
-    lines += block("Third-party services that receive application data (processors)",
-                   [s.row for s in signals.data_processors])
+    lines += block(
+        "Third-party services that receive application data (processors)", [s.row for s in signals.data_processors]
+    )
     lines += block("Deployment pipeline hygiene", [s.row for s in signals.pipeline_hygiene])
-    lines += block("Parallel implementations (same operation, names differ by a modifier; bodies differ)",
-                   [f"{name}: " + "; ".join(s.row for s in sites) for name, sites in signals.parallel_implementations], 20)
+    lines += block(
+        "Parallel implementations (same operation, names differ by a modifier; bodies differ)",
+        [f"{name}: " + "; ".join(s.row for s in sites) for name, sites in signals.parallel_implementations],
+        20,
+    )
     return "\n".join(lines)

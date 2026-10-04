@@ -32,7 +32,9 @@ class TestQueueReview:
         repository_id = uuid4()
         await queue_review(repo_mock, repository_id=repository_id)
 
-        repo_mock.create.assert_awaited_once_with(repository_id=repository_id, status=ReviewStatus.PENDING, stage="queued")
+        repo_mock.create.assert_awaited_once_with(
+            repository_id=repository_id, status=ReviewStatus.PENDING, stage="queued"
+        )
 
 
 class TestMarkReviewRunning:
@@ -41,13 +43,25 @@ class TestMarkReviewRunning:
         repo_mock.update.return_value = MagicMock(id=review_report_id)
 
         result = await mark_review_running(
-            repo_mock, review_report_id, head_sha="a" * 40, branch="main",
-            cache_key="ck", engine_version="1.0.0", provider="gemini", model="gemini-2.5-flash",
+            repo_mock,
+            review_report_id,
+            head_sha="a" * 40,
+            branch="main",
+            cache_key="ck",
+            engine_version="1.0.0",
+            provider="gemini",
+            model="gemini-2.5-flash",
         )
 
         repo_mock.update.assert_awaited_once_with(
-            review_report_id, status=ReviewStatus.RUNNING, commit_sha="a" * 40, branch="main",
-            cache_key="ck", engine_version="1.0.0", provider="gemini", model="gemini-2.5-flash",
+            review_report_id,
+            status=ReviewStatus.RUNNING,
+            commit_sha="a" * 40,
+            branch="main",
+            cache_key="ck",
+            engine_version="1.0.0",
+            provider="gemini",
+            model="gemini-2.5-flash",
         )
         assert result.id == review_report_id
 
@@ -55,8 +69,14 @@ class TestMarkReviewRunning:
         repo_mock.update.return_value = None
         with pytest.raises(DeepReviewError, match="not found"):
             await mark_review_running(
-                repo_mock, uuid4(), head_sha="a" * 40, branch="main",
-                cache_key="ck", engine_version="1.0.0", provider="gemini", model="gemini-2.5-flash",
+                repo_mock,
+                uuid4(),
+                head_sha="a" * 40,
+                branch="main",
+                cache_key="ck",
+                engine_version="1.0.0",
+                provider="gemini",
+                model="gemini-2.5-flash",
             )
 
 

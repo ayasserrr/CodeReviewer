@@ -162,9 +162,7 @@ def normalize_jscpd(raw_duplicates: list[dict[str, Any]]) -> list[dict[str, Any]
     return normalized
 
 
-def normalize_lizard(
-    raw_findings: list[dict[str, Any]], ccn_error_threshold: int = 20
-) -> list[dict[str, Any]]:
+def normalize_lizard(raw_findings: list[dict[str, Any]], ccn_error_threshold: int = 20) -> list[dict[str, Any]]:
     normalized = []
     for item in raw_findings:
         ccn = item["ccn"]

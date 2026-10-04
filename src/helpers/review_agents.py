@@ -323,6 +323,8 @@ _LANE_READS: ContextVar[set[str] | None] = ContextVar("deep_review_lane_reads", 
 def current_lane_reads() -> set[str]:
     """Files the agent currently running (and its code-explorers) opened — for completion checks."""
     return set(_LANE_READS.get() or ())
+
+
 """Every repository file any agent of the current review opened (shared by all lanes, live)."""
 
 _CALL_MARGIN_SECONDS = 10.0
@@ -348,7 +350,9 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
     ``ModelCallLimitMiddleware`` keeps in state.
     """
 
-    def __init__(self, limit: int, remaining_threshold: int = 6, time_fraction: float = 0.2, shared: bool = True) -> None:
+    def __init__(
+        self, limit: int, remaining_threshold: int = 6, time_fraction: float = 0.2, shared: bool = True
+    ) -> None:
         super().__init__()
         self.limit = limit
         self.shared = shared  # False for the code-explorer: it runs inside its parent's context
@@ -363,12 +367,18 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
         if parent is not None and parent.seconds_left() <= _STOP_GRACE_SECONDS:
             # Applies to explorers too (they run inside the parent's call): the lane's clock is theirs.
             parent.time_capped = True
-            return {"jump_to": "end", "messages": [AIMessage(content="Wall-clock budget for this review lane is spent.")]}
+            return {
+                "jump_to": "end",
+                "messages": [AIMessage(content="Wall-clock budget for this review lane is spent.")],
+            }
         budget = self._budget()
         if budget is None:
             return None
         if budget.used >= budget.limit:
-            return {"jump_to": "end", "messages": [AIMessage(content="Model call budget for this review lane is spent.")]}
+            return {
+                "jump_to": "end",
+                "messages": [AIMessage(content="Model call budget for this review lane is spent.")],
+            }
         budget.used += 1
         return None
 
@@ -394,7 +404,9 @@ class _BudgetNudgeMiddleware(AgentMiddleware):
             low_time = seconds is not None and seconds <= max(120.0, parent.timeout * 0.12)
         if remaining > self.remaining_threshold and not low_time:
             return request
-        left = f"{max(remaining, 0)} model turns" + (f" and about {max(int(seconds // 60), 0)} minute(s)" if seconds is not None else "")
+        left = f"{max(remaining, 0)} model turns" + (
+            f" and about {max(int(seconds // 60), 0)} minute(s)" if seconds is not None else ""
+        )
         reminder = HumanMessage(
             content=(
                 f"[Budget notice] You have {left} left. Stop exploring now: record every "
@@ -491,7 +503,9 @@ class _ToolResultCapMiddleware(AgentMiddleware):
         return self._cap(await handler(request))
 
 
-def _harness_middleware(model_calls: int, fallback_model: BaseChatModel | None = None, *, shared_budget: bool = True) -> list:
+def _harness_middleware(
+    model_calls: int, fallback_model: BaseChatModel | None = None, *, shared_budget: bool = True
+) -> list:
     return [
         _ToolResultCapMiddleware(),
         ContextEditingMiddleware(
@@ -565,7 +579,9 @@ def _explorer_subagent(settings: Settings, backend: CompositeBackend, tools: lis
         "tools": tools,
         "middleware": [
             _filesystem_middleware(backend, settings),
-            *_harness_middleware(settings.DEEP_REVIEW_EXPLORER_MODEL_CALLS, _fallback_model(settings), shared_budget=False),
+            *_harness_middleware(
+                settings.DEEP_REVIEW_EXPLORER_MODEL_CALLS, _fallback_model(settings), shared_budget=False
+            ),
         ],
     }
 
@@ -585,10 +601,15 @@ def build_agent(
 ):
     """One configured deep agent (see module docstring for the stack)."""
     backend = build_backend(repo_path)
-    middleware = [_filesystem_middleware(backend, settings), *_harness_middleware(model_calls, _fallback_model(settings))]
+    middleware = [
+        _filesystem_middleware(backend, settings),
+        *_harness_middleware(model_calls, _fallback_model(settings)),
+    ]
     # ``strong`` puts a specialist on the judge model (deep-tracing lanes); ``light`` puts a
     # verifier on the base model (Medium/Low batches: the judge is kept for Critical/High).
-    model_role = "verifier" if strong and role == "specialist" else "specialist" if light and role == "verifier" else role
+    model_role = (
+        "verifier" if strong and role == "specialist" else "specialist" if light and role == "verifier" else role
+    )
     return create_deep_agent(
         model=build_chat_model(settings, model_role),
         tools=[_plan_tool(), *tools] if role == "specialist" else tools,
@@ -725,7 +746,8 @@ async def run_agent(
                 nudge = (
                     "You stopped without acting on this. It is not optional — do it now, starting with the first "
                     f"item, before any summary.\n\n{raw}"
-                    if escalated else raw
+                    if escalated
+                    else raw
                 )
                 checks += 1
                 last_nudge = raw
@@ -757,7 +779,7 @@ async def run_agent(
             status, error = "incomplete", f"ended on an empty model turn after {_MAX_RESUMES} resumes"
     except TimeoutError:
         status, error = "timed_out", f"exceeded {timeout_seconds}s"
-    except Exception as exc:  # noqa: BLE001 -- one agent's failure must never abort the review
+    except Exception as exc:
         status, error = "failed", f"{type(exc).__name__}: {exc}"[:500]
     duration = time.monotonic() - start
     if status == "completed" and budget.time_capped:

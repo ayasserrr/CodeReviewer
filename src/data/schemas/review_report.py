@@ -69,7 +69,8 @@ class ReviewReportRead(ReviewReportBase, ORMBase):
     provider: str | None = Field(None, description="LLM provider the review ran on.")
     model: str | None = Field(None, description="Model id the review ran on.")
     stage: str | None = Field(
-        None, description="queued | ingest | discovery | static_analysis | dependency_graph | deep_review | done | failed"
+        None,
+        description="queued | ingest | discovery | static_analysis | dependency_graph | deep_review | done | failed",
     )
     progress: dict[str, Any] | None = Field(None, description="Live per-stage and per-agent progress.")
     error: str | None = Field(None, description="Failure reason when status is failed.")

@@ -31,9 +31,7 @@ class CallResolutionResult(NamedTuple):
     calls_skipped_ambiguous: int
 
 
-def resolve_calls(
-    functions: list[FunctionNode], raw_calls_by_function: dict[str, list[dict]]
-) -> CallResolutionResult:
+def resolve_calls(functions: list[FunctionNode], raw_calls_by_function: dict[str, list[dict]]) -> CallResolutionResult:
     """Resolves every function's raw calls (see ``helpers.dependency_ast_extractor``)
     into ``CallEdge``s via the repo-wide name table.
     """
@@ -52,9 +50,13 @@ def resolve_calls(
             elif len(candidates) > 1:
                 skipped_ambiguous += 1
             else:
-                call_edges.append(CallEdge(
-                    caller_id=caller_id, callee_id=candidates[0],
-                    line=raw_call["line"], col=raw_call["col"],
-                ))
+                call_edges.append(
+                    CallEdge(
+                        caller_id=caller_id,
+                        callee_id=candidates[0],
+                        line=raw_call["line"],
+                        col=raw_call["col"],
+                    )
+                )
 
     return CallResolutionResult(call_edges, calls_found, skipped_external, skipped_ambiguous)

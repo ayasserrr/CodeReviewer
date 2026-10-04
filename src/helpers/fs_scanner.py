@@ -22,9 +22,7 @@ from utils import DiscoveryError
 
 logger = get_logger(__name__)
 
-SOURCE_ROOT_CANDIDATES = frozenset(
-    {"src", "app", "backend", "server", "api", "service", "services", "lib", "core"}
-)
+SOURCE_ROOT_CANDIDATES = frozenset({"src", "app", "backend", "server", "api", "service", "services", "lib", "core"})
 
 ROOT_CONFIG_FILE_NAMES = frozenset(
     {

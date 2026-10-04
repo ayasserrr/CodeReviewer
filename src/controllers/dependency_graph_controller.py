@@ -117,8 +117,7 @@ class DependencyGraphController(BaseController):
         files_parsed = 0
 
         eligible_files = [
-            f.path for f in manifest.files
-            if f.language == "Python" and not f.parse_error and not f.skipped_due_to_size
+            f.path for f in manifest.files if f.language == "Python" and not f.parse_error and not f.skipped_due_to_size
         ]
 
         for relative_path in eligible_files:
@@ -132,10 +131,8 @@ class DependencyGraphController(BaseController):
                 contains_edges.extend(file_contains)
                 raw_calls_by_function.update(file_raw_calls)
                 files_parsed += 1
-            except Exception as exc:  # noqa: BLE001 -- one file's parse failure must never abort the rest
-                failed_files.append(
-                    DependencyGraphFailure(file=relative_path, error=f"{type(exc).__name__}: {exc}")
-                )
+            except Exception as exc:
+                failed_files.append(DependencyGraphFailure(file=relative_path, error=f"{type(exc).__name__}: {exc}"))
 
         resolution = resolve_calls(functions, raw_calls_by_function)
 

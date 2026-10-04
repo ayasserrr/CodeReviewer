@@ -84,8 +84,13 @@ def build_import_graph(repo_path: Path, package_names: list[str], timeout: int) 
     try:
         result = subprocess.run(
             [sys.executable, str(_WORKER_SCRIPT), str(repo_path), json.dumps(package_names)],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout, cwd=repo_path, check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            cwd=repo_path,
+            check=False,
             env=safe_env({"PYTHONDONTWRITEBYTECODE": "1"}),  # the target repo's code runs here: no secrets
         )
     except subprocess.TimeoutExpired:

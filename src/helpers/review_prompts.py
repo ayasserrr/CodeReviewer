@@ -435,16 +435,22 @@ def _format_leads(leads: dict[str, list[str]] | None) -> str:
     ]
     for kpi_id in sorted(leads):
         items = leads[kpi_id]
-        lines.append(f"- {kpi_id}: " + "; ".join(items[:12]) + (f"; ... {len(items) - 12} more" if len(items) > 12 else ""))
+        lines.append(
+            f"- {kpi_id}: " + "; ".join(items[:12]) + (f"; ... {len(items) - 12} more" if len(items) > 12 else "")
+        )
     return "\n".join(lines) + "\n"
 
 
 def _client_kpi_scope(config: ReviewConfig) -> str:
     if any(c.id == "frontend" for c in config.enabled_categories):
-        return ("The browser client is in scope too: check its exports, HTML rendering, iframes and token "
-                "storage for the KPIs that live there.")
-    return ("Browser-only parts of a KPI are outside this review (the frontend lane is disabled): when a "
-            "KPI's only remaining question is in client code, say so in the evidence.")
+        return (
+            "The browser client is in scope too: check its exports, HTML rendering, iframes and token "
+            "storage for the KPIs that live there."
+        )
+    return (
+        "Browser-only parts of a KPI are outside this review (the frontend lane is disabled): when a "
+        "KPI's only remaining question is in client code, say so in the evidence."
+    )
 
 
 def kpi_prompt(
@@ -454,9 +460,8 @@ def kpi_prompt(
     role = _KPI_ROLE.format(
         title=category.title,
         code=category.code,
-        kpi_section=_KPI_SECTION.format(
-            kpis=_format_kpis(config.security_kpis), client_scope=_client_kpi_scope(config)
-        ) + _format_leads(leads),
+        kpi_section=_KPI_SECTION.format(kpis=_format_kpis(config.security_kpis), client_scope=_client_kpi_scope(config))
+        + _format_leads(leads),
         remediation_section=_REMEDIATION_SECTION if config.review.include_remediation else "",
     )
     return f"{SHARED_RULES}\n{brief}\n\n{role}"

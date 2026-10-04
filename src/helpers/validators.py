@@ -151,4 +151,6 @@ def check_gitlab_host(base_url: str, allowed_hosts: str, allow_private: bool, al
     for address in addresses:
         ip = ipaddress.ip_address(address.split("%", 1)[0])
         if not ip.is_global:
-            raise InvalidInputError(f"GitLab host {host!r} resolves to a non-public address; add it to GITLAB_ALLOWED_HOSTS")
+            raise InvalidInputError(
+                f"GitLab host {host!r} resolves to a non-public address; add it to GITLAB_ALLOWED_HOSTS"
+            )

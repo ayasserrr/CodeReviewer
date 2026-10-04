@@ -34,9 +34,11 @@ class TestRunRuff:
     def test_files_passed_as_explicit_positional_args(self):
         controller = StaticAnalysisController(config=settings.model_copy(update={"RUFF_CONFIG_PATH": None}))
         completed = _completed(returncode=0, stdout="[]")
-        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
-        ) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/ruff"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed) as mock_run,
+        ):
             controller.run_ruff(".", ["a.py", "b.py"])
         command = mock_run.call_args.args[0]
         assert "a.py" in command and "b.py" in command
@@ -46,8 +48,10 @@ class TestRunRuff:
         controller = StaticAnalysisController()
         raw = [{"filename": "a.py", "location": {"row": 1}, "code": "F401", "message": "unused"}]
         completed = _completed(returncode=1, stdout=json.dumps(raw))
-        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with (
+            patch("shutil.which", return_value="/usr/bin/ruff"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed),
         ):
             result = controller.run_ruff(".", ["a.py"])
         assert result["status"] == "success"
@@ -56,8 +60,10 @@ class TestRunRuff:
     def test_exit_code_2_is_rejected(self):
         controller = StaticAnalysisController()
         completed = _completed(returncode=2, stderr="ruff: invalid arguments")
-        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with (
+            patch("shutil.which", return_value="/usr/bin/ruff"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed),
         ):
             result = controller.run_ruff(".", ["a.py"])
         assert result["status"] == "error"
@@ -65,8 +71,10 @@ class TestRunRuff:
 
     def test_timeout_reports_timeout_stage(self):
         controller = StaticAnalysisController()
-        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ruff", timeout=60)
+        with (
+            patch("shutil.which", return_value="/usr/bin/ruff"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ruff", timeout=60)),
         ):
             result = controller.run_ruff(".", ["a.py"])
         assert result["status"] == "error"
@@ -75,8 +83,10 @@ class TestRunRuff:
     def test_unparseable_json_reports_parse_error(self):
         controller = StaticAnalysisController()
         completed = _completed(returncode=0, stdout="not json")
-        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with (
+            patch("shutil.which", return_value="/usr/bin/ruff"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed),
         ):
             result = controller.run_ruff(".", ["a.py"])
         assert result["status"] == "error"
@@ -85,9 +95,11 @@ class TestRunRuff:
     def test_config_flag_omitted_when_config_path_unset(self):
         controller = StaticAnalysisController(config=settings.model_copy(update={"RUFF_CONFIG_PATH": None}))
         completed = _completed(returncode=0, stdout="[]")
-        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
-        ) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/ruff"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed) as mock_run,
+        ):
             controller.run_ruff(".", ["a.py"])
         command = mock_run.call_args.args[0]
         assert not any(arg.startswith("--config=") for arg in command)
@@ -97,19 +109,27 @@ class TestRunRuff:
             config=settings.model_copy(update={"RUFF_CONFIG_PATH": "/does/not/exist/ruff.toml"})
         )
         completed = _completed(returncode=0, stdout="[]")
-        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
-            "os.path.isfile", return_value=False
-        ), patch("subprocess.run", return_value=completed) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/ruff"),
+            patch("os.path.isdir", return_value=True),
+            patch("os.path.isfile", return_value=False),
+            patch("subprocess.run", return_value=completed) as mock_run,
+        ):
             controller.run_ruff(".", ["a.py"])
         command = mock_run.call_args.args[0]
         assert not any(arg.startswith("--config=") for arg in command)
 
     def test_config_flag_included_when_configured_path_exists(self):
-        controller = StaticAnalysisController(config=settings.model_copy(update={"RUFF_CONFIG_PATH": "/real/ruff.toml"}))
+        controller = StaticAnalysisController(
+            config=settings.model_copy(update={"RUFF_CONFIG_PATH": "/real/ruff.toml"})
+        )
         completed = _completed(returncode=0, stdout="[]")
-        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
-            "os.path.isfile", return_value=True
-        ), patch("subprocess.run", return_value=completed) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/ruff"),
+            patch("os.path.isdir", return_value=True),
+            patch("os.path.isfile", return_value=True),
+            patch("subprocess.run", return_value=completed) as mock_run,
+        ):
             controller.run_ruff(".", ["a.py"])
         command = mock_run.call_args.args[0]
         assert "--config=/real/ruff.toml" in command
@@ -125,10 +145,16 @@ class TestRunPyright:
 
     def test_nonzero_returncode_still_parsed_as_success(self):
         controller = StaticAnalysisController()
-        raw = {"generalDiagnostics": [{"file": "a.py", "range": {"start": {"line": 1}}, "severity": "error", "message": "x"}]}
+        raw = {
+            "generalDiagnostics": [
+                {"file": "a.py", "range": {"start": {"line": 1}}, "severity": "error", "message": "x"}
+            ]
+        }
         completed = _completed(returncode=1, stdout=json.dumps(raw))
-        with patch("shutil.which", return_value="/usr/bin/pyright"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with (
+            patch("shutil.which", return_value="/usr/bin/pyright"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed),
         ):
             result = controller.run_pyright(".", ["a.py"])
         assert result["status"] == "success"
@@ -145,9 +171,12 @@ class TestRunPyright:
             config=settings.model_copy(update={"PYRIGHT_CONFIG_PATH": "/real/pyrightconfig.json"})
         )
         completed = _completed(returncode=0, stdout="{}")
-        with patch("shutil.which", return_value="/usr/bin/pyright"), patch("os.path.isdir", return_value=True), patch(
-            "os.path.isfile", return_value=True
-        ), patch("subprocess.run", return_value=completed) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/pyright"),
+            patch("os.path.isdir", return_value=True),
+            patch("os.path.isfile", return_value=True),
+            patch("subprocess.run", return_value=completed) as mock_run,
+        ):
             controller.run_pyright(".", ["a.py"])
         command = mock_run.call_args.args[0]
         assert "--project" in command
@@ -158,9 +187,12 @@ class TestRunPyright:
             config=settings.model_copy(update={"PYRIGHT_CONFIG_PATH": "/does/not/exist.json"})
         )
         completed = _completed(returncode=0, stdout="{}")
-        with patch("shutil.which", return_value="/usr/bin/pyright"), patch("os.path.isdir", return_value=True), patch(
-            "os.path.isfile", return_value=False
-        ), patch("subprocess.run", return_value=completed) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/pyright"),
+            patch("os.path.isdir", return_value=True),
+            patch("os.path.isfile", return_value=False),
+            patch("subprocess.run", return_value=completed) as mock_run,
+        ):
             controller.run_pyright(".", ["a.py"])
         command = mock_run.call_args.args[0]
         assert "--project" not in command
@@ -184,9 +216,11 @@ class TestRunRadon:
         controller = StaticAnalysisController()
         cc_completed = _completed(returncode=0, stdout=json.dumps({"a.py": []}))
         mi_completed = _completed(returncode=0, stdout=json.dumps({"a.py": {"rank": "A", "mi": 90}}))
-        with patch("shutil.which", return_value="/usr/bin/radon"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", side_effect=[cc_completed, mi_completed]
-        ) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/radon"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", side_effect=[cc_completed, mi_completed]) as mock_run,
+        ):
             result = controller.run_radon(".", ["a.py"])
         assert result["status"] == "success"
         assert result["data"]["complexity"] == {"a.py": []}
@@ -196,9 +230,11 @@ class TestRunRadon:
     def test_first_call_failing_short_circuits_to_error(self):
         controller = StaticAnalysisController()
         cc_completed = _completed(returncode=1, stderr="boom")
-        with patch("shutil.which", return_value="/usr/bin/radon"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=cc_completed
-        ) as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/radon"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=cc_completed) as mock_run,
+        ):
             result = controller.run_radon(".", ["a.py"])
         assert result["status"] == "error"
         assert mock_run.call_count == 1  # mi call never happened
@@ -216,8 +252,10 @@ class TestRunVulture:
         controller = StaticAnalysisController()
         output = "a.py:10: unused variable 'x' (90% confidence)\n"
         completed = _completed(returncode=3, stdout=output)
-        with patch("shutil.which", return_value="/usr/bin/vulture"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with (
+            patch("shutil.which", return_value="/usr/bin/vulture"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed),
         ):
             result = controller.run_vulture(".", ["a.py"])
         assert result["status"] == "success"
@@ -227,8 +265,10 @@ class TestRunVulture:
     def test_exit_code_1_is_rejected(self):
         controller = StaticAnalysisController()
         completed = _completed(returncode=1, stderr="vulture: bad args")
-        with patch("shutil.which", return_value="/usr/bin/vulture"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with (
+            patch("shutil.which", return_value="/usr/bin/vulture"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed),
         ):
             result = controller.run_vulture(".", ["a.py"])
         assert result["status"] == "error"
@@ -236,8 +276,10 @@ class TestRunVulture:
     def test_unmatched_lines_are_skipped(self):
         controller = StaticAnalysisController()
         completed = _completed(returncode=0, stdout="not a vulture line\n")
-        with patch("shutil.which", return_value="/usr/bin/vulture"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=completed
+        with (
+            patch("shutil.which", return_value="/usr/bin/vulture"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=completed),
         ):
             result = controller.run_vulture(".", ["a.py"])
         assert result["findings"] == []
@@ -264,8 +306,10 @@ class TestRunJscpd:
                 json.dump({"duplicates": []}, f)
             return _completed(returncode=0)
 
-        with patch("shutil.which", return_value="/usr/bin/jscpd"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", side_effect=fake_run
+        with (
+            patch("shutil.which", return_value="/usr/bin/jscpd"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", side_effect=fake_run),
         ):
             result = controller.run_jscpd(".", ["a.py"])
         assert result["status"] == "success"
@@ -275,16 +319,20 @@ class TestRunJscpd:
 
     def test_missing_report_carries_the_tool_output(self):
         controller = StaticAnalysisController()
-        with patch("shutil.which", return_value="/usr/bin/jscpd"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=_completed(returncode=1, stderr="The command line is too long.")
+        with (
+            patch("shutil.which", return_value="/usr/bin/jscpd"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=_completed(returncode=1, stderr="The command line is too long.")),
         ):
             result = controller.run_jscpd(".", ["a.py"])
         assert "The command line is too long." in result["error"]
 
     def test_report_file_absent_after_crash_is_error(self):
         controller = StaticAnalysisController()
-        with patch("shutil.which", return_value="/usr/bin/jscpd"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=_completed(returncode=1, stderr="segfault")
+        with (
+            patch("shutil.which", return_value="/usr/bin/jscpd"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=_completed(returncode=1, stderr="segfault")),
         ):
             result = controller.run_jscpd(".", ["a.py"])
         assert result["status"] == "error"
@@ -312,8 +360,10 @@ class TestRunLizard:
     def test_below_threshold_is_skipped(self):
         controller = StaticAnalysisController(config=settings.model_copy(update={"LIZARD_CCN_THRESHOLD": 10}))
         csv_output = '1,5,1,0,1,x,a.py,f,"f()",10,12\n'
-        with patch("shutil.which", return_value="/usr/bin/lizard"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=_completed(returncode=0, stdout=csv_output)
+        with (
+            patch("shutil.which", return_value="/usr/bin/lizard"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=_completed(returncode=0, stdout=csv_output)),
         ):
             result = controller.run_lizard(".", ["a.py"])
         assert result["findings"] == []
@@ -321,8 +371,10 @@ class TestRunLizard:
     def test_above_threshold_is_kept(self):
         controller = StaticAnalysisController(config=settings.model_copy(update={"LIZARD_CCN_THRESHOLD": 10}))
         csv_output = '1,15,1,0,1,x,a.py,f,"f()",10,12\n'
-        with patch("shutil.which", return_value="/usr/bin/lizard"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=_completed(returncode=0, stdout=csv_output)
+        with (
+            patch("shutil.which", return_value="/usr/bin/lizard"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=_completed(returncode=0, stdout=csv_output)),
         ):
             result = controller.run_lizard(".", ["a.py"])
         assert len(result["findings"]) == 1
@@ -332,8 +384,10 @@ class TestRunLizard:
     def test_non_numeric_line_column_does_not_crash(self):
         controller = StaticAnalysisController(config=settings.model_copy(update={"LIZARD_CCN_THRESHOLD": 1}))
         csv_output = '1,5,1,0,1,x,a.py,f,"f()",N/A,12\n'
-        with patch("shutil.which", return_value="/usr/bin/lizard"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=_completed(returncode=0, stdout=csv_output)
+        with (
+            patch("shutil.which", return_value="/usr/bin/lizard"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=_completed(returncode=0, stdout=csv_output)),
         ):
             result = controller.run_lizard(".", ["a.py"])
         assert result["findings"][0]["line"] is None
@@ -364,27 +418,35 @@ class TestLongFileLists:
             return _completed(returncode=1, stdout=json.dumps([{"filename": f} for f in files]))
 
         files = [f"pkg/m{i}.py" for i in range(10)]
-        with patch("shutil.which", return_value="/usr/bin/ruff"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", side_effect=fake_run
-        ), patch("controllers.static_analysis_controller.chunk_paths", side_effect=lambda f: [f[:4], f[4:]]):
+        with (
+            patch("shutil.which", return_value="/usr/bin/ruff"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", side_effect=fake_run),
+            patch("controllers.static_analysis_controller.chunk_paths", side_effect=lambda f: [f[:4], f[4:]]),
+        ):
             result = controller.run_ruff(".", files)
         assert len(calls) == 2
         assert [f["filename"] for f in result["findings"]] == files
 
     def test_vulture_scans_directories_when_the_list_is_too_long(self):
         controller = StaticAnalysisController()
-        with patch("shutil.which", return_value="/usr/bin/vulture"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=_completed(returncode=0)
-        ) as run, patch("controllers.static_analysis_controller.fits_one_command", return_value=False):
+        with (
+            patch("shutil.which", return_value="/usr/bin/vulture"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=_completed(returncode=0)) as run,
+            patch("controllers.static_analysis_controller.fits_one_command", return_value=False),
+        ):
             controller.run_vulture(".", ["app/a.py", "app/b.py", "lib/c.py"])
         command = run.call_args.args[0]
         assert command[:3] == ["vulture", "app", "lib"] and "--exclude" in command
 
     def test_lizard_reads_the_file_list_from_a_file(self):
         controller = StaticAnalysisController()
-        with patch("shutil.which", return_value="/usr/bin/lizard"), patch("os.path.isdir", return_value=True), patch(
-            "subprocess.run", return_value=_completed(returncode=0)
-        ) as run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/lizard"),
+            patch("os.path.isdir", return_value=True),
+            patch("subprocess.run", return_value=_completed(returncode=0)) as run,
+        ):
             controller.run_lizard(".", ["a.py", "b.py"])
         command = run.call_args.args[0]
         assert command[:2] == ["lizard", "-f"] and "a.py" not in command

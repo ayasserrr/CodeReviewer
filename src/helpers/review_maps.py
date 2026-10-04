@@ -51,7 +51,9 @@ from utils import InventorySection, RepositoryManifest
 logger = get_logger(__name__)
 
 _HTTP_VERBS = ("get", "post", "put", "patch", "delete", "options", "head")
-_PAGINATION_PARAM = re.compile(r"(?i)^(limit|offset|page|page_size|per_page|skip|cursor|size|top|take|pagination|paging)$")
+_PAGINATION_PARAM = re.compile(
+    r"(?i)^(limit|offset|page|page_size|per_page|skip|cursor|size|top|take|pagination|paging)$"
+)
 _IDENTITY_NAME = re.compile(
     r"(?i)(^|[_-])(user|email|e_?mail|owner|role|tenant|account|org|uid|username|created_by|requester|actor)([_-]|$)"
 )
@@ -60,7 +62,9 @@ _TOKEN_VERIFY = re.compile(
     r"jwt\.decode|decode_access_token|decode_token|verify_token|verify_jwt|OAuth2PasswordBearer|HTTPBearer|"
     r"HTTPAuthorizationCredentials|get_current_user|get_current_active_user|firebase_admin\.auth|verify_id_token"
 )
-_SECRET_WORD = re.compile(r"(?i)(secret|password|passwd|pwd|token|api[_-]?key|apikey|private[_-]?key|credential|signing)")
+_SECRET_WORD = re.compile(
+    r"(?i)(secret|password|passwd|pwd|token|api[_-]?key|apikey|private[_-]?key|credential|signing)"
+)
 _NOT_A_SECRET = re.compile(
     r"(?i)(_(minutes|seconds|hours|days|ttl|expire|expires|expiry|lifetime|url|uri|endpoint|host|algorithm|alg|"
     r"header|name|path|file|type|length|len|size|count|limit|enabled|id))$"
@@ -70,10 +74,29 @@ _NOT_A_SECRET = re.compile(
 def _is_secret_name(key: str) -> bool:
     return bool(_SECRET_WORD.search(key)) and not _NOT_A_SECRET.search(key)
 
+
 _CLIENT_PREFIX = re.compile(r"^(VITE_|NEXT_PUBLIC_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_)")
-_WEAK_VALUES = {"secret", "password", "changeme", "change-me", "admin", "test", "default", "1234", "12345", "123456",
-                "qwerty", "letmein", "key", "token", "dev", "devsecret"}
-_PLACEHOLDER = re.compile(r"(?i)^(<.*>|your[-_].*|x{3,}|\*{3,}|example.*|placeholder|todo|tbd|replace[-_]?me|\.\.\.|\$\{.*\})$")
+_WEAK_VALUES = {
+    "secret",
+    "password",
+    "changeme",
+    "change-me",
+    "admin",
+    "test",
+    "default",
+    "1234",
+    "12345",
+    "123456",
+    "qwerty",
+    "letmein",
+    "key",
+    "token",
+    "dev",
+    "devsecret",
+}
+_PLACEHOLDER = re.compile(
+    r"(?i)^(<.*>|your[-_].*|x{3,}|\*{3,}|example.*|placeholder|todo|tbd|replace[-_]?me|\.\.\.|\$\{.*\})$"
+)
 _LOCAL_URL = re.compile(r"(?i)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])")
 _PRIVATE_IP = re.compile(r"\b(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)\b")
 _DEV_HOST = re.compile(r"(?i)https?://[^/\s]*(dev|staging|stage|test|qa|sandbox)[^/\s]*")
@@ -87,8 +110,10 @@ _JS_LANGUAGES = {"TypeScript", "JavaScript"}
 _AUTH_ENTRY_PATH = re.compile(
     r"(?i)(^|[/_-])(login|logout|signin|sign-in|signup|sign-up|register|otp|password|passwd|token|refresh|forgot|reset|oauth|callback|verify)([/_-]|$)"
 )
-_ENTRY_APP = re.compile(r"\b(FastAPI|Flask|Starlette|Quart|Sanic|Celery|Litestar|get_asgi_application|"
-                        r"get_wsgi_application|web\.Application|execute_from_command_line|web\.run_app)\s*\(")
+_ENTRY_APP = re.compile(
+    r"\b(FastAPI|Flask|Starlette|Quart|Sanic|Celery|Litestar|get_asgi_application|"
+    r"get_wsgi_application|web\.Application|execute_from_command_line|web\.run_app)\s*\("
+)
 
 
 # ----------------------------------------------------------------------
@@ -192,23 +217,49 @@ class Baseline:
 
 
 BASELINES: tuple[Baseline, ...] = (
-    Baseline("request_ids", "observability", "request/correlation IDs propagated per request",
-             r"(?i)request[_-]?id|correlation[_-]?id|x-request-id|asgi_correlation_id|trace[_-]?id",
-             r"(?i)correlation|request[- _]?id|trac(e|ing)"),
-    Baseline("metrics", "observability", "application metrics (latency, errors, queue depth, LLM cost)",
-             r"(?i)prometheus|statsd|opentelemetry|datadog|\bmetrics\.(counter|histogram|gauge)",
-             r"(?i)metric"),
-    Baseline("structured_logging", "observability", "structured (JSON) logging configuration",
-             r"(?i)structlog|python-json-logger|jsonlogger|json_logs|logging\.config\.dictconfig",
-             r"(?i)structured|unstructured|print\(|logging config"),
-    Baseline("security_headers", "security", "HTTP security headers (HSTS, CSP, X-Content-Type-Options, ...)",
-             r"(?i)strict-transport-security|content-security-policy|x-content-type-options|x-frame-options|helmet\(",
-             r"(?i)security header|hsts|content-security-policy|csp\b"),
-    Baseline("rate_limiting", "auth", "rate limiting / throttling on any route",
-             r"(?i)slowapi|fastapi[_-]limiter|ratelimit|rate_limit|limiter\.limit|throttl",
-             r"(?i)rate[- ]?limit|throttl|brute"),
-    Baseline("error_boundary", "frontend", "a React error boundary", r"ErrorBoundary|componentDidCatch",
-             r"(?i)error boundar", frontend_only=True),
+    Baseline(
+        "request_ids",
+        "observability",
+        "request/correlation IDs propagated per request",
+        r"(?i)request[_-]?id|correlation[_-]?id|x-request-id|asgi_correlation_id|trace[_-]?id",
+        r"(?i)correlation|request[- _]?id|trac(e|ing)",
+    ),
+    Baseline(
+        "metrics",
+        "observability",
+        "application metrics (latency, errors, queue depth, LLM cost)",
+        r"(?i)prometheus|statsd|opentelemetry|datadog|\bmetrics\.(counter|histogram|gauge)",
+        r"(?i)metric",
+    ),
+    Baseline(
+        "structured_logging",
+        "observability",
+        "structured (JSON) logging configuration",
+        r"(?i)structlog|python-json-logger|jsonlogger|json_logs|logging\.config\.dictconfig",
+        r"(?i)structured|unstructured|print\(|logging config",
+    ),
+    Baseline(
+        "security_headers",
+        "security",
+        "HTTP security headers (HSTS, CSP, X-Content-Type-Options, ...)",
+        r"(?i)strict-transport-security|content-security-policy|x-content-type-options|x-frame-options|helmet\(",
+        r"(?i)security header|hsts|content-security-policy|csp\b",
+    ),
+    Baseline(
+        "rate_limiting",
+        "auth",
+        "rate limiting / throttling on any route",
+        r"(?i)slowapi|fastapi[_-]limiter|ratelimit|rate_limit|limiter\.limit|throttl",
+        r"(?i)rate[- ]?limit|throttl|brute",
+    ),
+    Baseline(
+        "error_boundary",
+        "frontend",
+        "a React error boundary",
+        r"ErrorBoundary|componentDidCatch",
+        r"(?i)error boundar",
+        frontend_only=True,
+    ),
 )
 
 
@@ -287,7 +338,8 @@ class ReviewMaps:
         # A bare route prefix ("/api" in a dev-proxy config) is not a call.
         prefixes = {"/" + r.path.strip("/").split("/", 1)[0] for r in self.routes}
         return [
-            c for c in self.client_calls
+            c
+            for c in self.client_calls
             if _normalize_client_path(c.path) not in prefixes
             and not any(p.fullmatch(_normalize_client_path(c.path)) for p in patterns)
         ]
@@ -319,7 +371,12 @@ class ReviewMaps:
         out = []
         for key, per_file in sorted(by_key.items()):
             if len(per_file) > 1 and len({frozenset(v) for v in per_file.values()}) > 1:
-                out.append((key, [(f, "; ".join(sorted(v)) or "no flag (a real, non-local value)") for f, v in per_file.items()]))
+                out.append(
+                    (
+                        key,
+                        [(f, "; ".join(sorted(v)) or "no flag (a real, non-local value)") for f, v in per_file.items()],
+                    )
+                )
         return out
 
     def env_divergent_defaults(self) -> dict[str, list[EnvRead]]:
@@ -550,10 +607,14 @@ _LAUNCH_CMD = re.compile(r"\b(?:uvicorn|gunicorn|hypercorn|daphne|granian)\b[^\n
 _PY_SCRIPT_CMD = re.compile(r"\bpython[0-9.]*\s+(?:-\w\s+)*([\w./-]+\.py)\b")
 _PY_MODULE_CMD = re.compile(r"\bpython[0-9.]*\s+-m\s+([A-Za-z_][\w.]*)")
 # Frameworks whose app/server objects are often imported by bare name (`from aiohttp.web import Application`).
-_SERVER_IMPORT = re.compile(r"(?m)^\s*(from|import)\s+(aiohttp|tornado|falcon|bottle|pyramid|litestar|sanic|quart|"
-                            r"gevent|waitress|cheroot|werkzeug|hypercorn|uvicorn|gunicorn)\b")
-_SERVER_START = re.compile(r"\b(Application|run_app|App|Bottle|Configurator|Litestar|Sanic|Quart|run_simple|"
-                           r"make_server|WSGIServer|serve|listen|run)\s*\(")
+_SERVER_IMPORT = re.compile(
+    r"(?m)^\s*(from|import)\s+(aiohttp|tornado|falcon|bottle|pyramid|litestar|sanic|quart|"
+    r"gevent|waitress|cheroot|werkzeug|hypercorn|uvicorn|gunicorn)\b"
+)
+_SERVER_START = re.compile(
+    r"\b(Application|run_app|App|Bottle|Configurator|Litestar|Sanic|Quart|run_simple|"
+    r"make_server|WSGIServer|serve|listen|run)\s*\("
+)
 _APP_FACTORY_ASSIGN = re.compile(r"(?m)^(app|application|api|server)\s*(?::[^=]+)?=\s*[A-Za-z_][\w.]*\(")
 
 
@@ -597,10 +658,17 @@ def _reachability(
     launch_texts = list(launch_texts)
     servers, launched_scripts = _launched(files, [*launch_texts, *(py.text for py in files)])
     app_roots = sorted(
-        {py.path for py in files if (_ENTRY_APP.search(py.text) or (
-            _SERVER_IMPORT.search(py.text) and _SERVER_START.search(py.text))) and not _is_test_path(py.path)}
-        | {py.path for py in files if _APP_FACTORY_ASSIGN.search(py.text) and not _is_test_path(py.path)
-           and edges.get(py.path)}
+        {
+            py.path
+            for py in files
+            if (_ENTRY_APP.search(py.text) or (_SERVER_IMPORT.search(py.text) and _SERVER_START.search(py.text)))
+            and not _is_test_path(py.path)
+        }
+        | {
+            py.path
+            for py in files
+            if _APP_FACTORY_ASSIGN.search(py.text) and not _is_test_path(py.path) and edges.get(py.path)
+        }
         | servers
         | _runtime_loaded_modules(files)
     )
@@ -642,11 +710,27 @@ def _reachability(
     return tuple(app_roots), sorted(unreachable), sorted(orphan_scripts)
 
 
-_WORKER_DECORATOR = re.compile(r"(?m)^\s*@[\w.]*\b(task|shared_task|actor|periodic_task|scheduled_job|job|agent|"
-                               r"consumer|subscriber|on_message|cron|repeat_every|receiver)\b")
+_WORKER_DECORATOR = re.compile(
+    r"(?m)^\s*@[\w.]*\b(task|shared_task|actor|periodic_task|scheduled_job|job|agent|"
+    r"consumer|subscriber|on_message|cron|repeat_every|receiver)\b"
+)
 _DOTTED_STRING = re.compile(r"^[A-Za-z_]\w*(\.\w+)+(:\w+)?$")
-_DJANGO_APP_MODULES = ("models", "admin", "apps", "signals", "tasks", "urls", "views", "serializers", "forms",
-                       "receivers", "handlers", "context_processors", "middleware", "templatetags")
+_DJANGO_APP_MODULES = (
+    "models",
+    "admin",
+    "apps",
+    "signals",
+    "tasks",
+    "urls",
+    "views",
+    "serializers",
+    "forms",
+    "receivers",
+    "handlers",
+    "context_processors",
+    "middleware",
+    "templatetags",
+)
 
 
 def _runtime_loaded_modules(files: list[_PyFile]) -> set[str]:
@@ -676,8 +760,11 @@ def _runtime_loaded_modules(files: list[_PyFile]) -> set[str]:
             continue
         parts = PurePosixPath(py.path).parts
         worker = bool(_WORKER_DECORATOR.search(py.text)) or "/management/commands/" in f"/{py.path}"
-        django_app = bool(installed) and PurePosixPath(py.path).stem in _DJANGO_APP_MODULES and any(
-            p in installed for p in parts)
+        django_app = (
+            bool(installed)
+            and PurePosixPath(py.path).stem in _DJANGO_APP_MODULES
+            and any(p in installed for p in parts)
+        )
         if worker or django_app:
             loaded.add(py.path)
     return loaded
@@ -696,7 +783,11 @@ def _is_test_path(path: str) -> bool:
 
 def _is_tooling_path(path: str) -> bool:
     parts = PurePosixPath(path).parts
-    return any(p in ("migrations", "alembic", "versions") for p in parts) or parts[-1] in ("setup.py", "manage.py", "noxfile.py")
+    return any(p in ("migrations", "alembic", "versions") for p in parts) or parts[-1] in (
+        "setup.py",
+        "manage.py",
+        "noxfile.py",
+    )
 
 
 # ----------------------------------------------------------------------
@@ -785,7 +876,11 @@ def _collect_fastapi(files: list[_PyFile]):
                     target = node.args[1] if len(node.args) > 1 else _kw(node, "app")
                     if path is not None and target is not None:
                         target_text = ast.get_source_segment(py.text, target) or _dotted(target)
-                        mounts.append(MountInfo(path=path, target=" ".join(target_text.split())[:120], file=py.path, line=node.lineno))
+                        mounts.append(
+                            MountInfo(
+                                path=path, target=" ".join(target_text.split())[:120], file=py.path, line=node.lineno
+                            )
+                        )
 
         for node in ast.walk(py.tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -803,9 +898,9 @@ def _collect_fastapi(files: list[_PyFile]):
                     methods = ["WS"]
                 elif verb == "api_route":
                     methods_node = _kw(decorator, "methods")
-                    methods = [
-                        m.upper() for m in (_literal(e) for e in getattr(methods_node, "elts", [])) if m
-                    ] or ["GET"]
+                    methods = [m.upper() for m in (_literal(e) for e in getattr(methods_node, "elts", [])) if m] or [
+                        "GET"
+                    ]
                 else:
                     continue
                 for method in methods:
@@ -851,10 +946,17 @@ def _dependency_aliases(files: list[_PyFile]) -> dict[str, list[str]]:
     aliases: dict[str, list[str]] = {}
     for py in files:
         for node in py.tree.body:
-            target = node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1 else (
-                node.target if isinstance(node, ast.AnnAssign) else None)
+            target = (
+                node.targets[0]
+                if isinstance(node, ast.Assign) and len(node.targets) == 1
+                else (node.target if isinstance(node, ast.AnnAssign) else None)
+            )
             value = node.value if isinstance(node, (ast.Assign, ast.AnnAssign)) else None
-            if isinstance(target, ast.Name) and isinstance(value, ast.Subscript) and "Annotated" in _dotted(value.value):
+            if (
+                isinstance(target, ast.Name)
+                and isinstance(value, ast.Subscript)
+                and "Annotated" in _dotted(value.value)
+            ):
                 found = _depends_targets(value)
                 if found:
                     aliases[target.id] = found
@@ -988,7 +1090,8 @@ def _build_routes(files: list[_PyFile]) -> tuple[list[RouteInfo], list[MountInfo
             for arg in args
         ) or any(
             isinstance(d, ast.Call) and _dotted(d.func).split(".")[-1] == "File"
-            for d in [*handler.args.defaults, *handler.args.kw_defaults] if d is not None
+            for d in [*handler.args.defaults, *handler.args.kw_defaults]
+            if d is not None
         )
 
     def paginated(handler: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -1041,7 +1144,9 @@ def _python_env_reads(files: list[_PyFile]) -> list[EnvRead]:
                         default_node = node.args[1] if len(node.args) > 1 else _kw(node, "default")
                         default = None
                         if default_node is not None:
-                            default = repr(default_node.value) if isinstance(default_node, ast.Constant) else "<expression>"
+                            default = (
+                                repr(default_node.value) if isinstance(default_node, ast.Constant) else "<expression>"
+                            )
                         reads.append(EnvRead(key, py.path, node.lineno, default, False))
             elif isinstance(node, ast.Subscript) and _dotted(node.value) in ("os.environ", "environ"):
                 key = _literal(node.slice)
@@ -1182,8 +1287,10 @@ def _launch_texts(repo_path: Path | None, manifest: RepositoryManifest | None) -
     texts = []
     for entry in manifest.files:
         name = PurePosixPath(entry.path).name.lower()
-        if (name.startswith(("dockerfile", "docker-compose", "compose", "procfile", "makefile")) or name.endswith(
-                (".sh", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".nomad", ".hcl", ".service"))) and "node_modules" not in entry.path:
+        if (
+            name.startswith(("dockerfile", "docker-compose", "compose", "procfile", "makefile"))
+            or name.endswith((".sh", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".nomad", ".hcl", ".service"))
+        ) and "node_modules" not in entry.path:
             try:
                 texts.append((repo_path / entry.path).read_text(encoding="utf-8", errors="replace")[:200_000])
             except OSError:
@@ -1196,9 +1303,13 @@ def _fill_documented_routes(maps: ReviewMaps, repo_path: Path, manifest: Reposit
     docs = []
     for entry in manifest.files:
         lower = entry.path.lower()
-        if lower.endswith((".md", ".rst", ".txt", ".adoc")) or re.search(r"(openapi|swagger)[^/]*\.(json|ya?ml)$", lower):
+        if lower.endswith((".md", ".rst", ".txt", ".adoc")) or re.search(
+            r"(openapi|swagger)[^/]*\.(json|ya?ml)$", lower
+        ):
             try:
-                docs.append((entry.path, (repo_path / entry.path).read_text(encoding="utf-8", errors="replace")[:500_000]))
+                docs.append(
+                    (entry.path, (repo_path / entry.path).read_text(encoding="utf-8", errors="replace")[:500_000])
+                )
             except OSError:
                 continue
     for route in maps.routes:
@@ -1220,8 +1331,9 @@ def _fill_routes(maps: ReviewMaps, files: list[_PyFile]) -> None:
     maps.routes, maps.mounts = _build_routes(files)
 
 
-def _fill_imports(maps: ReviewMaps, files: list[_PyFile], repo_path: Path | None = None,
-                  manifest: RepositoryManifest | None = None) -> None:
+def _fill_imports(
+    maps: ReviewMaps, files: list[_PyFile], repo_path: Path | None = None, manifest: RepositoryManifest | None = None
+) -> None:
     maps.import_edges, maps.import_roots = _build_import_graph(files)
     maps.app_roots, maps.unreachable, maps.orphan_scripts = _reachability(
         files, maps.import_edges, _launch_texts(repo_path, manifest)
@@ -1231,12 +1343,52 @@ def _fill_imports(maps: ReviewMaps, files: list[_PyFile], repo_path: Path | None
     maps.identity_unused = _identity_unused(files)
 
 
-_SYNC_PRIMITIVES = frozenset({"Semaphore", "BoundedSemaphore", "Lock", "RLock", "Condition", "Event", "Queue",
-                              "PriorityQueue", "LifoQueue", "SimpleQueue"})
-_MUTATORS = frozenset({"append", "extend", "update", "setdefault", "add", "pop", "clear", "insert", "remove",
-                       "popitem", "discard", "put", "put_nowait"})
-_QUERY_CALLS = frozenset({"select", "query", "execute", "scalars", "filter", "filter_by", "find", "find_one",
-                          "get_collection", "similarity_search", "raw"})
+_SYNC_PRIMITIVES = frozenset(
+    {
+        "Semaphore",
+        "BoundedSemaphore",
+        "Lock",
+        "RLock",
+        "Condition",
+        "Event",
+        "Queue",
+        "PriorityQueue",
+        "LifoQueue",
+        "SimpleQueue",
+    }
+)
+_MUTATORS = frozenset(
+    {
+        "append",
+        "extend",
+        "update",
+        "setdefault",
+        "add",
+        "pop",
+        "clear",
+        "insert",
+        "remove",
+        "popitem",
+        "discard",
+        "put",
+        "put_nowait",
+    }
+)
+_QUERY_CALLS = frozenset(
+    {
+        "select",
+        "query",
+        "execute",
+        "scalars",
+        "filter",
+        "filter_by",
+        "find",
+        "find_one",
+        "get_collection",
+        "similarity_search",
+        "raw",
+    }
+)
 
 
 def _process_state(files: list[_PyFile]) -> list[ProcessState]:
@@ -1247,7 +1399,13 @@ def _process_state(files: list[_PyFile]) -> list[ProcessState]:
             continue
         module_names: dict[str, tuple[int, ast.AST]] = {}
         for node in py.tree.body:
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+            targets = (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+                if isinstance(node, ast.AnnAssign)
+                else []
+            )
             value = getattr(node, "value", None)
             for target in targets:
                 if isinstance(target, ast.Name) and value is not None:
@@ -1272,7 +1430,7 @@ def _process_state(files: list[_PyFile]) -> list[ProcessState]:
                 kind = f"in-process {ctor} (per worker, not shared across instances)"
             elif name in declared_global:
                 kind = "module global reassigned at runtime (process-local singleton/flag)"
-            elif name in mutated and isinstance(value, (ast.Dict, ast.List, ast.Set)) or (
+            elif (name in mutated and isinstance(value, (ast.Dict, ast.List, ast.Set))) or (
                 name in mutated and ctor in ("dict", "list", "set", "defaultdict", "OrderedDict", "deque")
             ):
                 kind = "module-level cache/registry mutated at runtime (process-local, unbounded unless evicted)"
@@ -1303,15 +1461,20 @@ def _identity_unused(files: list[_PyFile]) -> list[IdentityUnused]:
             for sub in ast.walk(init):
                 if isinstance(sub, ast.Assign):
                     for target in sub.targets:
-                        if (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
-                                and target.value.id == "self" and _IDENTITY_NAME.search(target.attr)):
+                        if (
+                            isinstance(target, ast.Attribute)
+                            and isinstance(target.value, ast.Name)
+                            and target.value.id == "self"
+                            and _IDENTITY_NAME.search(target.attr)
+                        ):
                             identity_attrs.add(target.attr)
             if not identity_attrs:
                 continue
 
             def uses(method: ast.AST, attrs: set[str] = identity_attrs) -> set[str]:
                 direct = {
-                    sub.attr for sub in ast.walk(method)
+                    sub.attr
+                    for sub in ast.walk(method)
                     if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) and sub.value.id == "self"
                 }
                 return direct
@@ -1331,7 +1494,11 @@ def _identity_unused(files: list[_PyFile]) -> list[IdentityUnused]:
                 if name == "__init__" or name.startswith("__") or uses_identity.get(name):
                     continue
                 if calls_query(method):
-                    found.append(IdentityUnused(f"{cls.name}.{name}", py.path, method.lineno, "self." + "/".join(sorted(identity_attrs))))
+                    found.append(
+                        IdentityUnused(
+                            f"{cls.name}.{name}", py.path, method.lineno, "self." + "/".join(sorted(identity_attrs))
+                        )
+                    )
     return found
 
 
@@ -1340,7 +1507,9 @@ def _unguarded_routes(sources: list[tuple[str, str]]) -> list[ClientRoute]:
     found = []
     pattern = re.compile(r"<Route\s+[^>]*?path=[\"']([^\"']+)[\"'][^>]*?element=\{\s*<([A-Z][A-Za-z0-9_.]*)")
     guard = re.compile(r"(?i)(guard|protected|require|private|auth|admin|role)")
-    public = re.compile(r"(?i)(login|logout|register|signup|sign-up|forgot|reset|verify|otp|callback|public|^/?\*?$|404|not-found)")
+    public = re.compile(
+        r"(?i)(login|logout|register|signup|sign-up|forgot|reset|verify|otp|callback|public|^/?\*?$|404|not-found)"
+    )
     for path, text in sources:
         if not path.endswith((".tsx", ".jsx")):
             continue
@@ -1382,9 +1551,13 @@ def _background_jobs(files: list[_PyFile]) -> list[BackgroundJob]:
                 target = node.args[1]
             elif callee == "to_thread" and node.args:
                 target = node.args[0]
-            elif callee in ("add_job", "schedule", "every", "basic_consume", "subscribe") and (node.args or node.keywords):
-                target = next((k.value for k in node.keywords if k.arg in ("func", "on_message_callback", "callback")),
-                              node.args[0] if node.args else None)
+            elif callee in ("add_job", "schedule", "every", "basic_consume", "subscribe") and (
+                node.args or node.keywords
+            ):
+                target = next(
+                    (k.value for k in node.keywords if k.arg in ("func", "on_message_callback", "callback")),
+                    node.args[0] if node.args else None,
+                )
             elif callee in ("delay", "apply_async", "send", "enqueue", "kiq") and isinstance(node.func, ast.Attribute):
                 target = node.func.value if callee != "enqueue" else (node.args[0] if node.args else None)
             if target is None or isinstance(target, ast.Lambda):
@@ -1397,12 +1570,20 @@ def _background_jobs(files: list[_PyFile]) -> list[BackgroundJob]:
     for py in files:  # worker tasks, schedules and consumers declared with a decorator
         for node in ast.walk(py.tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
-                    re.search(r"\b(task|shared_task|actor|periodic_task|scheduled_job|job|agent|consumer|subscriber|"
-                              r"on_message|cron|repeat_every)\b", _dotted(d)) for d in node.decorator_list):
+                re.search(
+                    r"\b(task|shared_task|actor|periodic_task|scheduled_job|job|agent|consumer|subscriber|"
+                    r"on_message|cron|repeat_every)\b",
+                    _dotted(d),
+                )
+                for d in node.decorator_list
+            ):
                 starts.setdefault((node.name, py.path, node.lineno), []).append(f"{py.path}:{node.lineno} (decorated)")
     starts = {k: v for k, v in starts.items() if k[1] and k[0] not in ("send", "self")}
     return sorted(
-        (BackgroundJob(name, file, line, ", ".join(sorted(set(where))[:3])) for (name, file, line), where in starts.items()),
+        (
+            BackgroundJob(name, file, line, ", ".join(sorted(set(where))[:3]))
+            for (name, file, line), where in starts.items()
+        ),
         key=lambda job: (job.file, job.function),
     )
 
@@ -1412,7 +1593,8 @@ def _fill_env(maps: ReviewMaps, files, js_sources, repo_path: Path, inspect_real
     has_frontend = any(path.endswith((".tsx", ".jsx", ".vue", ".svelte")) for path, _ in js_sources)
     corpus = [py.text for py in files] + [text for _, text in js_sources]
     maps.absent_baselines = [
-        b for b in BASELINES
+        b
+        for b in BASELINES
         if (has_frontend or not b.frontend_only) and not any(re.search(b.evidence, text) for text in corpus)
     ]
     maps.env_files = _env_files(repo_path, inspect_real)
@@ -1434,7 +1616,11 @@ def _display_default(read: EnvRead) -> str:
     if read.default is None:
         return "no default (None/undefined)"
     if _is_secret_name(read.key) and read.default != "<expression>":
-        return "empty-string default" if read.default in ("''", '""') else f"HARD-CODED DEFAULT ({len(read.default) - 2} chars)"
+        return (
+            "empty-string default"
+            if read.default in ("''", '""')
+            else f"HARD-CODED DEFAULT ({len(read.default) - 2} chars)"
+        )
     return read.default[:80]
 
 
@@ -1458,7 +1644,11 @@ def render_route_map(maps: ReviewMaps) -> str:
         lines += ["## Mounted sub-apps (FastAPI app/router dependencies do NOT apply to these)"]
         lines += [f"- {m.path} -> {m.target} ({m.file}:{m.line})" for m in maps.mounts]
         lines.append("")
-    lines += ["## Routes", "| method | path | handler (file:line) | auth | identity inputs | flags | dependencies |", "|---|---|---|---|---|---|---|"]
+    lines += [
+        "## Routes",
+        "| method | path | handler (file:line) | auth | identity inputs | flags | dependencies |",
+        "|---|---|---|---|---|---|---|",
+    ]
     for r in maps.routes:
         lines.append(
             f"| {r.method} | {r.path} | {r.handler} ({r.file}:{r.line}) | {r.auth_label} | "
@@ -1479,7 +1669,8 @@ def render_env_map(maps: ReviewMaps) -> str:
             lines.append(f"- {key}: " + "; ".join(f"{_display_default(r)} @ {r.file}:{r.line}" for r in reads))
         lines.append("")
     risky = [
-        r for r in maps.env_reads
+        r
+        for r in maps.env_reads
         if r.default and (classify_env_value(r.key, r.default.strip("'\"")) or _is_secret_name(r.key))
     ]
     risky = [r for r in risky if r.default != "<expression>"]
@@ -1487,7 +1678,9 @@ def render_env_map(maps: ReviewMaps) -> str:
         lines.append("## Inline defaults worth checking (secrets, localhost/dev hosts, private IPs)")
         for r in risky:
             flags = classify_env_value(r.key, r.default.strip("'\"")) if r.default else []
-            lines.append(f"- {r.key} = {_display_default(r)} @ {r.file}:{r.line}" + (f" [{'; '.join(flags)}]" if flags else ""))
+            lines.append(
+                f"- {r.key} = {_display_default(r)} @ {r.file}:{r.line}" + (f" [{'; '.join(flags)}]" if flags else "")
+            )
         lines.append("")
     by_key: dict[str, list[EnvRead]] = defaultdict(list)
     for r in maps.env_reads:
@@ -1499,13 +1692,17 @@ def render_env_map(maps: ReviewMaps) -> str:
             kind = "template" if f.is_template else "REAL ENV FILE (committed to the repository)"
             lines.append(f"### {f.file} — {kind}, {len(f.keys)} keys")
             if f.duplicates:
-                lines.append("- DUPLICATE KEYS (effective value depends on load order): " + "; ".join(
-                    f"{k} at lines {', '.join(map(str, nums))}" for k, nums in f.duplicates))
+                lines.append(
+                    "- DUPLICATE KEYS (effective value depends on load order): "
+                    + "; ".join(f"{k} at lines {', '.join(map(str, nums))}" for k, nums in f.duplicates)
+                )
             for key, flag in f.flags:
                 lines.append(f"- {key}: {flag}")
         contradictions = maps.env_contradictions()
         if contradictions:
-            lines.append("- CONTRADICTORY ACROSS FILES (same key, different kind of target — dev vs prod, local vs remote):")
+            lines.append(
+                "- CONTRADICTORY ACROSS FILES (same key, different kind of target — dev vs prod, local vs remote):"
+            )
             lines += [f"  - {key}: " + "; ".join(f"{f}: {flags}" for f, flags in rows) for key, rows in contradictions]
         undocumented = sorted(k for k in by_key if k not in documented)
         stale = sorted(k for f in maps.env_files if f.is_template for k in f.keys if k not in by_key)
@@ -1517,8 +1714,11 @@ def render_env_map(maps: ReviewMaps) -> str:
     lines.append("## Every environment read (key: default @ location)")
     for key in sorted(by_key):
         reads = by_key[key]
-        lines.append(f"- {key} ({len(reads)} reads): " + "; ".join(f"{_display_default(r)} @ {r.file}:{r.line}" for r in reads[:12])
-                     + (" ..." if len(reads) > 12 else ""))
+        lines.append(
+            f"- {key} ({len(reads)} reads): "
+            + "; ".join(f"{_display_default(r)} @ {r.file}:{r.line}" for r in reads[:12])
+            + (" ..." if len(reads) > 12 else "")
+        )
     return "\n".join(lines)
 
 
@@ -1538,10 +1738,18 @@ def render_client_calls(maps: ReviewMaps) -> str:
         *([f"- {c.path} ({c.file}:{c.line})" for c in unmatched] or ["- none"]),
         "",
         "## Backend routes the frontend never references (dead, or external/integration-only — verify)",
-        *([f"- {r.method} {r.path} -> {r.handler} ({r.file}:{r.line})"
-           + (f" — documented in {maps.documented_routes[r.path]} (external contract?)"
-              if r.path in maps.documented_routes else "")
-           for r in orphan_routes] or ["- none"]),
+        *(
+            [
+                f"- {r.method} {r.path} -> {r.handler} ({r.file}:{r.line})"
+                + (
+                    f" — documented in {maps.documented_routes[r.path]} (external contract?)"
+                    if r.path in maps.documented_routes
+                    else ""
+                )
+                for r in orphan_routes
+            ]
+            or ["- none"]
+        ),
         "",
         "## All frontend call sites",
         *[f"- {c.path} ({c.file}:{c.line})" for c in maps.client_calls],
@@ -1565,9 +1773,12 @@ def render_reachability(maps: ReviewMaps) -> str:
         for directory, names in sorted(grouped.items()):
             lines.append(f"- {directory}/ ({len(names)}): {', '.join(sorted(names))}")
         lines.append("")
-    lines.append(f"## Background jobs (functions scheduled with add_task / create_task / executors) ({len(maps.background_jobs)})")
+    lines.append(
+        f"## Background jobs (functions scheduled with add_task / create_task / executors) ({len(maps.background_jobs)})"
+    )
     lines += [
-        f"- {job.function} ({job.file}:{job.line}) started at {job.started_at}" if job.file
+        f"- {job.function} ({job.file}:{job.line}) started at {job.started_at}"
+        if job.file
         else f"- {job.function} (definition not found in the repo) started at {job.started_at}"
         for job in maps.background_jobs
     ] or ["- none"]
@@ -1634,7 +1845,9 @@ def render_architecture(maps: ReviewMaps) -> str:
     lines.append(f"## Process-local state ({len(maps.process_state)}) — one process only, lost on restart/redeploy")
     lines += [f"- {x.name} ({x.file}:{x.line}): {x.kind}" for x in maps.process_state] or ["- none"]
     lines += ["", f"## Background jobs ({len(maps.background_jobs)})"]
-    lines += [f"- {j.function} ({j.file}:{j.line}) started at {j.started_at}" for j in maps.background_jobs] or ["- none"]
+    lines += [f"- {j.function} ({j.file}:{j.line}) started at {j.started_at}" for j in maps.background_jobs] or [
+        "- none"
+    ]
     lines += ["", f"## Queries that receive the caller's identity but never use it ({len(maps.identity_unused)})"]
     lines += [f"- {x.function} ({x.file}:{x.line}) ignores {x.identity}" for x in maps.identity_unused] or ["- none"]
     lines += ["", f"## Frontend pages rendered without an auth guard ({len(maps.unguarded_routes)})"]
@@ -1675,71 +1888,125 @@ def build_inventory(
     sections = [
         section(
             "Routes that take a user identity from the request without verifying it",
-            [f"`{r.method} {r.path}` — {', '.join(r.identity_inputs)} ({r.file}:{r.line}; {r.auth_label})"
-             for r in maps.routes if "CLIENT-ASSERTED IDENTITY" in r.flags],
+            [
+                f"`{r.method} {r.path}` — {', '.join(r.identity_inputs)} ({r.file}:{r.line}; {r.auth_label})"
+                for r in maps.routes
+                if "CLIENT-ASSERTED IDENTITY" in r.flags
+            ],
         ),
         section(
             "Queries that receive the caller's identity but never use it",
             [f"`{x.function}` ignores {x.identity} ({x.file}:{x.line})" for x in maps.identity_unused],
             "Each is either an intentional global listing or a data-exposure bug; the findings above say which.",
         ),
-        section("Collection endpoints with no pagination input (limit/offset/page/cursor)",
-                [f"`{r.method} {r.path}` -> {r.handler} ({r.file}:{r.line})" for r in maps.routes if r.is_unpaginated_listing],
-                "Each returns the whole collection unless the handler caps it internally."),
-        section("Mounted sub-apps (no FastAPI dependency applies)",
-                [f"`{m.path}` -> {m.target} ({m.file}:{m.line})" for m in maps.mounts]),
-        section("Frontend pages rendered without an auth guard",
-                [f"`{x.path}` -> <{x.component}> ({x.file}:{x.line})" for x in maps.unguarded_routes]),
-        section("Frontend calls with no backend route",
-                [f"`{c.path}` ({c.file}:{c.line})" for c in maps.unmatched_client_calls()]),
-        section("Backend routes no frontend code calls (dead, or external/integration-only)",
-                [f"`{r.method} {r.path}` -> {r.handler} ({r.file}:{r.line})" for r in maps.routes_without_client()]),
-        section(f"Python modules no application entry point imports (~{dead_lines:,} lines)" if line_counts
-                else "Python modules no application entry point imports",
-                [f"{d}/ ({len(n)}{f', {dir_lines[d]:,} lines' if line_counts else ''}): {', '.join(sorted(n))}"
-                 for d, n in sorted(unreachable_dirs.items(), key=lambda kv: -dir_lines.get(kv[0], 0))]),
-        section("Process-local state (single process, lost on restart)",
-                [f"`{x.name}` ({x.file}:{x.line}) — {x.kind}" for x in maps.process_state]),
-        section("Background jobs",
-                [f"`{j.function}` ({j.file}:{j.line}) started at {j.started_at}" for j in maps.background_jobs if j.file]),
-        section("Environment keys with different inline defaults in different places",
-                [f"`{key}`: " + "; ".join(f"{_display_default(r)} @ {r.file}:{r.line}" for r in reads)
-                 for key, reads in sorted(divergent.items())]),
-        section("Production baselines with no trace anywhere in the code",
-                [b.label for b in maps.absent_baselines]),
-        section("Sync model / embedding work reached from async code (blocks the event loop)",
-                [s.row for s in maps.signals.blocking_in_async]),
-        section("Agent loops that re-send a growing message list to the model",
-                [s.row for s in maps.signals.agent_loops]),
-        section("Files that call a model but never read token usage",
-                [s.row for s in maps.signals.usage_never_read]),
-        section(f"print() used as logging in live modules ({sum(n for _, n in maps.signals.print_live)} calls)",
-                [f"{f}: {n}" for f, n in maps.signals.print_live]),
+        section(
+            "Collection endpoints with no pagination input (limit/offset/page/cursor)",
+            [
+                f"`{r.method} {r.path}` -> {r.handler} ({r.file}:{r.line})"
+                for r in maps.routes
+                if r.is_unpaginated_listing
+            ],
+            "Each returns the whole collection unless the handler caps it internally.",
+        ),
+        section(
+            "Mounted sub-apps (no FastAPI dependency applies)",
+            [f"`{m.path}` -> {m.target} ({m.file}:{m.line})" for m in maps.mounts],
+        ),
+        section(
+            "Frontend pages rendered without an auth guard",
+            [f"`{x.path}` -> <{x.component}> ({x.file}:{x.line})" for x in maps.unguarded_routes],
+        ),
+        section(
+            "Frontend calls with no backend route",
+            [f"`{c.path}` ({c.file}:{c.line})" for c in maps.unmatched_client_calls()],
+        ),
+        section(
+            "Backend routes no frontend code calls (dead, or external/integration-only)",
+            [f"`{r.method} {r.path}` -> {r.handler} ({r.file}:{r.line})" for r in maps.routes_without_client()],
+        ),
+        section(
+            f"Python modules no application entry point imports (~{dead_lines:,} lines)"
+            if line_counts
+            else "Python modules no application entry point imports",
+            [
+                f"{d}/ ({len(n)}{f', {dir_lines[d]:,} lines' if line_counts else ''}): {', '.join(sorted(n))}"
+                for d, n in sorted(unreachable_dirs.items(), key=lambda kv: -dir_lines.get(kv[0], 0))
+            ],
+        ),
+        section(
+            "Process-local state (single process, lost on restart)",
+            [f"`{x.name}` ({x.file}:{x.line}) — {x.kind}" for x in maps.process_state],
+        ),
+        section(
+            "Background jobs",
+            [f"`{j.function}` ({j.file}:{j.line}) started at {j.started_at}" for j in maps.background_jobs if j.file],
+        ),
+        section(
+            "Environment keys with different inline defaults in different places",
+            [
+                f"`{key}`: " + "; ".join(f"{_display_default(r)} @ {r.file}:{r.line}" for r in reads)
+                for key, reads in sorted(divergent.items())
+            ],
+        ),
+        section("Production baselines with no trace anywhere in the code", [b.label for b in maps.absent_baselines]),
+        section(
+            "Sync model / embedding work reached from async code (blocks the event loop)",
+            [s.row for s in maps.signals.blocking_in_async],
+        ),
+        section(
+            "Agent loops that re-send a growing message list to the model", [s.row for s in maps.signals.agent_loops]
+        ),
+        section("Files that call a model but never read token usage", [s.row for s in maps.signals.usage_never_read]),
+        section(
+            f"print() used as logging in live modules ({sum(n for _, n in maps.signals.print_live)} calls)",
+            [f"{f}: {n}" for f, n in maps.signals.print_live],
+        ),
         section("Health endpoints that check no dependency", [s.row for s in maps.signals.static_health]),
-        section("CI / deploy pipelines with no test, lint or scan step",
-                [f"{p.file} (stages: {', '.join(p.stages) or 'unnamed'})" for p in maps.signals.ci_without_checks]),
-        section("Libraries doing the same job",
-                [f"{fam}: {', '.join(pkgs)} ({src})" for fam, pkgs, src in maps.signals.duplicate_libraries]),
-        section("Declared dependencies nothing live imports",
-                [f"{s.text} ({s.file})" for s in maps.signals.unused_dependencies]),
-        section("Parallel implementations of one operation",
-                [f"{name}: " + "; ".join(x.row for x in sites) for name, sites in maps.signals.parallel_implementations]),
+        section(
+            "CI / deploy pipelines with no test, lint or scan step",
+            [f"{p.file} (stages: {', '.join(p.stages) or 'unnamed'})" for p in maps.signals.ci_without_checks],
+        ),
+        section(
+            "Libraries doing the same job",
+            [f"{fam}: {', '.join(pkgs)} ({src})" for fam, pkgs, src in maps.signals.duplicate_libraries],
+        ),
+        section(
+            "Declared dependencies nothing live imports",
+            [f"{s.text} ({s.file})" for s in maps.signals.unused_dependencies],
+        ),
+        section(
+            "Parallel implementations of one operation",
+            [f"{name}: " + "; ".join(x.row for x in sites) for name, sites in maps.signals.parallel_implementations],
+        ),
         section("External commands run with no timeout", [s.row for s in maps.signals.subprocess_no_timeout]),
         section("Credentials accepted in the query string", [s.row for s in maps.signals.query_credentials]),
-        section("Keys set to contradictory targets in different .env files",
-                [f"`{key}` — " + "; ".join(f"{f}: {flags}" for f, flags in rows) for key, rows in maps.env_contradictions()]),
+        section(
+            "Keys set to contradictory targets in different .env files",
+            [
+                f"`{key}` — " + "; ".join(f"{f}: {flags}" for f, flags in rows)
+                for key, rows in maps.env_contradictions()
+            ],
+        ),
         section("Executor nesting / single-worker thread pools", [s.row for s in maps.signals.executor_nesting]),
-        section("Production controls with no trace anywhere in the live code",
-                [label for _, label, _ in maps.signals.absent_controls]),
-        section("Secrets / personal data shipped with the code or baked into the image",
-                [s.row if s.line else f"{s.text} ({s.file})" for s in maps.signals.packaged_artifacts]),
-        section("Deploy manifests: duplicate env keys, local/dev targets, privileged or single-instance jobs",
-                [s.row for s in maps.signals.deploy_env]),
+        section(
+            "Production controls with no trace anywhere in the live code",
+            [label for _, label, _ in maps.signals.absent_controls],
+        ),
+        section(
+            "Secrets / personal data shipped with the code or baked into the image",
+            [s.row if s.line else f"{s.text} ({s.file})" for s in maps.signals.packaged_artifacts],
+        ),
+        section(
+            "Deploy manifests: duplicate env keys, local/dev targets, privileged or single-instance jobs",
+            [s.row for s in maps.signals.deploy_env],
+        ),
         section("Unbounded reads (whole tables, whole directories)", [s.row for s in maps.signals.unbounded_reads]),
         section("All-or-nothing startup", [s.row for s in maps.signals.startup_fragility]),
         section("Whole-file JSON rewrites per event", [s.row for s in maps.signals.whole_file_rewrites]),
-        section("Layers importing each other both ways",
-                [f"{a} <-> {b}: " + "; ".join(ex) for a, b, ex in maps.signals.layer_cycles]),
+        section(
+            "Layers importing each other both ways",
+            [f"{a} <-> {b}: " + "; ".join(ex) for a, b, ex in maps.signals.layer_cycles],
+        ),
         section("Tests that cannot fail / credentials in test scripts", [s.row for s in maps.signals.weak_tests]),
         section("Supply chain: missing lockfiles, unpinned base images", [s.row for s in maps.signals.supply_chain]),
         section("Naive datetimes (no timezone)", [s.row for s in maps.signals.naive_datetimes]),

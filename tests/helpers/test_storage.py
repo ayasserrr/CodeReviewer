@@ -26,10 +26,9 @@ class TestTemporaryWorkspace:
 
     def test_removes_directory_even_on_exception(self, tmp_path: Path):
         captured_workspace = None
-        with pytest.raises(ValueError):
-            with temporary_workspace(tmp_path) as workspace:
-                captured_workspace = workspace
-                raise ValueError("simulated failure mid-ingestion")
+        with pytest.raises(ValueError), temporary_workspace(tmp_path) as workspace:
+            captured_workspace = workspace
+            raise ValueError("simulated failure mid-ingestion")
         assert not captured_workspace.exists()
 
     def test_removes_readonly_files_inside_workspace(self, tmp_path: Path):

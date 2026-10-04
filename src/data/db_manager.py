@@ -10,10 +10,9 @@ this module) cheap and side-effect free.
 
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Optional
 
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from config import settings
@@ -39,8 +38,8 @@ class DatabaseManager:
     """
 
     def __init__(self) -> None:
-        self.db_engine: Optional[AsyncEngine] = None
-        self.session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+        self.db_engine: AsyncEngine | None = None
+        self.session_factory: async_sessionmaker[AsyncSession] | None = None
 
     def connect(self) -> None:
         """Build the engine and session factory from application settings.
@@ -129,7 +128,7 @@ class DatabaseManager:
                 await db_session.rollback()
                 raise
 
-    async def get_db_session(self) -> AsyncGenerator[AsyncSession, None]:
+    async def get_db_session(self) -> AsyncGenerator[AsyncSession]:
         """Yield a database session, for use as a FastAPI dependency.
 
         FastAPI drives this generator's lifecycle explicitly (resuming it in

@@ -10,7 +10,7 @@ from helpers.review_signals import render_runtime_signals
 from utils import DiscoveryStatistics, FileEntry, RepositoryManifest
 
 FILES = {
-    "svc/app/main.py": '''
+    "svc/app/main.py": """
 from fastapi import FastAPI
 from app.routes import router
 app = FastAPI()
@@ -24,8 +24,8 @@ async def health_check():
 async def ready(db=None):
     await db.execute("select 1")
     return {"ok": True}
-''',
-    "svc/app/routes.py": '''
+""",
+    "svc/app/routes.py": """
 from fastapi import APIRouter
 from app.llm import llmjd
 from app.scoring import rescore_pool, score_async
@@ -44,12 +44,12 @@ async def screen(body: dict):
     ranked = rescore_pool(body["pool"])
     offloaded = await asyncio.to_thread(rescore_pool, body["pool"])
     return await score_async(entities, ranked, offloaded)
-''',
-    "svc/app/llm.py": '''
+""",
+    "svc/app/llm.py": """
 from langchain_ibm import WatsonxLLM
 llmjd = WatsonxLLM(model_id="x")
-''',
-    "svc/app/scoring.py": '''
+""",
+    "svc/app/scoring.py": """
 from app.llm import llmjd
 
 def _score_one(order):
@@ -60,8 +60,8 @@ def rescore_pool(pool):
 
 async def score_async(*args):
     return await llmjd.ainvoke(str(args))
-''',
-    "svc/app/agent.py": '''
+""",
+    "svc/app/agent.py": """
 from langchain_core.messages import ToolMessage
 
 async def chat_node(state, llm, tools):
@@ -73,8 +73,8 @@ async def chat_node(state, llm, tools):
     return messages
 
 # web search: TavilySearchResults (langchain community tool)
-''',
-    "svc/app/extract.py": '''
+""",
+    "svc/app/extract.py": """
 import subprocess
 
 def extract_text_from_pdf(path):
@@ -98,7 +98,7 @@ def extract_text_from_pdf_fitz(path):
 
 def extract_doc(path):
     return subprocess.run(["antiword", path], capture_output=True).stdout
-''',
+""",
     "svc/app/__init__.py": "from app import extract\n",
     "svc/legacy/old_rag.py": "import chromadb\nimport PyPDF2\n",
     "svc/tests/test_units.py": "def test_x():\n    assert 1\n",
@@ -118,8 +118,14 @@ def maps(tmp_path: Path):
         language = "Python" if rel.endswith(".py") else None
         entries.append(FileEntry(path=rel, language=language, size_bytes=len(text), lines=text.count("\n")))
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
     return build_review_maps(tmp_path, manifest)
 
@@ -189,14 +195,17 @@ def test_client_calls_ignore_query_templates_and_proxy_prefix(tmp_path: Path):
 
     maps = ReviewMaps(
         routes=[RouteInfo("GET", "/api/v1/items", "list_items", "a.py", 1, (), (), False, False)],
-        client_calls=[ClientCall("/api/v1/items{}", "c.ts", 1), ClientCall("/api", "vite.config.ts", 2),
-                      ClientCall("/api/v1/missing", "c.ts", 3)],
+        client_calls=[
+            ClientCall("/api/v1/items{}", "c.ts", 1),
+            ClientCall("/api", "vite.config.ts", 2),
+            ClientCall("/api/v1/missing", "c.ts", 3),
+        ],
     )
     assert [c.path for c in maps.unmatched_client_calls()] == ["/api/v1/missing"]
 
 
 STRUCTURE = {
-    "svc/app/main.py": '''
+    "svc/app/main.py": """
 from fastapi import FastAPI, Query, UploadFile
 app = FastAPI()
 
@@ -215,8 +224,8 @@ async def status(job_id: str):
 async def upload(file: UploadFile, request=None):
     token = request.query_params.get("token")
     return {"t": token}
-''',
-    "svc/app/work.py": '''
+""",
+    "svc/app/work.py": """
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from app.llm import llm
@@ -230,7 +239,7 @@ async def start(doc):
 
 def is_manual(order_id):
     return len(order_id) == 6
-''',
+""",
     "svc/app/llm.py": "from langchain_ibm import ChatWatsonx\nllm = ChatWatsonx(model_id='x')\n",
     "svc/app/__init__.py": "from app import work\n",
 }
@@ -245,8 +254,14 @@ def structure(tmp_path: Path):
         path.write_text(text, encoding="utf-8")
         entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
     return build_review_maps(tmp_path, manifest)
 
@@ -266,18 +281,27 @@ def test_structure_signals(structure):
 def test_env_contradictions_compare_flags_only(tmp_path: Path):
     from helpers.review_maps import EnvFileReport, ReviewMaps
 
-    maps = ReviewMaps(env_files=[
-        EnvFileReport(".env.example", True, ("API_URL", "NAME"), (), (("API_URL", "points at localhost/loopback"),)),
-        EnvFileReport("deploy/.env.prod.example", True, ("API_URL", "NAME"), (), ()),
-    ])
+    maps = ReviewMaps(
+        env_files=[
+            EnvFileReport(
+                ".env.example", True, ("API_URL", "NAME"), (), (("API_URL", "points at localhost/loopback"),)
+            ),
+            EnvFileReport("deploy/.env.prod.example", True, ("API_URL", "NAME"), (), ()),
+        ]
+    )
     assert maps.env_contradictions() == [
-        ("API_URL", [(".env.example", "points at localhost/loopback"),
-                     ("deploy/.env.prod.example", "no flag (a real, non-local value)")]),
+        (
+            "API_URL",
+            [
+                (".env.example", "points at localhost/loopback"),
+                ("deploy/.env.prod.example", "no flag (a real, non-local value)"),
+            ],
+        ),
     ]
 
 
 PRODUCTION = {
-    "svc/app/main.py": '''
+    "svc/app/main.py": """
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.store import preload_vector_index, get_all_orders
@@ -295,8 +319,8 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/orders")
 async def orders():
     return get_all_orders()
-''',
-    "svc/app/store.py": '''
+""",
+    "svc/app/store.py": """
 import json, os
 from datetime import datetime
 from app.models import Order
@@ -323,7 +347,7 @@ def scan(folder):
 
 def token_expiry():
     return datetime.utcnow()
-''',
+""",
     "svc/app/models.py": "class Order: ...\n",
     "svc/core/engine.py": "from app.models import Order\n\ndef score(c: Order):\n    return 1\n",
     "svc/test.py": "from selenium import webdriver\nPASSWORD = 'recruiter123'\ndriver = webdriver.Chrome()\n",
@@ -349,8 +373,14 @@ def production(tmp_path: Path):
         language = "Python" if rel.endswith(".py") else None
         entries.append(FileEntry(path=rel, language=language, size_bytes=len(text), lines=text.count("\n")))
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
     return build_review_maps(tmp_path, manifest)
 
@@ -411,11 +441,23 @@ def test_processors_pipeline_hygiene_and_governance_controls(tmp_path: Path):
         path = tmp_path / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-        entries.append(FileEntry(path=rel, language="Python" if rel.endswith(".py") else None,
-                                 size_bytes=len(text), lines=text.count("\n")))
+        entries.append(
+            FileEntry(
+                path=rel,
+                language="Python" if rel.endswith(".py") else None,
+                size_bytes=len(text),
+                lines=text.count("\n"),
+            )
+        )
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
     sig = build_review_maps(tmp_path, manifest).signals
     assert [s.text.split(" —")[0] for s in sig.data_processors] == ["IBM watsonx", "OpenAI"]
@@ -433,14 +475,21 @@ def test_documented_routes_are_marked_as_contracts(tmp_path: Path):
 
     (tmp_path / "API_DOCUMENTATION.md").write_text("### GET /api/v1/auth/me\nReturns the caller.\n")
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
         files=(FileEntry(path="API_DOCUMENTATION.md", language="Markdown", size_bytes=1),),
     )
-    maps = ReviewMaps(routes=[
-        RouteInfo("GET", "/api/v1/auth/me", "me", "a.py", 1, (), (), False, False),
-        RouteInfo("POST", "/api/v1/projects/update", "update", "a.py", 9, (), (), False, False),
-    ])
+    maps = ReviewMaps(
+        routes=[
+            RouteInfo("GET", "/api/v1/auth/me", "me", "a.py", 1, (), (), False, False),
+            RouteInfo("POST", "/api/v1/projects/update", "update", "a.py", 9, (), (), False, False),
+        ]
+    )
     _fill_documented_routes(maps, tmp_path, manifest)
     assert maps.documented_routes == {"/api/v1/auth/me": "API_DOCUMENTATION.md"}
 
@@ -448,8 +497,8 @@ def test_documented_routes_are_marked_as_contracts(tmp_path: Path):
 def test_hotspots_rank_functions_by_combined_side_effects(tmp_path: Path):
     files = {
         "app/main.py": "from fastapi import FastAPI\nfrom app.routes import router\napp = FastAPI()\n"
-                       "app.include_router(router)\n",
-        "app/routes.py": '''
+        "app.include_router(router)\n",
+        "app/routes.py": """
 from fastapi import APIRouter
 from app import orders
 router = APIRouter()
@@ -463,13 +512,13 @@ def place_order(body: dict, session=None):
 @router.get("/orders")
 def list_orders(session=None):
     return session.query("x")
-''',
-        "app/orders.py": '''
+""",
+        "app/orders.py": """
 def create_order(session, body):
     session.add(body)
     session.commit()
     return body
-''',
+""",
         "app/other.py": "def create_order():\n    return 1\n",
         "app/mail.py": "def send_email(to, order):\n    pass\n",
     }
@@ -479,19 +528,26 @@ def create_order(session, body):
         (tmp_path / rel).write_text(text, encoding="utf-8")
         entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
     hotspots = build_review_maps(tmp_path, manifest).signals.hotspots
     # The handler's db write lives in orders.create_order (resolved by module, not the other.py namesake).
     assert [h.row for h in hotspots] == [
-        "`place_order` (db write, messaging, route handler; 4 lines) (app/routes.py:7)"]
+        "`place_order` (db write, messaging, route handler; 4 lines) (app/routes.py:7)"
+    ]
 
 
 def test_identity_written_into_an_unrenewed_session_is_flagged(tmp_path: Path):
     files = {
         "app/main.py": "from aiohttp import web\nfrom app import views\napp = web.Application()\n",
-        "app/views.py": '''
+        "app/views.py": """
 from aiohttp_session import get_session, new_session
 
 async def login(request, user):
@@ -505,7 +561,7 @@ async def safe_login(request, user):
 async def visit(request):
     session = await get_session(request)
     session["last_visited"] = "now"
-''',
+""",
     }
     entries = []
     for rel, text in files.items():
@@ -513,8 +569,14 @@ async def visit(request):
         (tmp_path / rel).write_text(text, encoding="utf-8")
         entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
     rows = [s.row for s in build_review_maps(tmp_path, manifest).signals.session_fixation]
     assert rows == ["`login` sets session['user_id'] without renewing the session (app/views.py:6)"]
@@ -523,8 +585,8 @@ async def visit(request):
 def test_backend_lifecycle_signals(tmp_path: Path):
     files = {
         "app/main.py": "from fastapi import FastAPI\nfrom app.routes import router\nfrom app import models\n"
-                       "app = FastAPI()\napp.include_router(router)\n",
-        "app/db.py": '''
+        "app = FastAPI()\napp.include_router(router)\n",
+        "app/db.py": """
 from sqlalchemy.orm import sessionmaker
 SessionLocal = sessionmaker()
 
@@ -538,15 +600,15 @@ def get_db_safe():
         yield db
     finally:
         db.close()
-''',
-        "app/models.py": '''
+""",
+        "app/models.py": """
 class Order(Base):
     __tablename__ = "orders"
 
 class Refund(Base):
     __tablename__ = "refunds"
-''',
-        "app/routes.py": '''
+""",
+        "app/routes.py": """
 import asyncio
 from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
@@ -574,7 +636,7 @@ async def create(tasks: BackgroundTasks, db=Depends(get_db)):
     asyncio.create_task(notify())
     keep = asyncio.create_task(notify())
     return keep
-''',
+""",
         "migrations/versions/001_init.py": 'op.create_table("orders")\n',
     }
     entries = []
@@ -583,12 +645,19 @@ async def create(tasks: BackgroundTasks, db=Depends(get_db)):
         (tmp_path / rel).write_text(text, encoding="utf-8")
         entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
     sig = build_review_maps(tmp_path, manifest).signals
     assert [s.text for s in sig.request_resource_in_background] == [
-        "`create` passes request-scoped `db` to add_task() — it is closed when the response is sent"]
+        "`create` passes request-scoped `db` to add_task() — it is closed when the response is sent"
+    ]
     assert [s.line for s in sig.fire_and_forget_tasks] == [26]
     assert [s.text for s in sig.sensitive_response_fields] == ["response model UserOut returns field `hashed_password`"]
     assert [s.text.split("`")[1] for s in sig.leaky_session_dependencies] == ["get_db"]
@@ -598,7 +667,7 @@ async def create(tasks: BackgroundTasks, db=Depends(get_db)):
 def test_text_cleaners_that_rewrite_identifier_characters(tmp_path: Path):
     files = {
         "app/main.py": "from fastapi import FastAPI\nfrom app import text\napp = FastAPI()\n",
-        "app/text.py": '''
+        "app/text.py": """
 import re
 
 def clean_line(text):
@@ -608,7 +677,7 @@ def clean_line(text):
 
 def sanitize_filename(name):
     return name.replace("/", "_")
-''',
+""",
     }
     entries = []
     for rel, text in files.items():
@@ -616,22 +685,30 @@ def sanitize_filename(name):
         (tmp_path / rel).write_text(text, encoding="utf-8")
         entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
-    rows = sorted((s.line, s.text.split("'")[1]) for s in build_review_maps(tmp_path, manifest).signals.lossy_text_cleaning)
+    rows = sorted(
+        (s.line, s.text.split("'")[1]) for s in build_review_maps(tmp_path, manifest).signals.lossy_text_cleaning
+    )
     assert rows == [(5, "_"), (7, "@")]
 
 
 def test_security_controls_defined_but_never_applied(tmp_path: Path):
     files = {
-        "app/main.py": '''
+        "app/main.py": """
 from aiohttp import web
 from app.middlewares import error_middleware, rate_limit
 app = web.Application(middlewares=[error_middleware, rate_limit])
 # app.middlewares.append(csrf_middleware)
-''',
-        "app/middlewares.py": '''
+""",
+        "app/middlewares.py": """
 async def error_middleware(request, handler):
     return await handler(request)
 
@@ -640,7 +717,7 @@ async def rate_limit(request, handler):
 
 async def csrf_middleware(request, handler):
     return await handler(request)
-''',
+""",
     }
     entries = []
     for rel, text in files.items():
@@ -648,9 +725,16 @@ async def csrf_middleware(request, handler):
         (tmp_path / rel).write_text(text, encoding="utf-8")
         entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
     rows = [s.row for s in build_review_maps(tmp_path, manifest).signals.unwired_security_controls]
-    assert rows == [("`csrf_middleware` is defined but applied nowhere (not registered, not called) "
-                     "(app/middlewares.py:8)")]
+    assert rows == [
+        ("`csrf_middleware` is defined but applied nowhere (not registered, not called) (app/middlewares.py:8)")
+    ]

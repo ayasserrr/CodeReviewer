@@ -2,10 +2,10 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from helpers.fs_scanner import classify_language, is_sensitive_env_file, rapid_surface_scan, targeted_deep_traversal
 from utils import DiscoveryError
-
-import pytest
 
 
 class TestRapidSurfaceScan:
@@ -73,8 +73,14 @@ class TestTargetedDeepTraversal:
 
     def test_walks_every_folder_next_to_a_source_root(self, tmp_path: Path):
         """Regression: frontend/, tests/, scripts/ next to src/ were pruned and never reviewed."""
-        for rel in ("src/main.py", "frontend/src/App.tsx", "tests/test_main.py", "scripts/seed.py",
-                    "docs/notes.md", "deploy/nomad.hcl"):
+        for rel in (
+            "src/main.py",
+            "frontend/src/App.tsx",
+            "tests/test_main.py",
+            "scripts/seed.py",
+            "docs/notes.md",
+            "deploy/nomad.hcl",
+        ):
             (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
             (tmp_path / rel).write_text("x")
         (tmp_path / "frontend" / "node_modules" / "react").mkdir(parents=True)
@@ -82,8 +88,14 @@ class TestTargetedDeepTraversal:
         surface = rapid_surface_scan(tmp_path)
         result = targeted_deep_traversal(surface.source_roots, tmp_path, timeout_seconds=5.0)
         found = {p.relative_to(tmp_path).as_posix() for p in result.discovered_files}
-        assert {"src/main.py", "frontend/src/App.tsx", "tests/test_main.py", "scripts/seed.py",
-                "docs/notes.md", "deploy/nomad.hcl"} <= found
+        assert {
+            "src/main.py",
+            "frontend/src/App.tsx",
+            "tests/test_main.py",
+            "scripts/seed.py",
+            "docs/notes.md",
+            "deploy/nomad.hcl",
+        } <= found
         assert not any("node_modules" in f for f in found)
 
     def test_prunes_ignored_directories(self, tmp_path: Path):

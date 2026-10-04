@@ -4,9 +4,16 @@ from utils import FunctionNode
 
 def _fn(id_: str, name: str) -> FunctionNode:
     return FunctionNode(
-        id=id_, name=name, qualname=name, file="mod.py",
-        start_line=1, end_line=2, start_byte=0, end_byte=10,
-        content_hash="deadbeef", loc=2,
+        id=id_,
+        name=name,
+        qualname=name,
+        file="mod.py",
+        start_line=1,
+        end_line=2,
+        start_byte=0,
+        end_byte=10,
+        content_hash="deadbeef",
+        loc=2,
     )
 
 

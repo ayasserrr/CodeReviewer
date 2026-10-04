@@ -55,18 +55,29 @@ def extract_file_elements(
     raw_calls_by_function: dict[str, list[RawCall]] = {}
 
     _walk_scope(
-        root_node, source, rel_path,
-        qualname_prefix="", parent_id=rel_path,
-        functions=functions, classes=classes,
-        contains_edges=contains_edges, raw_calls_by_function=raw_calls_by_function,
+        root_node,
+        source,
+        rel_path,
+        qualname_prefix="",
+        parent_id=rel_path,
+        functions=functions,
+        classes=classes,
+        contains_edges=contains_edges,
+        raw_calls_by_function=raw_calls_by_function,
     )
     return functions, classes, contains_edges, raw_calls_by_function
 
 
 def _walk_scope(
-    node: Node, source: bytes, rel_path: str, qualname_prefix: str, parent_id: str,
-    functions: list[FunctionNode], classes: list[ClassNode],
-    contains_edges: list[ContainsEdge], raw_calls_by_function: dict[str, list[RawCall]],
+    node: Node,
+    source: bytes,
+    rel_path: str,
+    qualname_prefix: str,
+    parent_id: str,
+    functions: list[FunctionNode],
+    classes: list[ClassNode],
+    contains_edges: list[ContainsEdge],
+    raw_calls_by_function: dict[str, list[RawCall]],
 ) -> None:
     """Recursively finds every def/class anywhere in ``node``'s subtree.
 
@@ -79,58 +90,113 @@ def _walk_scope(
 
         if def_node is not None and def_node.type == "class_definition":
             _handle_class(
-                def_node, decorators, source, rel_path, qualname_prefix, parent_id,
-                functions, classes, contains_edges, raw_calls_by_function,
+                def_node,
+                decorators,
+                source,
+                rel_path,
+                qualname_prefix,
+                parent_id,
+                functions,
+                classes,
+                contains_edges,
+                raw_calls_by_function,
             )
         elif def_node is not None and def_node.type == "function_definition":
             fn_id, fn_qualname = _handle_function(
-                def_node, decorators, source, rel_path, qualname_prefix, parent_id,
-                functions, contains_edges, raw_calls_by_function,
+                def_node,
+                decorators,
+                source,
+                rel_path,
+                qualname_prefix,
+                parent_id,
+                functions,
+                contains_edges,
+                raw_calls_by_function,
             )
             body = def_node.child_by_field_name("body")
             if body is not None:
                 _walk_scope(
-                    body, source, rel_path, fn_qualname, fn_id,
-                    functions, classes, contains_edges, raw_calls_by_function,
+                    body,
+                    source,
+                    rel_path,
+                    fn_qualname,
+                    fn_id,
+                    functions,
+                    classes,
+                    contains_edges,
+                    raw_calls_by_function,
                 )
         else:
             _walk_scope(
-                child, source, rel_path, qualname_prefix, parent_id,
-                functions, classes, contains_edges, raw_calls_by_function,
+                child,
+                source,
+                rel_path,
+                qualname_prefix,
+                parent_id,
+                functions,
+                classes,
+                contains_edges,
+                raw_calls_by_function,
             )
 
 
 def _handle_class(
-    class_node: Node, decorators: tuple[str, ...], source: bytes, rel_path: str,
-    qualname_prefix: str, parent_id: str,
-    functions: list[FunctionNode], classes: list[ClassNode],
-    contains_edges: list[ContainsEdge], raw_calls_by_function: dict[str, list[RawCall]],
+    class_node: Node,
+    decorators: tuple[str, ...],
+    source: bytes,
+    rel_path: str,
+    qualname_prefix: str,
+    parent_id: str,
+    functions: list[FunctionNode],
+    classes: list[ClassNode],
+    contains_edges: list[ContainsEdge],
+    raw_calls_by_function: dict[str, list[RawCall]],
 ) -> None:
     name = _node_text(class_node.child_by_field_name("name"), source)
     qualname = f"{qualname_prefix}.{name}" if qualname_prefix else name
     node_id = f"{rel_path}::{qualname}"
     body = class_node.child_by_field_name("body")
 
-    classes.append(ClassNode(
-        id=node_id, name=name, qualname=qualname, file=rel_path,
-        start_line=class_node.start_point[0] + 1, end_line=class_node.end_point[0] + 1,
-        start_byte=class_node.start_byte, end_byte=class_node.end_byte,
-        method_count=_method_count(body), content_hash=_content_hash(class_node, source),
-        loc=class_node.end_point[0] - class_node.start_point[0] + 1,
-    ))
+    classes.append(
+        ClassNode(
+            id=node_id,
+            name=name,
+            qualname=qualname,
+            file=rel_path,
+            start_line=class_node.start_point[0] + 1,
+            end_line=class_node.end_point[0] + 1,
+            start_byte=class_node.start_byte,
+            end_byte=class_node.end_byte,
+            method_count=_method_count(body),
+            content_hash=_content_hash(class_node, source),
+            loc=class_node.end_point[0] - class_node.start_point[0] + 1,
+        )
+    )
     contains_edges.append(ContainsEdge(parent_id=parent_id, child_id=node_id))
 
     if body is not None:
         _walk_scope(
-            body, source, rel_path, qualname, node_id,
-            functions, classes, contains_edges, raw_calls_by_function,
+            body,
+            source,
+            rel_path,
+            qualname,
+            node_id,
+            functions,
+            classes,
+            contains_edges,
+            raw_calls_by_function,
         )
 
 
 def _handle_function(
-    def_node: Node, decorators: tuple[str, ...], source: bytes, rel_path: str,
-    qualname_prefix: str, parent_id: str,
-    functions: list[FunctionNode], contains_edges: list[ContainsEdge],
+    def_node: Node,
+    decorators: tuple[str, ...],
+    source: bytes,
+    rel_path: str,
+    qualname_prefix: str,
+    parent_id: str,
+    functions: list[FunctionNode],
+    contains_edges: list[ContainsEdge],
     raw_calls_by_function: dict[str, list[RawCall]],
 ) -> tuple[str, str]:
     name = _node_text(def_node.child_by_field_name("name"), source)
@@ -144,14 +210,23 @@ def _handle_function(
         _walk_calls(body, source, calls)
     raw_calls_by_function[node_id] = calls
 
-    functions.append(FunctionNode(
-        id=node_id, name=name, qualname=qualname, file=rel_path,
-        start_line=def_node.start_point[0] + 1, end_line=def_node.end_point[0] + 1,
-        start_byte=def_node.start_byte, end_byte=def_node.end_byte,
-        is_async=is_async, decorators=decorators, params=_params_of(def_node, source),
-        content_hash=_content_hash(def_node, source),
-        loc=def_node.end_point[0] - def_node.start_point[0] + 1,
-    ))
+    functions.append(
+        FunctionNode(
+            id=node_id,
+            name=name,
+            qualname=qualname,
+            file=rel_path,
+            start_line=def_node.start_point[0] + 1,
+            end_line=def_node.end_point[0] + 1,
+            start_byte=def_node.start_byte,
+            end_byte=def_node.end_byte,
+            is_async=is_async,
+            decorators=decorators,
+            params=_params_of(def_node, source),
+            content_hash=_content_hash(def_node, source),
+            loc=def_node.end_point[0] - def_node.start_point[0] + 1,
+        )
+    )
     contains_edges.append(ContainsEdge(parent_id=parent_id, child_id=node_id))
     return node_id, qualname
 
@@ -163,11 +238,13 @@ def _walk_calls(node: Node, source: bytes, calls: list[RawCall]) -> None:
         if child.type == "call":
             name = _rightmost_name(child.child_by_field_name("function"), source)
             if name:
-                calls.append({
-                    "resolved_name": name,
-                    "line": child.start_point[0] + 1,
-                    "col": child.start_point[1],
-                })
+                calls.append(
+                    {
+                        "resolved_name": name,
+                        "line": child.start_point[0] + 1,
+                        "col": child.start_point[1],
+                    }
+                )
         _walk_calls(child, source, calls)
 
 
@@ -197,9 +274,7 @@ def _method_count(class_body: Node | None) -> int:
 def _is_method_definition(node: Node) -> bool:
     if node.type == "function_definition":
         return True
-    return node.type == "decorated_definition" and any(
-        c.type == "function_definition" for c in node.children
-    )
+    return node.type == "decorated_definition" and any(c.type == "function_definition" for c in node.children)
 
 
 def _params_of(def_node: Node, source: bytes) -> tuple[str, ...]:
@@ -233,8 +308,8 @@ def _rightmost_name(expr: Node | None, source: bytes) -> str | None:
 def _node_text(node: Node | None, source: bytes) -> str:
     if node is None:
         return ""
-    return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
 def _content_hash(node: Node, source: bytes) -> str:
-    return hashlib.sha256(source[node.start_byte:node.end_byte]).hexdigest()
+    return hashlib.sha256(source[node.start_byte : node.end_byte]).hexdigest()

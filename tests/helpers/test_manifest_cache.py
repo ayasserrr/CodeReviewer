@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -13,7 +13,7 @@ def _make_manifest(head_sha: str, cache_key: str) -> RepositoryManifest:
         repository_id=str(uuid4()),
         head_sha=head_sha,
         cache_key=cache_key,
-        generated_at=datetime.now(timezone.utc),
+        generated_at=datetime.now(UTC),
     )
 
 

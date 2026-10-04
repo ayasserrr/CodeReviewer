@@ -67,7 +67,7 @@ class PipelineProgress:
                 mutate(progress)
                 # A fresh dict object, so SQLAlchemy sees the JSONB column as changed.
                 await repo.update(self.review_report_id, progress=progress, stage=stage)
-        except Exception:  # noqa: BLE001 -- progress is observability; never fail the pipeline over it
+        except Exception:
             logger.warning("pipeline_progress_write_failed", review_report_id=str(self.review_report_id), exc_info=True)
 
     async def stage_started(self, stage: str) -> None:

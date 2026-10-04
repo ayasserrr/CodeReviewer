@@ -32,15 +32,35 @@ _SECRET_ENV = re.compile(
     r"|^(POSTGRES_|PG|AWS_|AZURE_|GOOGLE_|GCP_|GEMINI|OPENAI|ANTHROPIC|GITLAB|GITHUB|JWT)",
     re.IGNORECASE,
 )
-_SAFE_ENV = {"PATH", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR", "SYSTEMROOT", "WINDIR", "COMSPEC",
-             "PATHEXT", "LANG", "LC_ALL", "LC_CTYPE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "NODE_PATH",
-             "VIRTUAL_ENV", "PYTHONIOENCODING", "PYTHONUTF8"}
+_SAFE_ENV = {
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "TMP",
+    "TEMP",
+    "TMPDIR",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "NODE_PATH",
+    "VIRTUAL_ENV",
+    "PYTHONIOENCODING",
+    "PYTHONUTF8",
+}
 
 
 def safe_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     """The current environment without anything that looks like a credential, plus ``extra``."""
     env = {
-        k: v for k, v in os.environ.items()
+        k: v
+        for k, v in os.environ.items()
         # GIT_CONFIG_COUNT/KEY_n/VALUE_n are git's own settings (e.g. a proxy) and only work as a set.
         if k.upper() in _SAFE_ENV or k.upper().startswith("GIT_CONFIG_") or not _SECRET_ENV.search(k)
     }

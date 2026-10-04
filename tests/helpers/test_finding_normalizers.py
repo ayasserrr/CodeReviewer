@@ -29,7 +29,13 @@ class TestNormalizePyright:
     def test_maps_severity_via_map(self):
         raw = {
             "generalDiagnostics": [
-                {"file": "a.py", "range": {"start": {"line": 3}}, "severity": "warning", "rule": "reportUnused", "message": "x"}
+                {
+                    "file": "a.py",
+                    "range": {"start": {"line": 3}},
+                    "severity": "warning",
+                    "rule": "reportUnused",
+                    "message": "x",
+                }
             ]
         }
         result = normalize_pyright(raw)
@@ -38,19 +44,30 @@ class TestNormalizePyright:
         ]
 
     def test_unknown_severity_defaults_to_error(self):
-        raw = {"generalDiagnostics": [{"file": "a.py", "range": {"start": {"line": 1}}, "severity": "weird", "message": "x"}]}
+        raw = {
+            "generalDiagnostics": [
+                {"file": "a.py", "range": {"start": {"line": 1}}, "severity": "weird", "message": "x"}
+            ]
+        }
         result = normalize_pyright(raw)
         assert result[0]["severity"] == "error"
 
     def test_missing_rule_falls_back_to_type_check_category(self):
-        raw = {"generalDiagnostics": [{"file": "a.py", "range": {"start": {"line": 1}}, "severity": "error", "message": "x"}]}
+        raw = {
+            "generalDiagnostics": [
+                {"file": "a.py", "range": {"start": {"line": 1}}, "severity": "error", "message": "x"}
+            ]
+        }
         result = normalize_pyright(raw)
         assert result[0]["category"] == "type_check"
 
 
 class TestNormalizeRadon:
     def test_ignores_configured_complexity_ranks(self):
-        raw = {"complexity": {"a.py": [{"rank": "A", "lineno": 1, "name": "f", "complexity": 2}]}, "maintainability": {}}
+        raw = {
+            "complexity": {"a.py": [{"rank": "A", "lineno": 1, "name": "f", "complexity": 2}]},
+            "maintainability": {},
+        }
         result = normalize_radon(raw, complexity_ranks_to_ignore=frozenset({"A", "B"}))
         assert result == []
 
@@ -109,7 +126,13 @@ class TestNormalizeVulture:
         raw = [{"file": "a.py", "line": "10", "message": "unused variable 'x'", "confidence": "90"}]
         result = normalize_vulture(raw)
         assert result == [
-            {"file": "a.py", "line": 10, "severity": "warning", "category": "dead_code", "message": "unused variable 'x' (90% confidence)"}
+            {
+                "file": "a.py",
+                "line": 10,
+                "severity": "warning",
+                "category": "dead_code",
+                "message": "unused variable 'x' (90% confidence)",
+            }
         ]
 
 
@@ -143,13 +166,25 @@ class TestNormalizeLizard:
 
 class TestNormalizePipAudit:
     def test_no_fix_versions_is_critical(self):
-        raw = {"dependencies": [{"name": "pkg", "version": "1.0", "vulns": [{"id": "CVE-1", "fix_versions": [], "description": "bad"}]}]}
+        raw = {
+            "dependencies": [
+                {"name": "pkg", "version": "1.0", "vulns": [{"id": "CVE-1", "fix_versions": [], "description": "bad"}]}
+            ]
+        }
         result = normalize_pip_audit(raw)
         assert result[0]["severity"] == "critical"
         assert result[0]["file"] == "requirements.txt"
 
     def test_has_fix_versions_is_high(self):
-        raw = {"dependencies": [{"name": "pkg", "version": "1.0", "vulns": [{"id": "CVE-1", "fix_versions": ["1.1"], "description": "bad"}]}]}
+        raw = {
+            "dependencies": [
+                {
+                    "name": "pkg",
+                    "version": "1.0",
+                    "vulns": [{"id": "CVE-1", "fix_versions": ["1.1"], "description": "bad"}],
+                }
+            ]
+        }
         result = normalize_pip_audit(raw)
         assert result[0]["severity"] == "high"
 
@@ -160,13 +195,27 @@ class TestNormalizePipAudit:
 
 class TestNormalizeSemgrep:
     def test_severity_mapped_from_extra(self):
-        raw = [{"path": "a.py", "start": {"line": 4}, "check_id": "rule.id", "extra": {"severity": "ERROR", "message": "bad"}}]
+        raw = [
+            {
+                "path": "a.py",
+                "start": {"line": 4},
+                "check_id": "rule.id",
+                "extra": {"severity": "ERROR", "message": "bad"},
+            }
+        ]
         result = normalize_semgrep(raw)
         assert result[0]["severity"] == "high"
         assert result[0]["category"] == "rule.id"
 
     def test_unknown_severity_defaults_to_low(self):
-        raw = [{"path": "a.py", "start": {"line": 4}, "check_id": "rule.id", "extra": {"severity": "weird", "message": "bad"}}]
+        raw = [
+            {
+                "path": "a.py",
+                "start": {"line": 4},
+                "check_id": "rule.id",
+                "extra": {"severity": "weird", "message": "bad"},
+            }
+        ]
         result = normalize_semgrep(raw)
         assert result[0]["severity"] == "low"
 

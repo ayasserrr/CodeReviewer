@@ -19,6 +19,6 @@ async def readiness_check() -> dict[str, str] | JSONResponse:
     """Readiness: the database answers. Load balancers route traffic only when this is 200."""
     try:
         await db_manager.check_connection()
-    except Exception:  # noqa: BLE001 -- any DB failure means "not ready"
+    except Exception:
         return JSONResponse(status_code=503, content={"status": "unavailable", "database": "unreachable"})
     return {"status": "ok", "database": "ok"}

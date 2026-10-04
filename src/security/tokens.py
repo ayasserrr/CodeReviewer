@@ -1,7 +1,7 @@
 """JWT creation and verification for access/refresh token pairs."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import jwt
@@ -13,7 +13,7 @@ TokenType = Literal["access", "refresh"]
 
 
 def _create_token(subject: str, token_type: TokenType, expires_delta: timedelta) -> tuple[str, datetime]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires_at = now + expires_delta
     payload: dict[str, Any] = {
         "sub": subject,

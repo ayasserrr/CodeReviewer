@@ -55,9 +55,13 @@ async def test_ingest_happy_path_creates_new_repository(
 ):
     user_id = uuid4()
 
-    with patch("controllers.ingestion_controller.get_cloned_repos_root", return_value=cloned_repos_root), patch(
-        "controllers.ingestion_controller.resolve_project", new=AsyncMock(return_value={"default_branch": "main"})
-    ), patch("controllers.ingestion_controller.clone_repository", side_effect=_fake_clone_factory(local_git_repo)):
+    with (
+        patch("controllers.ingestion_controller.get_cloned_repos_root", return_value=cloned_repos_root),
+        patch(
+            "controllers.ingestion_controller.resolve_project", new=AsyncMock(return_value={"default_branch": "main"})
+        ),
+        patch("controllers.ingestion_controller.clone_repository", side_effect=_fake_clone_factory(local_git_repo)),
+    ):
         controller = IngestionController(db_session=MagicMock())
         result = await controller.ingest(
             gitlab_url="https://gitlab.example.com/group/project",
@@ -90,9 +94,13 @@ async def test_ingest_updates_existing_repository_when_repo_id_supplied(
     existing_repo_id = str(uuid4())
     patched_repository_repo.get = AsyncMock(return_value=MagicMock())  # simulate an existing row
 
-    with patch("controllers.ingestion_controller.get_cloned_repos_root", return_value=cloned_repos_root), patch(
-        "controllers.ingestion_controller.resolve_project", new=AsyncMock(return_value={"default_branch": "main"})
-    ), patch("controllers.ingestion_controller.clone_repository", side_effect=_fake_clone_factory(local_git_repo)):
+    with (
+        patch("controllers.ingestion_controller.get_cloned_repos_root", return_value=cloned_repos_root),
+        patch(
+            "controllers.ingestion_controller.resolve_project", new=AsyncMock(return_value={"default_branch": "main"})
+        ),
+        patch("controllers.ingestion_controller.clone_repository", side_effect=_fake_clone_factory(local_git_repo)),
+    ):
         controller = IngestionController(db_session=MagicMock())
         result = await controller.ingest(
             gitlab_url="https://gitlab.example.com/group/project",
@@ -138,11 +146,15 @@ async def test_ingest_propagates_invalid_input_before_any_network_call(patched_r
 async def test_ingest_raises_disk_error_when_checked_out_branch_mismatches(
     cloned_repos_root: Path, local_git_repo: Path, patched_repository_repo
 ):
-    with patch("controllers.ingestion_controller.get_cloned_repos_root", return_value=cloned_repos_root), patch(
-        "controllers.ingestion_controller.resolve_project", new=AsyncMock(return_value={"default_branch": "develop"})
-    ), patch(
-        "controllers.ingestion_controller.clone_repository", side_effect=_fake_clone_factory(local_git_repo)
-    ), patch("controllers.ingestion_controller.get_current_branch", return_value="main"):
+    with (
+        patch("controllers.ingestion_controller.get_cloned_repos_root", return_value=cloned_repos_root),
+        patch(
+            "controllers.ingestion_controller.resolve_project",
+            new=AsyncMock(return_value={"default_branch": "develop"}),
+        ),
+        patch("controllers.ingestion_controller.clone_repository", side_effect=_fake_clone_factory(local_git_repo)),
+        patch("controllers.ingestion_controller.get_current_branch", return_value="main"),
+    ):
         controller = IngestionController(db_session=MagicMock())
         with pytest.raises(DiskError, match="does not match"):
             await controller.ingest(
@@ -157,13 +169,16 @@ async def test_ingest_raises_disk_error_when_checked_out_branch_mismatches(
 async def test_ingest_never_publishes_when_disk_space_check_fails(
     cloned_repos_root: Path, local_git_repo: Path, patched_repository_repo
 ):
-    with patch("controllers.ingestion_controller.get_cloned_repos_root", return_value=cloned_repos_root), patch(
-        "controllers.ingestion_controller.resolve_project", new=AsyncMock(return_value={"default_branch": "main"})
-    ), patch(
-        "controllers.ingestion_controller.check_disk_space", side_effect=DiskError("no space left")
-    ), patch(
-        "controllers.ingestion_controller.clone_repository", side_effect=_fake_clone_factory(local_git_repo)
-    ) as clone_spy:
+    with (
+        patch("controllers.ingestion_controller.get_cloned_repos_root", return_value=cloned_repos_root),
+        patch(
+            "controllers.ingestion_controller.resolve_project", new=AsyncMock(return_value={"default_branch": "main"})
+        ),
+        patch("controllers.ingestion_controller.check_disk_space", side_effect=DiskError("no space left")),
+        patch(
+            "controllers.ingestion_controller.clone_repository", side_effect=_fake_clone_factory(local_git_repo)
+        ) as clone_spy,
+    ):
         controller = IngestionController(db_session=MagicMock())
         with pytest.raises(DiskError):
             await controller.ingest(

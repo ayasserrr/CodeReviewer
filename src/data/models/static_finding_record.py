@@ -1,7 +1,7 @@
 """ORM model for the ``static_findings`` table."""
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
@@ -83,7 +83,7 @@ class StaticFindingRecord(Base):
         nullable=False,
     )
 
-    line: Mapped[Optional[int]] = mapped_column(
+    line: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
     )

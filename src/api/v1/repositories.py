@@ -71,7 +71,9 @@ async def delete_repository(repository_id: UUID, db_session: DbSession, current_
     repository = await _get_owned_repository(repository_id, db_session, current_user)
     latest = (await ReviewReportRepository(db_session).latest_by_repository([repository.id])).get(repository.id)
     if latest is not None and latest.status in (ReviewStatus.PENDING, ReviewStatus.RUNNING):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A review of this repository is still running.")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="A review of this repository is still running."
+        )
 
     await RepositoryRepository(db_session).delete(repository.id)
     await db_session.commit()

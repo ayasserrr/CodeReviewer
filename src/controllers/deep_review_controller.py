@@ -95,8 +95,13 @@ def _coverage(workspace: ReviewWorkspace, runs: list[AgentRunStats]) -> ReviewCo
         f"{f.path} ({reason})"
         for f in python
         for reason in [
-            "syntax error" if f.parse_error else "over the size limit" if f.skipped_due_to_size
-            else "parse timeout" if f.ast_timeout else None
+            "syntax error"
+            if f.parse_error
+            else "over the size limit"
+            if f.skipped_due_to_size
+            else "parse timeout"
+            if f.ast_timeout
+            else None
         ]
         if reason
     ) + sorted(f"{failure.file} (graph extraction failed)" for failure in graph.failed_files)
@@ -158,7 +163,8 @@ def _unverified_nudge(workspace: ReviewWorkspace, category_id: str, ids: set[str
     if not pending:
         return None
     return (
-        "These findings still have no verdict: " + ", ".join(f.id for f in pending)
+        "These findings still have no verdict: "
+        + ", ".join(f.id for f in pending)
         + ". Call submit_verification once for each (confirmed / adjusted / rejected)."
     )
 
@@ -243,7 +249,10 @@ class DeepReviewController(BaseController):
         runs: list[AgentRunStats] = []
 
         await asyncio.gather(
-            *(self._category_pipeline(c, config, workspace, brief, files, repo_path, semaphore, runs) for c in categories)
+            *(
+                self._category_pipeline(c, config, workspace, brief, files, repo_path, semaphore, runs)
+                for c in categories
+            )
         )
 
         # Deterministic clean-up before synthesis: the same defect recorded by two lanes
@@ -251,7 +260,12 @@ class DeepReviewController(BaseController):
         capped = workspace.apply_severity_caps()
         folded = workspace.auto_fold_duplicates()
         cited = workspace.auto_triage_cited()
-        logger.info("deep_review_consolidated", severity_capped=capped, folded_duplicates=folded, static_findings_triaged_by_citation=cited)
+        logger.info(
+            "deep_review_consolidated",
+            severity_capped=capped,
+            folded_duplicates=folded,
+            static_findings_triaged_by_citation=cited,
+        )
 
         if workspace.findings:
             runs.append(await self._run_synthesizer(workspace, brief, files, repo_path))
@@ -340,6 +354,7 @@ class DeepReviewController(BaseController):
                 "finding (grouping rows that share a root cause) or as a deliberate dismissal you can justify:\n"
                 + "\n".join(_format_lead_group(label, rows) for label, _, rows in leads)
             )
+
         def nothing_recorded() -> str | None:
             recorded = any(f.category_id == category.id for f in workspace.findings.values())
             if not recorded and not any(fid.startswith(f"{category.code}-") for fid in workspace.withdrawn):
@@ -369,8 +384,7 @@ class DeepReviewController(BaseController):
                 parts.append(
                     "These mandatory leads are still open. Each row ends as a finding that cites it (group rows that "
                     "share a root cause into one finding) or as dismiss_lead with the code that shows it is not a "
-                    "defect:\n"
-                    + "\n".join(_format_lead_group(label, rows) for label, rows in missing)
+                    "defect:\n" + "\n".join(_format_lead_group(label, rows) for label, rows in missing)
                 )
             unopened = workspace.unopened_scope(category.id, current_lane_reads())
             if unopened:
@@ -378,8 +392,8 @@ class DeepReviewController(BaseController):
                 sweeps = [unopened[i : i + 10] for i in range(0, min(len(unopened), 40), 10)]
                 calls = "\n".join(
                     f'{n}. task(subagent_type="general-purpose", description="{category.title} review. Read each of '
-                    f'these files in full and report every defect relevant to {category.title} with file:line and the '
-                    f'mechanism, or \'none\' per file: {", ".join(chunk)}")'
+                    f"these files in full and report every defect relevant to {category.title} with file:line and the "
+                    f"mechanism, or 'none' per file: {', '.join(chunk)}\")"
                     for n, chunk in enumerate(sweeps, start=1)
                 )
                 parts.append(
@@ -472,22 +486,34 @@ class DeepReviewController(BaseController):
             "path (crash, cancellation, background task), a different caller bypasses it, the note describes other "
             "code than the claim. For each item call uphold (citing the code that makes it safe) or overturn "
             "(record the defect — it becomes a verified finding).\n\n"
-            + "\n\n".join(f"### {i['ref']} ({i['kind']})\nClaim: {i['claim']}\nSpecialist's reason: {i['reason']}"
-                            for i in items)
+            + "\n\n".join(
+                f"### {i['ref']} ({i['kind']})\nClaim: {i['claim']}\nSpecialist's reason: {i['reason']}" for i in items
+            )
         )
 
         def pending() -> str | None:
             left = [r for r in refs if r not in workspace.negative_audit]
-            return ("These items are not judged yet: " + ", ".join(sorted(left))
-                    + ". Call uphold or overturn for each.") if left else None
+            return (
+                ("These items are not judged yet: " + ", ".join(sorted(left)) + ". Call uphold or overturn for each.")
+                if left
+                else None
+            )
 
         async with semaphore:
-            runs.append(await self._run(
-                f"verifier:{category.id}-negatives", role="verifier", repo_path=repo_path,
-                system_prompt=negative_audit_prompt(category, brief), tools=workspace.negative_audit_tools(category),
-                explorer_tools=workspace.query_tools(), model_calls=self.config.DEEP_REVIEW_VERIFIER_MODEL_CALLS,
-                kickoff=kickoff, files=files, completion_check=pending,
-            ))
+            runs.append(
+                await self._run(
+                    f"verifier:{category.id}-negatives",
+                    role="verifier",
+                    repo_path=repo_path,
+                    system_prompt=negative_audit_prompt(category, brief),
+                    tools=workspace.negative_audit_tools(category),
+                    explorer_tools=workspace.query_tools(),
+                    model_calls=self.config.DEEP_REVIEW_VERIFIER_MODEL_CALLS,
+                    kickoff=kickoff,
+                    files=files,
+                    completion_check=pending,
+                )
+            )
 
     async def _verify_findings(self, category, workspace, brief, files, repo_path, semaphore, runs) -> None:
         pending = workspace.findings_to_verify(category.id)
@@ -521,19 +547,24 @@ class DeepReviewController(BaseController):
                     )
                 )
 
-        await asyncio.gather(*(
-            verify(f"-{i + 1}" if len(batches) > 1 else "", batch, light) for i, (batch, light) in enumerate(batches)
-        ))
+        await asyncio.gather(
+            *(verify(f"-{i + 1}" if len(batches) > 1 else "", batch, light) for i, (batch, light) in enumerate(batches))
+        )
         # Whatever a batch could not finish (provider slowness, time cap) gets one more pass on the
         # base model with a fresh clock; anything still open is reported as not independently verified.
         leftover = workspace.findings_to_verify(category.id)
         if leftover:
             logger.info("deep_review_verification_retry", category=category.id, findings=len(leftover))
-            await asyncio.gather(*(
-                verify(f"-retry{'-' + str(i + 1) if len(leftover) > _VERIFY_BATCH else ''}",
-                       leftover[i : i + _VERIFY_BATCH], True)
-                for i in range(0, len(leftover), _VERIFY_BATCH)
-            ))
+            await asyncio.gather(
+                *(
+                    verify(
+                        f"-retry{'-' + str(i + 1) if len(leftover) > _VERIFY_BATCH else ''}",
+                        leftover[i : i + _VERIFY_BATCH],
+                        True,
+                    )
+                    for i in range(0, len(leftover), _VERIFY_BATCH)
+                )
+            )
 
     async def _run_synthesizer(
         self, workspace: ReviewWorkspace, brief: str, files: dict[str, dict], repo_path: Path
@@ -554,9 +585,13 @@ class DeepReviewController(BaseController):
             model_calls=self.config.DEEP_REVIEW_SYNTHESIZER_MODEL_CALLS,
             kickoff=kickoff,
             files=files,
-            completion_check=lambda: None if workspace.summary is not None else (
-                "The executive summary is not recorded yet. Call submit_executive_summary now "
-                "(scope, verdict, priority order, cross-cutting root causes, verification note)."
+            completion_check=lambda: (
+                None
+                if workspace.summary is not None
+                else (
+                    "The executive summary is not recorded yet. Call submit_executive_summary now "
+                    "(scope, verdict, priority order, cross-cutting root causes, verification note)."
+                )
             ),
         )
 
@@ -631,7 +666,7 @@ class DeepReviewController(BaseController):
             )
         except DeepReviewError:
             raise
-        except Exception as exc:  # noqa: BLE001 -- a build failure degrades to one failed agent
+        except Exception as exc:
             logger.error("deep_review_agent_build_failed", agent=name, error=str(exc))
             return AgentRunStats(agent=name, status="failed", error=f"build: {type(exc).__name__}: {exc}"[:500])
         return await run_agent(
@@ -667,9 +702,7 @@ class DeepReviewController(BaseController):
         live = [f for f in workspace.findings.values() if f.id not in workspace.duplicates]
         low_confidence = [f for f in live if CONFIDENCE_ORDER.index(f.confidence) < floor]
         findings = [
-            f.model_copy(update={"duplicate_of": None})
-            for f in live
-            if CONFIDENCE_ORDER.index(f.confidence) >= floor
+            f.model_copy(update={"duplicate_of": None}) for f in live if CONFIDENCE_ORDER.index(f.confidence) >= floor
         ]
         reported_ids = {f.id for f in findings}
 
@@ -699,7 +732,8 @@ class DeepReviewController(BaseController):
             by_tool.setdefault(finding.tool, []).append(finding)
         for tool in sorted(set(workspace.tool_results) | set(by_tool)):
             verdicts = Counter(
-                workspace.triage[f.id].verdict if f.id in workspace.triage else "untriaged" for f in by_tool.get(tool, [])
+                workspace.triage[f.id].verdict if f.id in workspace.triage else "untriaged"
+                for f in by_tool.get(tool, [])
             )
             static_summary.append(
                 StaticToolSummary(
@@ -749,7 +783,9 @@ class DeepReviewController(BaseController):
                 primary = workspace.duplicates[primary]
             folded = workspace.findings.get(dup_id)
             if folded is not None and primary in reported_ids:
-                merged.append(MergedFinding(id=dup_id, category_id=folded.category_id, title=folded.title, primary_id=primary))
+                merged.append(
+                    MergedFinding(id=dup_id, category_id=folded.category_id, title=folded.title, primary_id=primary)
+                )
 
         return DeepReviewReport(
             engine_version=self.config.DEEP_REVIEW_ENGINE_VERSION,
@@ -768,7 +804,9 @@ class DeepReviewController(BaseController):
             system_models=tuple(f"{lane}: {text}" for lane, text in workspace.system_models.items()),
             own_investigation=sum(1 for f in findings if not workspace.lead_backed(f)),
             open_leads=tuple(
-                f"{category.id} — {label}: " + "; ".join(rows[:6]) + (f" (+{len(rows) - 6} more)" if len(rows) > 6 else "")
+                f"{category.id} — {label}: "
+                + "; ".join(rows[:6])
+                + (f" (+{len(rows) - 6} more)" if len(rows) > 6 else "")
                 for category in config.enabled_categories
                 for label, rows in workspace.unaddressed_leads(category.id, any_lane=True)
             ),
@@ -776,7 +814,9 @@ class DeepReviewController(BaseController):
                 f"{lane} — {row} — {reason}" for (lane, row), reason in sorted(workspace.dismissed_leads.items())
             ),
             merged_findings=tuple(sorted(merged, key=lambda m: m.id)),
-            inventory=build_inventory(workspace.maps, line_counts={f.path: f.lines or 0 for f in workspace.manifest.files}),
+            inventory=build_inventory(
+                workspace.maps, line_counts={f.path: f.lines or 0 for f in workspace.manifest.files}
+            ),
             coverage=_coverage(workspace, runs),
             kpi_assessments=tuple(kpis),
             static_triage=tuple(workspace.triage.values()),

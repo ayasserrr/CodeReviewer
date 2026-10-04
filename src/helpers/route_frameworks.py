@@ -34,11 +34,15 @@ _REQUEST_READ = re.compile(
     r"request\.(args|form|json|values|headers|cookies|GET|POST|data|query|query_params|match_info|rel_url\.query)"
     r"\b[^\n]{0,30}?['\"]([\w-]+)['\"]"
 )
-_UPLOAD = re.compile(r"request\.files|request\.FILES|FileStorage|UploadFile|request\.multipart\(\)|FileField|"
-                     r"\.filename\b|request\.content\.read|\.read_chunk\(")
+_UPLOAD = re.compile(
+    r"request\.files|request\.FILES|FileStorage|UploadFile|request\.multipart\(\)|FileField|"
+    r"\.filename\b|request\.content\.read|\.read_chunk\("
+)
 _PAGINATION = re.compile(r"(?i)['\"](limit|offset|page|page_size|per_page|cursor|skip)['\"]|paginat")
-_HOOK_AUTH = re.compile(r"(?i)current_user|request\.user|g\.user|get_auth_user|authenticat|authoriz|login_required|"
-                        r"jwt|verify_token|api[_-]?key|bearer")
+_HOOK_AUTH = re.compile(
+    r"(?i)current_user|request\.user|g\.user|get_auth_user|authenticat|authoriz|login_required|"
+    r"jwt|verify_token|api[_-]?key|bearer"
+)
 _NOT_AUTH_HOOK = re.compile(r"(?i)csrf|session_middleware|cors|error|exception|log|metric|trace|timing|static|db")
 
 
@@ -140,8 +144,11 @@ def _app_level_auth(files) -> tuple[str, ...]:
                 if not (decorated_hook or "middleware" in names) or _NOT_AUTH_HOOK.search(node.name):
                     continue
                 body = ast.get_source_segment(py.text, node) or ""
-                refuses = re.search(r"abort\(\s*40[13]|HTTPUnauthorized|HTTPForbidden|status_code\s*=\s*40[13]|"
-                                    r"redirect\(|PermissionDenied|NotAuthenticated", body)
+                refuses = re.search(
+                    r"abort\(\s*40[13]|HTTPUnauthorized|HTTPForbidden|status_code\s*=\s*40[13]|"
+                    r"redirect\(|PermissionDenied|NotAuthenticated",
+                    body,
+                )
                 registered = decorated_hook or len(re.findall(rf"\b{re.escape(node.name)}\b", live_text)) > 1
                 if _HOOK_AUTH.search(body) and refuses and registered:
                     hooks.append(f"app hook {node.name}")
@@ -163,8 +170,11 @@ def collect_framework_routes(files, skip: Callable[[str, str], bool] | None = No
     include_prefix: dict[str, str] = {}  # module stem of an included urls.py -> prefix
     for py in files:
         for node in ast.walk(py.tree):
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and \
-                    _dotted(node.value.func).split(".")[-1] == "Blueprint":
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Call)
+                and _dotted(node.value.func).split(".")[-1] == "Blueprint"
+            ):
                 prefix = _literal(_kw(node.value, "url_prefix")) or ""
                 for target in node.targets:
                     if isinstance(target, ast.Name):
@@ -175,8 +185,12 @@ def collect_framework_routes(files, skip: Callable[[str, str], bool] | None = No
                     prefix = _literal(_kw(node, "url_prefix"))
                     if prefix is not None:
                         registered_prefix[_dotted(node.args[0]).split(".")[-1]] = prefix
-                if last in ("path", "re_path", "url") and len(node.args) >= 2 and isinstance(node.args[1], ast.Call) \
-                        and _dotted(node.args[1].func).split(".")[-1] == "include":
+                if (
+                    last in ("path", "re_path", "url")
+                    and len(node.args) >= 2
+                    and isinstance(node.args[1], ast.Call)
+                    and _dotted(node.args[1].func).split(".")[-1] == "include"
+                ):
                     target = _literal(node.args[1].args[0]) if node.args[1].args else None
                     prefix = _literal(node.args[0])
                     if target and prefix is not None:
@@ -196,23 +210,35 @@ def collect_framework_routes(files, skip: Callable[[str, str], bool] | None = No
         marks = [d for d in decorators if _AUTH_MARK.search(d)] + [b for b in bases if _AUTH_MARK.search(b)]
         public = bool(_PUBLIC_MARK.search(source))
         in_handler = bool(_AUTH_MARK.search(source)) and not public
-        is_drf_view = isinstance(node, ast.ClassDef) and any(re.search(r"APIView|ViewSet|GenericAPIView", b)
-                                                              for b in bases)
+        is_drf_view = isinstance(node, ast.ClassDef) and any(
+            re.search(r"APIView|ViewSet|GenericAPIView", b) for b in bases
+        )
         wrapped = [d for d in extra_deps if _AUTH_MARK.search(d)]  # urls.py: login_required(view)
         verified = bool(marks or wrapped) or in_handler or (drf_default and is_drf_view and not public)
         deps = [*marks, *extra_deps, *(app_hooks if not public else ())]
         if in_handler and not marks:
             deps.append("check inside handler")
-        identity = [f"{kind.lower()}:{key}" for kind, key in _REQUEST_READ.findall(source)
-                    if _IDENTITY_KEY.search(key) and not _API_KEY.search(key)]
+        identity = [
+            f"{kind.lower()}:{key}"
+            for kind, key in _REQUEST_READ.findall(source)
+            if _IDENTITY_KEY.search(key) and not _API_KEY.search(key)
+        ]
         identity += [f"path:{p}" for p in re.findall(r"\{(\w+)\}", path) if _IDENTITY_KEY.search(p)]
-        routes.append(FrameworkRoute(
-            method=method.upper(), path=path, handler=name, file=file,
-            line=getattr(node, "lineno", line), dependencies=tuple(dict.fromkeys(deps)),
-            identity_inputs=tuple(dict.fromkeys(identity)), user_token_verified=verified,
-            shared_key=bool(_API_KEY.search(source)) and not verified,
-            accepts_upload=bool(_UPLOAD.search(source)), paginated=bool(_PAGINATION.search(source)),
-        ))
+        routes.append(
+            FrameworkRoute(
+                method=method.upper(),
+                path=path,
+                handler=name,
+                file=file,
+                line=getattr(node, "lineno", line),
+                dependencies=tuple(dict.fromkeys(deps)),
+                identity_inputs=tuple(dict.fromkeys(identity)),
+                user_token_verified=verified,
+                shared_key=bool(_API_KEY.search(source)) and not verified,
+                accepts_upload=bool(_UPLOAD.search(source)),
+                paginated=bool(_PAGINATION.search(source)),
+            )
+        )
 
     for py in files:
         stem = PurePosixPath(py.path).parent.name if PurePosixPath(py.path).name == "urls.py" else ""
@@ -240,8 +266,13 @@ def collect_framework_routes(files, skip: Callable[[str, str], bool] | None = No
             if last.startswith("add_") and last[4:] in _VERBS and len(args) >= 2 and _literal(args[0]) is not None:
                 add(last[4:], _normalize_path(_literal(args[0])), _dotted(args[1]), py.path, node.lineno)
             elif last == "add_route" and len(args) >= 3 and _literal(args[1]) is not None:
-                add(_literal(args[0]) or "ANY", _normalize_path(_literal(args[1])), _dotted(args[2]), py.path,
-                    node.lineno)
+                add(
+                    _literal(args[0]) or "ANY",
+                    _normalize_path(_literal(args[1])),
+                    _dotted(args[2]),
+                    py.path,
+                    node.lineno,
+                )
             elif last == "add_view" and len(args) >= 2 and _literal(args[0]) is not None:
                 add("ANY", _normalize_path(_literal(args[0])), _dotted(args[1]), py.path, node.lineno)
             elif callee.startswith("web.") and last in _VERBS and len(args) >= 2 and _literal(args[0]) is not None:
@@ -261,13 +292,20 @@ def collect_framework_routes(files, skip: Callable[[str, str], bool] | None = No
                     for method in _methods(_kw(node, "methods"), "GET" if last == "Route" else "WS"):
                         add(method, _normalize_path(_literal(args[0])), _dotted(endpoint), py.path, node.lineno)
             # Django: path("x/", view) / re_path / url, class views via View.as_view()
-            elif last in ("path", "re_path", "url") and len(args) >= 2 and _literal(args[0]) is not None and (
-                    PurePosixPath(py.path).name == "urls.py" or "urlpatterns" in py.text):
+            elif (
+                last in ("path", "re_path", "url")
+                and len(args) >= 2
+                and _literal(args[0]) is not None
+                and (PurePosixPath(py.path).name == "urls.py" or "urlpatterns" in py.text)
+            ):
                 view = args[1]
                 if isinstance(view, ast.Call) and _dotted(view.func).split(".")[-1] == "include":
                     continue
-                name = _dotted(view.func.value) if isinstance(view, ast.Call) and _dotted(view.func).endswith(
-                    "as_view") else _dotted(view)
+                name = (
+                    _dotted(view.func.value)
+                    if isinstance(view, ast.Call) and _dotted(view.func).endswith("as_view")
+                    else _dotted(view)
+                )
                 wrappers = []
                 while isinstance(view, ast.Call) and _AUTH_MARK.search(_dotted(view.func)):  # login_required(view)
                     wrappers.append(_dotted(view.func))
@@ -276,8 +314,12 @@ def collect_framework_routes(files, skip: Callable[[str, str], bool] | None = No
                 if name:
                     add("ANY", _join(django_prefix, _literal(args[0])), name, py.path, node.lineno, wrappers)
             # DRF: router.register(r"users", UserViewSet)
-            elif last == "register" and len(args) >= 2 and _literal(args[0]) is not None and re.search(
-                    r"ViewSet|View", _dotted(args[1])):
+            elif (
+                last == "register"
+                and len(args) >= 2
+                and _literal(args[0]) is not None
+                and re.search(r"ViewSet|View", _dotted(args[1]))
+            ):
                 add("ANY", _join(django_prefix, _literal(args[0])), _dotted(args[1]), py.path, node.lineno)
     unique: dict[tuple[str, str, str, str], FrameworkRoute] = {}
     for route in routes:

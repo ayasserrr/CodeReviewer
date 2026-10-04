@@ -77,8 +77,9 @@ class TestVerifyToolsAvailable:
         assert "pip_audit" not in str(exc_info.value)
 
     def test_success_is_cached_and_not_rechecked(self):
-        with patch("shutil.which", return_value="/usr/bin/tool") as mock_which, patch(
-            "os.path.isfile", return_value=True
+        with (
+            patch("shutil.which", return_value="/usr/bin/tool") as mock_which,
+            patch("os.path.isfile", return_value=True),
         ):
             tool_bootstrap.verify_tools_available()
             tool_bootstrap.verify_tools_available()

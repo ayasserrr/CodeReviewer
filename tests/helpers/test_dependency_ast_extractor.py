@@ -85,12 +85,7 @@ class TestFunctionExtraction:
 class TestClassExtraction:
     def test_class_fields_and_method_count(self):
         source = (
-            "class Widget:\n"
-            "    def __init__(self):\n"
-            "        pass\n"
-            "    @staticmethod\n"
-            "    def helper():\n"
-            "        pass\n"
+            "class Widget:\n    def __init__(self):\n        pass\n    @staticmethod\n    def helper():\n        pass\n"
         )
         _, classes, _, _ = _extract(source)
         assert len(classes) == 1

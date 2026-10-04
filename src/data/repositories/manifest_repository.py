@@ -30,9 +30,7 @@ class ManifestRepository:
         Returns:
             The ``ManifestRecord`` instance, or ``None`` if not cached.
         """
-        result = await self._db_session.execute(
-            select(ManifestRecord).where(ManifestRecord.cache_key == cache_key)
-        )
+        result = await self._db_session.execute(select(ManifestRecord).where(ManifestRecord.cache_key == cache_key))
         return result.scalar_one_or_none()
 
     async def get_all_by_repository_id(

@@ -52,7 +52,7 @@ def main() -> int:
     try:
         # cache_dir=None: never write a .grimp_cache directory into the reviewed clone.
         graph = grimp.build_graph(*package_names, cache_dir=None)
-    except Exception as exc:  # noqa: BLE001 -- building the graph imports arbitrary target-repo code
+    except Exception as exc:
         print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
         return 4
 

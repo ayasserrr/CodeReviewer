@@ -14,8 +14,14 @@ def _maps(tmp_path: Path, files: dict[str, str]):
         (tmp_path / rel).write_text(text, encoding="utf-8")
         entries.append(FileEntry(path=rel, language="Python", size_bytes=len(text), lines=text.count("\n")))
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)), files=tuple(entries),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(entries),
     )
     return build_review_maps(tmp_path, manifest)
 
@@ -25,14 +31,16 @@ def _by_handler(maps):
 
 
 def test_flask_blueprints_decorators_and_identity(tmp_path):
-    maps = _maps(tmp_path, {
-        "app/__init__.py": '''
+    maps = _maps(
+        tmp_path,
+        {
+            "app/__init__.py": """
 from flask import Flask
 from app.orders import bp
 app = Flask(__name__)
 app.register_blueprint(bp, url_prefix="/api")
-''',
-        "app/orders.py": '''
+""",
+            "app/orders.py": """
 from flask import Blueprint, request
 from flask_login import login_required
 bp = Blueprint("orders", __name__)
@@ -47,8 +55,9 @@ def order(order_id):
 def upload():
     f = request.files["doc"]
     return f.filename
-''',
-    })
+""",
+        },
+    )
     routes = _by_handler(maps)
     get = routes[("GET", "/api/orders/{order_id}", "order")]
     assert not get.user_token_verified and "CLIENT-ASSERTED IDENTITY" in get.flags
@@ -59,13 +68,15 @@ def upload():
 
 
 def test_django_urls_include_and_class_views(tmp_path):
-    maps = _maps(tmp_path, {
-        "manage.py": "from django.core.management import execute_from_command_line\nexecute_from_command_line()\n",
-        "project/urls.py": '''
+    maps = _maps(
+        tmp_path,
+        {
+            "manage.py": "from django.core.management import execute_from_command_line\nexecute_from_command_line()\n",
+            "project/urls.py": """
 from django.urls import include, path
 urlpatterns = [path("shop/", include("shop.urls"))]
-''',
-        "shop/urls.py": '''
+""",
+            "shop/urls.py": """
 from django.urls import path
 from django.contrib.auth.decorators import login_required
 from shop import views
@@ -74,8 +85,8 @@ urlpatterns = [
     path("export/", login_required(views.export)),
     path("public/", views.public),
 ]
-''',
-        "shop/views.py": '''
+""",
+            "shop/views.py": """
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views import View
 
@@ -88,8 +99,9 @@ def export(request):
 
 def public(request):
     return request.GET.get("user_id")
-''',
-    })
+""",
+        },
+    )
     routes = _by_handler(maps)
     assert routes[("ANY", "/shop/items/{pk}/", "ItemView")].user_token_verified
     export = routes[("ANY", "/shop/export/", "export")]
@@ -99,17 +111,19 @@ def public(request):
 
 
 def test_drf_default_permission_and_starlette(tmp_path):
-    maps = _maps(tmp_path, {
-        "api/settings.py": 'REST_FRAMEWORK = {"DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"]}\n',
-        "api/urls.py": '''
+    maps = _maps(
+        tmp_path,
+        {
+            "api/settings.py": 'REST_FRAMEWORK = {"DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"]}\n',
+            "api/urls.py": """
 from rest_framework.routers import DefaultRouter
 from api.views import UserViewSet, OpenViewSet
 router = DefaultRouter()
 router.register(r"users", UserViewSet)
 router.register(r"open", OpenViewSet)
 urlpatterns = router.urls
-''',
-        "api/views.py": '''
+""",
+            "api/views.py": """
 from rest_framework import viewsets
 from rest_framework.permissions import AllowAny
 
@@ -118,8 +132,8 @@ class UserViewSet(viewsets.ModelViewSet):
 
 class OpenViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
-''',
-        "web/app.py": '''
+""",
+            "web/app.py": """
 from starlette.applications import Starlette
 from starlette.routing import Route
 
@@ -127,8 +141,9 @@ async def health(request):
     return None
 
 app = Starlette(routes=[Route("/health", health, methods=["GET"])])
-''',
-    })
+""",
+        },
+    )
     routes = _by_handler(maps)
     assert routes[("ANY", "/users", "UserViewSet")].user_token_verified
     assert not routes[("ANY", "/open", "OpenViewSet")].user_token_verified
@@ -136,10 +151,12 @@ app = Starlette(routes=[Route("/health", health, methods=["GET"])])
 
 
 def test_fastapi_annotated_dependency_aliases_count_as_auth(tmp_path):
-    maps = _maps(tmp_path, {
-        "app/main.py": "from fastapi import FastAPI\nfrom app.routes import router\napp = FastAPI()\n"
-                       "app.include_router(router)\n",
-        "app/deps.py": '''
+    maps = _maps(
+        tmp_path,
+        {
+            "app/main.py": "from fastapi import FastAPI\nfrom app.routes import router\napp = FastAPI()\n"
+            "app.include_router(router)\n",
+            "app/deps.py": """
 from typing import Annotated
 from fastapi import Depends
 from fastapi.security import OAuth2PasswordBearer
@@ -149,8 +166,8 @@ def get_current_user(token: Annotated[str, Depends(oauth2)]):
     return token
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]
-''',
-        "app/routes.py": '''
+""",
+            "app/routes.py": """
 from fastapi import APIRouter
 from app.deps import CurrentUser
 router = APIRouter()
@@ -158,38 +175,43 @@ router = APIRouter()
 @router.get("/me")
 def me(user: CurrentUser):
     return user
-''',
-    })
+""",
+        },
+    )
     assert maps.routes[0].user_token_verified and "get_current_user" in maps.routes[0].dependencies
 
 
 def test_newer_python_syntax_does_not_drop_a_module():
     from helpers.ast_analyzer import parse_quietly, parse_tolerant
 
-    tree = parse_quietly("def f():\n    try:\n        g()\n    except KeyError, ValueError:\n        pass\n"
-                         "def h():\n    return 1\n")
+    tree = parse_quietly(
+        "def f():\n    try:\n        g()\n    except KeyError, ValueError:\n        pass\ndef h():\n    return 1\n"
+    )
     assert [n.name for n in tree.body] == ["f", "h"]
     unknown = parse_tolerant("x = 1\ny = (( 2\ndef keep():\n    return x\n")
     assert "keep" in [getattr(n, "name", "") for n in unknown.body]
 
 
 def test_modules_loaded_by_name_and_workers_are_entry_points(tmp_path):
-    maps = _maps(tmp_path, {
-        "run.py": "from aiohttp.web import run_app\nfrom svc.app import init\nrun_app(init())\n",
-        "svc/__init__.py": "",
-        "svc/app.py": "from aiohttp.web import Application\ndef init():\n    return Application()\n",
-        "svc/celery_app.py": 'from celery import Celery\ncelery = Celery("svc", include=["svc.jobs"])\n',
-        "svc/jobs.py": '''
+    maps = _maps(
+        tmp_path,
+        {
+            "run.py": "from aiohttp.web import run_app\nfrom svc.app import init\nrun_app(init())\n",
+            "svc/__init__.py": "",
+            "svc/app.py": "from aiohttp.web import Application\ndef init():\n    return Application()\n",
+            "svc/celery_app.py": 'from celery import Celery\ncelery = Celery("svc", include=["svc.jobs"])\n',
+            "svc/jobs.py": """
 from svc.celery_app import celery
 
 @celery.task
 def rebuild_index(order_id):
     return order_id
-''',
-        "svc/plugins.py": 'import importlib\nhandler = importlib.import_module("svc.handlers")\n',
-        "svc/handlers.py": "def handle():\n    return 1\n",
-        "svc/old.py": "def unused():\n    return 2\n",
-    })
+""",
+            "svc/plugins.py": 'import importlib\nhandler = importlib.import_module("svc.handlers")\n',
+            "svc/handlers.py": "def handle():\n    return 1\n",
+            "svc/old.py": "def unused():\n    return 2\n",
+        },
+    )
     assert "run.py" in maps.app_roots and "svc/jobs.py" in maps.app_roots
     assert "svc/handlers.py" not in maps.unreachable
     assert maps.unreachable == ["svc/old.py", "svc/plugins.py"]  # plugins.py itself is imported by nothing

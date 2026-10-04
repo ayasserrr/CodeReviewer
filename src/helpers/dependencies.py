@@ -14,7 +14,7 @@ from security import TokenError, decode_token
 _bearer_scheme = HTTPBearer(auto_error=True)
 
 
-async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+async def get_db_session() -> AsyncGenerator[AsyncSession]:
     async for session in db_manager.get_db_session():
         yield session
 

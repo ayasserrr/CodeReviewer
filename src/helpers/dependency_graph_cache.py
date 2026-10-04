@@ -22,9 +22,7 @@ def compute_cache_key(head_sha: str, engine_version: str, schema_version: str) -
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-async def get_cached_dependency_graph(
-    graph_repo: DependencyGraphRepository, cache_key: str
-) -> DependencyGraph | None:
+async def get_cached_dependency_graph(graph_repo: DependencyGraphRepository, cache_key: str) -> DependencyGraph | None:
     """Look up a cached dependency graph by its cache key.
 
     Args:

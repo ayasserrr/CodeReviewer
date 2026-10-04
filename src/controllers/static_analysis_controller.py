@@ -75,14 +75,19 @@ class StaticAnalysisController(BaseController):
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
             if result.returncode not in (0, 1):
-                raise ToolExitCodeError(f"ruff exited with unexpected code {result.returncode}: {result.stderr.strip()}")
+                raise ToolExitCodeError(
+                    f"ruff exited with unexpected code {result.returncode}: {result.stderr.strip()}"
+                )
             return {"findings": json.loads(result.stdout or "[]")}
 
         return _run_chunked(
             files,
             lambda chunk: run_tool(
-                tool_binary="ruff", repo_path=repo_path, command=["ruff", "check", *chunk, *options],
-                timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, parse_output=parse,
+                tool_binary="ruff",
+                repo_path=repo_path,
+                command=["ruff", "check", *chunk, *options],
+                timeout=self.config.ANALYSIS_TIMEOUT_SECONDS,
+                parse_output=parse,
             ),
         )
 
@@ -102,8 +107,11 @@ class StaticAnalysisController(BaseController):
         results = []
         for chunk in chunk_paths(files):
             result = run_tool(
-                tool_binary="pyright", repo_path=repo_path, command=[*command, *chunk],
-                timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, parse_output=parse,
+                tool_binary="pyright",
+                repo_path=repo_path,
+                command=[*command, *chunk],
+                timeout=self.config.ANALYSIS_TIMEOUT_SECONDS,
+                parse_output=parse,
             )
             if result["status"] != "success":
                 return result
@@ -126,7 +134,12 @@ class StaticAnalysisController(BaseController):
         def radon(mode: str, chunk: list[str]) -> dict[str, Any]:
             result = subprocess.run(
                 ["radon", mode, *chunk, "-j"],
-                cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
                 env=safe_env(),
             )
             if result.returncode != 0:
@@ -139,7 +152,11 @@ class StaticAnalysisController(BaseController):
             for chunk in chunk_paths(files):
                 complexity.update(radon("cc", chunk))
                 maintainability.update(radon("mi", chunk))
-            return {"status": "success", "data": {"complexity": complexity, "maintainability": maintainability}, "error": None}
+            return {
+                "status": "success",
+                "data": {"complexity": complexity, "maintainability": maintainability},
+                "error": None,
+            }
         except subprocess.TimeoutExpired as exc:
             return {"status": "error", "findings": [], "error": f"timeout: {exc}"}
         except json.JSONDecodeError as exc:
@@ -162,7 +179,9 @@ class StaticAnalysisController(BaseController):
 
         def parse(result: subprocess.CompletedProcess) -> dict[str, Any]:
             if result.returncode not in (0, 3):
-                raise ToolExitCodeError(f"vulture exited with unexpected code {result.returncode}: {result.stderr.strip()}")
+                raise ToolExitCodeError(
+                    f"vulture exited with unexpected code {result.returncode}: {result.stderr.strip()}"
+                )
             findings = []
             for line in (result.stdout or "").splitlines():
                 match = _VULTURE_LINE_PATTERN.match(line.strip())
@@ -171,8 +190,11 @@ class StaticAnalysisController(BaseController):
             return {"findings": findings}
 
         return run_tool(
-            tool_binary="vulture", repo_path=repo_path, command=command,
-            timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, parse_output=parse,
+            tool_binary="vulture",
+            repo_path=repo_path,
+            command=command,
+            timeout=self.config.ANALYSIS_TIMEOUT_SECONDS,
+            parse_output=parse,
         )
 
     def run_jscpd(self, repo_path: str, files: list[str]) -> dict[str, Any]:
@@ -207,13 +229,23 @@ class StaticAnalysisController(BaseController):
                     )
                 result = subprocess.run(
                     ["jscpd", "--config", config_path],
-                    cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"), env=safe_env(),
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=self.config.ANALYSIS_TIMEOUT_SECONDS,
+                    shell=(os.name == "nt"),
+                    env=safe_env(),
                 )
                 report_path = os.path.join(output_dir, "jscpd-report.json")
                 if not os.path.isfile(report_path):
                     detail = (result.stderr or result.stdout or "").strip()[-300:]
-                    return {"status": "error", "findings": [], "error": f"jscpd produced no report file: {detail or 'no output'}"}
+                    return {
+                        "status": "error",
+                        "findings": [],
+                        "error": f"jscpd produced no report file: {detail or 'no output'}",
+                    }
                 with open(report_path, encoding="utf-8") as f:
                     report = json.load(f)
             return {"status": "success", "findings": report.get("duplicates", []), "error": None}
@@ -240,8 +272,14 @@ class StaticAnalysisController(BaseController):
             try:
                 result = subprocess.run(
                     ["lizard", "-f", list_file.name, "--csv"],
-                    cwd=repo_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    timeout=self.config.ANALYSIS_TIMEOUT_SECONDS, shell=(os.name == "nt"), env=safe_env(),
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=self.config.ANALYSIS_TIMEOUT_SECONDS,
+                    shell=(os.name == "nt"),
+                    env=safe_env(),
                 )
             finally:
                 os.unlink(list_file.name)

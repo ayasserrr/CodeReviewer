@@ -33,55 +33,143 @@ def workspace(tmp_path: Path) -> ReviewWorkspace:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x = 1\n" * lines)
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
         files=tuple(FileEntry(path=p, language="Python", size_bytes=1, lines=n) for p, n in FILES.items()),
     )
-    graph = DependencyGraph(schema_version="1", engine_version="1", repository_id="r", head_sha="a" * 40,
-                            cache_key="k", generated_at=datetime.now(UTC))
-    static = [StaticFinding.from_normalized("semgrep", {"file": "app/main.py", "line": 50, "severity": "error",
-                                                        "category": "python-cors-wildcard-with-credentials",
-                                                        "message": "cors"}),
-              StaticFinding.from_normalized("ruff", {"file": "app/main.py", "line": 110, "severity": "warning",
-                                                     "category": "E501", "message": "long"})]
-    return ReviewWorkspace(repo_path=tmp_path, manifest=manifest, static_findings=static, tool_results={},
-                           graph=graph, config=load_review_config(settings.DEEP_REVIEW_CONFIG_PATH))
+    graph = DependencyGraph(
+        schema_version="1",
+        engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+    )
+    static = [
+        StaticFinding.from_normalized(
+            "semgrep",
+            {
+                "file": "app/main.py",
+                "line": 50,
+                "severity": "error",
+                "category": "python-cors-wildcard-with-credentials",
+                "message": "cors",
+            },
+        ),
+        StaticFinding.from_normalized(
+            "ruff", {"file": "app/main.py", "line": 110, "severity": "warning", "category": "E501", "message": "long"}
+        ),
+    ]
+    return ReviewWorkspace(
+        repo_path=tmp_path,
+        manifest=manifest,
+        static_findings=static,
+        tool_results={},
+        graph=graph,
+        config=load_review_config(settings.DEEP_REVIEW_CONFIG_PATH),
+    )
 
 
 def record(ws: ReviewWorkspace, category: str, title: str, severity: str, *cites: tuple[str, int, int]) -> str:
-    out = ws.record_finding(ws.config.category(category), _RecordFindingArgs(
-        title=title, severity=severity, confidence="high", description="d", impact="i",
-        evidence=[EvidenceInput(file=f, line_start=a, line_end=b) for f, a, b in cites]))
+    out = ws.record_finding(
+        ws.config.category(category),
+        _RecordFindingArgs(
+            title=title,
+            severity=severity,
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[EvidenceInput(file=f, line_start=a, line_end=b) for f, a, b in cites],
+        ),
+    )
     return out.split()[1]
 
 
 def test_real_duplicate_pairs_fold_and_distinct_baselines_do_not(workspace):
     ws = workspace
-    cors_int = record(ws, "integration", "Overly permissive CORS policy allows requests from any origin", "Medium",
-                      ("app/main.py", 44, 49))
-    cors_sec = record(ws, "security", "CORS misconfiguration: wildcard origin with credentials allowed", "High",
-                      ("app/main.py", 48, 53))
-    cors_sec2 = record(ws, "security", "Insecure CORS configuration: wildcard origin with credentials allowed", "High",
-                       ("app/main.py", 50, 50))
-    pt_sec = record(ws, "security", "Path Traversal vulnerability in file upload handlers", "High",
-                    ("app/services/orders_service.py", 779, 782),
-                    ("app/services/documents_service.py", 140, 142))
-    pt_bug = record(ws, "correctness", "Unsanitized filename in file upload leads to path traversal vulnerability",
-                    "High", ("app/services/documents_service.py", 141, 141))
-    rl_sec = record(ws, "security", "No rate limiting on authentication endpoints", "High",
-                    ("app/routers/auth.py", 30, 30), ("app/main.py", 40, 60))
+    cors_int = record(
+        ws,
+        "integration",
+        "Overly permissive CORS policy allows requests from any origin",
+        "Medium",
+        ("app/main.py", 44, 49),
+    )
+    cors_sec = record(
+        ws,
+        "security",
+        "CORS misconfiguration: wildcard origin with credentials allowed",
+        "High",
+        ("app/main.py", 48, 53),
+    )
+    cors_sec2 = record(
+        ws,
+        "security",
+        "Insecure CORS configuration: wildcard origin with credentials allowed",
+        "High",
+        ("app/main.py", 50, 50),
+    )
+    pt_sec = record(
+        ws,
+        "security",
+        "Path Traversal vulnerability in file upload handlers",
+        "High",
+        ("app/services/orders_service.py", 779, 782),
+        ("app/services/documents_service.py", 140, 142),
+    )
+    pt_bug = record(
+        ws,
+        "correctness",
+        "Unsanitized filename in file upload leads to path traversal vulnerability",
+        "High",
+        ("app/services/documents_service.py", 141, 141),
+    )
+    rl_sec = record(
+        ws,
+        "security",
+        "No rate limiting on authentication endpoints",
+        "High",
+        ("app/routers/auth.py", 30, 30),
+        ("app/main.py", 40, 60),
+    )
     rl_auth = record(ws, "auth", "Absence of rate limiting on any route", "High", ("app/main.py", 1, 1))
-    ex_sec = record(ws, "security", "Raw exception messages exposed in API responses", "Medium",
-                    ("app/routers/item_actions.py", 29, 32))
-    ex_obs = record(ws, "observability", "Insufficient Error Handling and Information Disclosure via Raw Exception Text",
-                    "High", ("app/routers/item_actions.py", 30, 30))
+    ex_sec = record(
+        ws,
+        "security",
+        "Raw exception messages exposed in API responses",
+        "Medium",
+        ("app/routers/item_actions.py", 29, 32),
+    )
+    ex_obs = record(
+        ws,
+        "observability",
+        "Insufficient Error Handling and Information Disclosure via Raw Exception Text",
+        "High",
+        ("app/routers/item_actions.py", 30, 30),
+    )
     metrics = record(ws, "observability", "Absence of Application Metrics", "High", ("app/main.py", 1, 1))
-    logs = record(ws, "observability", "Absence of Structured (JSON) Logging Configuration", "Medium", ("app/main.py", 1, 1))
+    logs = record(
+        ws, "observability", "Absence of Structured (JSON) Logging Configuration", "Medium", ("app/main.py", 1, 1)
+    )
     ids = record(ws, "observability", "Absence of Request/Correlation ID Propagation", "Medium", ("app/main.py", 1, 1))
-    xxe = record(ws, "security", "XML External Entity (XXE) vulnerability via entity expansion", "High",
-                 ("src/utils/extract_docx_txt.py", 15, 15))
-    parser = record(ws, "inputs", "Parser abuse and resource exhaustion vulnerabilities in file processing", "High",
-                    ("src/utils/extract_docx_txt.py", 15, 15))
+    xxe = record(
+        ws,
+        "security",
+        "XML External Entity (XXE) vulnerability via entity expansion",
+        "High",
+        ("src/utils/extract_docx_txt.py", 15, 15),
+    )
+    parser = record(
+        ws,
+        "inputs",
+        "Parser abuse and resource exhaustion vulnerabilities in file processing",
+        "High",
+        ("src/utils/extract_docx_txt.py", 15, 15),
+    )
 
     ws.auto_fold_duplicates()
 
@@ -107,15 +195,27 @@ def test_static_lead_is_addressed_only_by_a_citation_near_its_line(workspace):
     from utils import StaticFinding
 
     ws = workspace
-    lock = StaticFinding.from_normalized("semgrep", {
-        "file": "app/services/orders_service.py", "line": 700, "severity": "info",
-        "category": "src.assets.semgrep.python-claim-flag-or-lock", "message": "claim"})
+    lock = StaticFinding.from_normalized(
+        "semgrep",
+        {
+            "file": "app/services/orders_service.py",
+            "line": 700,
+            "severity": "info",
+            "category": "src.assets.semgrep.python-claim-flag-or-lock",
+            "message": "claim",
+        },
+    )
     ws.static_by_id[lock.id] = lock
     label = "Work claims / locks / in-progress flags (semgrep)"
     record(ws, "correctness", "Random IDs collide", "High", ("app/services/orders_service.py", 100, 105))
     assert label in [name for name, _ in ws.unaddressed_leads("correctness")]
-    record(ws, "correctness", "Processing lock is never released on failure", "High",
-           ("app/services/orders_service.py", 690, 695))
+    record(
+        ws,
+        "correctness",
+        "Processing lock is never released on failure",
+        "High",
+        ("app/services/orders_service.py", 690, 695),
+    )
     assert label not in [name for name, _ in ws.unaddressed_leads("correctness")]
 
 
@@ -126,10 +226,12 @@ def test_severity_caps_for_latent_script_and_baseline_findings(workspace):
     ws.maps.unreachable = ["app/services/documents_service.py", "src/utils/extract_docx_txt.py"]
     ws.maps.orphan_scripts = ["src/utils/extract_docx_txt.py"]
     ws.maps.absent_baselines = [b for b in BASELINES if b.id == "rate_limiting"]
-    latent = record(ws, "security", "SQL injection via LLM-generated SQL", "Critical",
-                    ("app/services/documents_service.py", 10, 12))
-    script = record(ws, "observability", "Seed script prints admin passwords", "High",
-                    ("src/utils/extract_docx_txt.py", 5, 5))
+    latent = record(
+        ws, "security", "SQL injection via LLM-generated SQL", "Critical", ("app/services/documents_service.py", 10, 12)
+    )
+    script = record(
+        ws, "observability", "Seed script prints admin passwords", "High", ("src/utils/extract_docx_txt.py", 5, 5)
+    )
     baseline = record(ws, "auth", "No rate limiting on any route", "Critical", ("app/main.py", 1, 1))
     live = record(ws, "security", "Client-asserted identity bypass", "Critical", ("app/routers/auth.py", 30, 30))
     assert ws.apply_severity_caps() == 3
@@ -143,10 +245,20 @@ def test_hardening_findings_are_capped_but_known_exploits_are_not(workspace):
     ws = workspace
     ws.maps.absent_baselines = []
     cors = record(ws, "security", "CORS wildcard origin with credentials allowed", "Critical", ("app/main.py", 20, 22))
-    pins = record(ws, "dependencies", "Unsafe Hugging Face model downloads without revision pinning", "Critical",
-                  ("app/main.py", 40, 40))
-    cve = record(ws, "dependencies", "Unpinned torch with known vulnerability CVE-2025-32434 (RCE)", "Critical",
-                 ("app/main.py", 50, 50))
+    pins = record(
+        ws,
+        "dependencies",
+        "Unsafe Hugging Face model downloads without revision pinning",
+        "Critical",
+        ("app/main.py", 40, 40),
+    )
+    cve = record(
+        ws,
+        "dependencies",
+        "Unpinned torch with known vulnerability CVE-2025-32434 (RCE)",
+        "Critical",
+        ("app/main.py", 50, 50),
+    )
     assert ws.apply_severity_caps() == 2
     assert ws.findings[cors].severity == "High" and "hardening" in ws.findings[cors].verification.note
     assert ws.findings[pins].severity == "High"
@@ -158,8 +270,10 @@ def test_untriaged_groups_only_when_coverage_is_low(workspace):
 
     ws = workspace
     assert ws.untriaged_groups("maintainability") == [("ruff", "E501", 1)]
-    ws.triage_rule(ws.config.category("maintainability"),
-                   _TriageRuleArgs(tool="ruff", rule="E501", verdict="low_value", reason="style"))
+    ws.triage_rule(
+        ws.config.category("maintainability"),
+        _TriageRuleArgs(tool="ruff", rule="E501", verdict="low_value", reason="style"),
+    )
     assert ws.untriaged_groups("maintainability") == []
 
 
@@ -167,11 +281,14 @@ def test_formatting_only_lint_is_auto_triaged_low_value(workspace):
     from utils import StaticFinding
 
     ws = workspace
+
     def add(code, line):
-        f = StaticFinding.from_normalized("ruff", {"file": "app/main.py", "line": line, "severity": "warning",
-                                                   "category": code, "message": code})
+        f = StaticFinding.from_normalized(
+            "ruff", {"file": "app/main.py", "line": line, "severity": "warning", "category": code, "message": code}
+        )
         ws.static_by_id[f.id] = f
         return f.id
+
     whitespace, long_line, imports, real_bug = add("W293", 3), add("E501", 4), add("I001", 1), add("B006", 9)
     preexisting = sum(1 for f in ws.static_by_id.values() if f.tool == "ruff" and f.category == "E501") - 1
     assert ws.auto_triage_formatting() == 3 + preexisting
@@ -188,15 +305,34 @@ def test_agents_md_is_loaded_into_the_brief_context_and_correctness_leads(tmp_pa
     (tmp_path / "svc" / "agents.md").write_text("## Worker\nOne job per project.\n")
     (tmp_path / "app.py").write_text("x = 1\n")
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
-        files=tuple(FileEntry(path=p, language=lang, size_bytes=1, lines=3) for p, lang in
-                    [("AGENTS.md", "Markdown"), ("svc/agents.md", "Markdown"), ("app.py", "Python")]),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=tuple(
+            FileEntry(path=p, language=lang, size_bytes=1, lines=3)
+            for p, lang in [("AGENTS.md", "Markdown"), ("svc/agents.md", "Markdown"), ("app.py", "Python")]
+        ),
     )
-    graph = DependencyGraph(schema_version="1", engine_version="1", repository_id="r", head_sha="a" * 40,
-                            cache_key="k", generated_at=datetime.now(UTC))
-    ws = ReviewWorkspace(repo_path=tmp_path, manifest=manifest, static_findings=[], tool_results={},
-                         graph=graph, config=load_review_config(settings.DEEP_REVIEW_CONFIG_PATH))
+    graph = DependencyGraph(
+        schema_version="1",
+        engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+    )
+    ws = ReviewWorkspace(
+        repo_path=tmp_path,
+        manifest=manifest,
+        static_findings=[],
+        tool_results={},
+        graph=graph,
+        config=load_review_config(settings.DEEP_REVIEW_CONFIG_PATH),
+    )
     assert [p for p, _ in ws.system_docs] == ["AGENTS.md", "svc/agents.md"]  # shallowest first, any case
     brief = build_repo_brief(ws, "demo")
     assert "Intended system logic" in brief and "deduplicated by email" in brief
@@ -209,16 +345,30 @@ def test_latent_cap_uses_the_defect_location_even_when_a_live_route_is_cited(wor
     ws = workspace
     ws.maps.unreachable = ["app/services/documents_service.py"]
     ws.maps.absent_baselines = []
-    fid = record(ws, "security", "SQL injection in text-to-SQL helper", "Critical",
-                 ("app/services/documents_service.py", 10, 12), ("app/main.py", 50, 50))
+    fid = record(
+        ws,
+        "security",
+        "SQL injection in text-to-SQL helper",
+        "Critical",
+        ("app/services/documents_service.py", 10, 12),
+        ("app/main.py", 50, 50),
+    )
     assert ws.apply_severity_caps() >= 1
     assert ws.findings[fid].severity == "High" and "latent" in ws.findings[fid].verification.note
 
 
 def test_maintainability_rejects_lint_restatements(workspace):
-    out = workspace.record_finding(workspace.config.category("maintainability"), _RecordFindingArgs(
-        title="Widespread unused imports (F401)", severity="Low", confidence="high", description="d", impact="i",
-        evidence=[EvidenceInput(file="app/main.py", line_start=1, line_end=1)]))
+    out = workspace.record_finding(
+        workspace.config.category("maintainability"),
+        _RecordFindingArgs(
+            title="Widespread unused imports (F401)",
+            severity="Low",
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[EvidenceInput(file="app/main.py", line_start=1, line_end=1)],
+        ),
+    )
     assert out.startswith("NOT RECORDED") and not workspace.findings
 
 
@@ -234,14 +384,32 @@ def test_dead_module_claims_may_only_cite_unreachable_modules(workspace):
     ws = workspace
     ws.maps.unreachable = ["src/utils/extract_docx_txt.py"]
     cat = ws.config.category("maintainability")
-    bad = ws.record_finding(cat, _RecordFindingArgs(
-        title="Unreachable Python modules (dead code)", severity="Low", confidence="high", description="d",
-        impact="i", evidence=[EvidenceInput(file="src/utils/extract_docx_txt.py", line_start=1, line_end=1),
-                              EvidenceInput(file="app/main.py", line_start=1, line_end=1)]))
+    bad = ws.record_finding(
+        cat,
+        _RecordFindingArgs(
+            title="Unreachable Python modules (dead code)",
+            severity="Low",
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[
+                EvidenceInput(file="src/utils/extract_docx_txt.py", line_start=1, line_end=1),
+                EvidenceInput(file="app/main.py", line_start=1, line_end=1),
+            ],
+        ),
+    )
     assert bad.startswith("NOT RECORDED") and "app/main.py" in bad
-    ok = ws.record_finding(cat, _RecordFindingArgs(
-        title="Unreachable Python modules (dead code)", severity="Low", confidence="high", description="d",
-        impact="i", evidence=[EvidenceInput(file="src/utils/extract_docx_txt.py", line_start=1, line_end=1)]))
+    ok = ws.record_finding(
+        cat,
+        _RecordFindingArgs(
+            title="Unreachable Python modules (dead code)",
+            severity="Low",
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[EvidenceInput(file="src/utils/extract_docx_txt.py", line_start=1, line_end=1)],
+        ),
+    )
     assert ok.startswith("Recorded")
 
 
@@ -256,26 +424,62 @@ def test_documented_rule_is_attached_as_evidence(tmp_path):
     (tmp_path / "AGENTS.md").write_text("# Flow\n1. The processing lock is always released.\n")
     (tmp_path / "app.py").write_text("x = 1\n" * 5)
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
-        files=(FileEntry(path="AGENTS.md", language="Markdown", size_bytes=1, lines=2),
-               FileEntry(path="app.py", language="Python", size_bytes=1, lines=5)),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
+        files=(
+            FileEntry(path="AGENTS.md", language="Markdown", size_bytes=1, lines=2),
+            FileEntry(path="app.py", language="Python", size_bytes=1, lines=5),
+        ),
     )
-    graph = DependencyGraph(schema_version="1", engine_version="1", repository_id="r", head_sha="a" * 40,
-                            cache_key="k", generated_at=datetime.now(UTC))
-    ws = ReviewWorkspace(repo_path=tmp_path, manifest=manifest, static_findings=[], tool_results={},
-                         graph=graph, config=load_review_config(settings.DEEP_REVIEW_CONFIG_PATH))
+    graph = DependencyGraph(
+        schema_version="1",
+        engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+    )
+    ws = ReviewWorkspace(
+        repo_path=tmp_path,
+        manifest=manifest,
+        static_findings=[],
+        tool_results={},
+        graph=graph,
+        config=load_review_config(settings.DEEP_REVIEW_CONFIG_PATH),
+    )
     cat = ws.config.category("correctness")
-    out = ws.record_finding(cat, _RecordFindingArgs(
-        title="Processing lock is never released on failure", severity="High", confidence="high", description="d",
-        impact="i", evidence=[EvidenceInput(file="app.py", line_start=3, line_end=3)],
-        violates_documented_rule="AGENTS.md:2"))
+    out = ws.record_finding(
+        cat,
+        _RecordFindingArgs(
+            title="Processing lock is never released on failure",
+            severity="High",
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[EvidenceInput(file="app.py", line_start=3, line_end=3)],
+            violates_documented_rule="AGENTS.md:2",
+        ),
+    )
     finding = next(iter(ws.findings.values()))
     assert out.startswith("Recorded") and [e.file for e in finding.evidence] == ["app.py", "AGENTS.md"]
     assert not any("AGENTS.md" in label for label, _ in ws.unaddressed_leads("correctness"))  # lead addressed
-    bad = ws.record_finding(cat, _RecordFindingArgs(
-        title="x", severity="Low", confidence="high", description="d", impact="i",
-        evidence=[EvidenceInput(file="app.py", line_start=1, line_end=1)], violates_documented_rule="README.md:2"))
+    bad = ws.record_finding(
+        cat,
+        _RecordFindingArgs(
+            title="x",
+            severity="Low",
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[EvidenceInput(file="app.py", line_start=1, line_end=1)],
+            violates_documented_rule="README.md:2",
+        ),
+    )
     assert bad.startswith("NOT RECORDED")
 
 
@@ -306,13 +510,16 @@ def test_dismiss_lead_needs_a_citation_and_closes_the_row(workspace):
 
     refused = ws.dismiss_lead(inputs, _DismissLeadArgs(lead="ffmpeg", reason="not a problem"))
     assert refused.startswith("NOT RECORDED")
-    ok = ws.dismiss_lead(inputs, _DismissLeadArgs(
-        lead="orders_service.py:300", reason="wrapped by the watchdog at app/main.py:12"))
+    ok = ws.dismiss_lead(
+        inputs, _DismissLeadArgs(lead="orders_service.py:300", reason="wrapped by the watchdog at app/main.py:12")
+    )
     assert ok == "Dismissed 1 lead row(s)."
     open_rows = dict(ws.unaddressed_leads("inputs")).get(label, [])
     assert all("ffmpeg" not in row for row in open_rows)
-    assert ("inputs", "subprocess.Popen `ffmpeg` with no timeout (app/services/orders_service.py:300)") \
-        in ws.dismissed_leads
+    assert (
+        "inputs",
+        "subprocess.Popen `ffmpeg` with no timeout (app/services/orders_service.py:300)",
+    ) in ws.dismissed_leads
 
 
 def test_every_live_source_file_is_in_some_lane_scope(workspace):
@@ -327,10 +534,21 @@ def test_every_live_source_file_is_in_some_lane_scope(workspace):
 def test_exposure_is_relabelled_in_dead_code_and_caps_severity(workspace):
     ws = workspace
     ws.maps.unreachable = ["src/utils/extract_docx_txt.py"]
-    dead_sql = record(ws, "security", "Model output executed as SQL", "Critical", ("src/utils/extract_docx_txt.py", 3, 5))
-    theory = ws.record_finding(ws.config.category("performance"), _RecordFindingArgs(
-        title="Would not scale past one region", severity="High", confidence="high", description="d", impact="i",
-        exposure="theoretical", evidence=[EvidenceInput(file="app/main.py", line_start=1)])).split()[1]
+    dead_sql = record(
+        ws, "security", "Model output executed as SQL", "Critical", ("src/utils/extract_docx_txt.py", 3, 5)
+    )
+    theory = ws.record_finding(
+        ws.config.category("performance"),
+        _RecordFindingArgs(
+            title="Would not scale past one region",
+            severity="High",
+            confidence="high",
+            description="d",
+            impact="i",
+            exposure="theoretical",
+            evidence=[EvidenceInput(file="app/main.py", line_start=1)],
+        ),
+    ).split()[1]
     ws.apply_severity_caps()
     assert ws.findings[dead_sql].exposure == "latent" and ws.findings[dead_sql].severity == "High"
     assert ws.findings[theory].severity == "Medium"
@@ -353,8 +571,9 @@ def test_budget_is_not_a_dismissal_reason_and_covered_rows_attach_to_the_finding
     ws = workspace
     _subprocess_leads(ws)
     inputs = ws.config.category("inputs")
-    lazy = ws.dismiss_lead(inputs, _DismissLeadArgs(
-        lead="ffmpeg", reason="Covered the critical paths; out of budget. See app/main.py:12"))
+    lazy = ws.dismiss_lead(
+        inputs, _DismissLeadArgs(lead="ffmpeg", reason="Covered the critical paths; out of budget. See app/main.py:12")
+    )
     assert lazy.startswith("NOT RECORDED") and "finding_id" in lazy
     fid = record(ws, "inputs", "External binaries run without timeouts", "High", ("app/main.py", 10, 10))
     attached = ws.dismiss_lead(inputs, _DismissLeadArgs(lead="ffmpeg", finding_id=fid))
@@ -368,9 +587,17 @@ def test_missing_control_needs_a_finding_that_names_it(workspace):
     ws = workspace
     ws.maps.signals.absent_controls = [("llm", "a per-user token budget", r"(?i)budget|per[- ]user")]
     label = "Control with no trace anywhere in the live code: a per-user token budget"
-    ws.record_finding(ws.config.category("llm"), _RecordFindingArgs(
-        title="Token usage is never recorded", severity="High", confidence="high",
-        description="nothing is logged per user", impact="i", evidence=[EvidenceInput(file="app/main.py", line_start=1)]))
+    ws.record_finding(
+        ws.config.category("llm"),
+        _RecordFindingArgs(
+            title="Token usage is never recorded",
+            severity="High",
+            confidence="high",
+            description="nothing is logged per user",
+            impact="i",
+            evidence=[EvidenceInput(file="app/main.py", line_start=1)],
+        ),
+    )
     assert label in dict(ws.unaddressed_leads("llm"))  # a passing mention does not close it
     record(ws, "llm", "No per-user or per-session token budget", "High", ("app/main.py", 2, 2))
     assert label not in dict(ws.unaddressed_leads("llm"))
@@ -384,18 +611,30 @@ def test_named_row_needs_a_finding_that_names_the_symbol(workspace):
     label = "Process-local state (singletons, caches, flags, semaphores: one process only, lost on restart)"
     record(ws, "performance", "Process-local caches block scaling", "High", ("app/main.py", 20, 25))
     assert label in dict(ws.unaddressed_leads("performance"))  # cited nearby, never named
-    ws.record_finding(ws.config.category("performance"), _RecordFindingArgs(
-        title="In-memory audio session buffers", severity="High", confidence="high",
-        description="`audio_buffers` holds every session's audio in one process", impact="i",
-        evidence=[EvidenceInput(file="app/main.py", line_start=22)]))
+    ws.record_finding(
+        ws.config.category("performance"),
+        _RecordFindingArgs(
+            title="In-memory audio session buffers",
+            severity="High",
+            confidence="high",
+            description="`audio_buffers` holds every session's audio in one process",
+            impact="i",
+            evidence=[EvidenceInput(file="app/main.py", line_start=22)],
+        ),
+    )
     assert label not in dict(ws.unaddressed_leads("performance"))
 
 
 def test_same_place_and_same_defect_keyword_fold_across_lanes(workspace):
     ws = workspace
     low = record(ws, "integration", "Overly permissive CORS configuration", "Low", ("app/main.py", 48, 51))
-    high = record(ws, "security", "CORS misconfiguration allows credentialed requests from any origin", "High",
-                  ("app/main.py", 50, 50))
+    high = record(
+        ws,
+        "security",
+        "CORS misconfiguration allows credentialed requests from any origin",
+        "High",
+        ("app/main.py", 50, 50),
+    )
     ws.auto_fold_duplicates()
     assert ws.duplicates.get(low) == high
 
@@ -403,8 +642,14 @@ def test_same_place_and_same_defect_keyword_fold_across_lanes(workspace):
 def test_report_counts_a_lead_covered_by_another_lane(workspace):
     ws = workspace
     label = _subprocess_leads(ws)
-    record(ws, "security", "antiword and ffmpeg run without timeouts", "Medium",
-           ("app/main.py", 10, 10), ("app/services/orders_service.py", 300, 300))
+    record(
+        ws,
+        "security",
+        "antiword and ffmpeg run without timeouts",
+        "Medium",
+        ("app/main.py", 10, 10),
+        ("app/services/orders_service.py", 300, 300),
+    )
     assert label in dict(ws.unaddressed_leads("inputs"))  # the owning lane still has to act on it
     assert label not in dict(ws.unaddressed_leads("inputs", any_lane=True))  # but the report shows it covered
 
@@ -415,8 +660,10 @@ _SPECIFIC_HYPOTHESES = [
     ("`list_orders` in orders_service.py returns orders of every customer", "app/services/orders_service.py"),
     ("`approve_item` lets any caller change the state of another user's item", "app/routers/item_actions.py"),
     ("`save_document` joins the client filename into the storage path", "app/services/documents_service.py"),
-    ("`extract_text` in extract_docx_txt.py drops tables and footnotes from documents",
-     "src/utils/extract_docx_txt.py"),
+    (
+        "`extract_text` in extract_docx_txt.py drops tables and footnotes from documents",
+        "src/utils/extract_docx_txt.py",
+    ),
 ]
 
 
@@ -429,23 +676,43 @@ def test_hypotheses_need_a_system_model_real_files_and_a_cited_resolution(worksp
 
     ws = workspace
     security = ws.config.category("security")
-    model = ("The API in app/main.py serves routers under app/routers; services in app/services hold the data "
-             "access. Identity arrives from request headers and file uploads are stored on local disk.")
-    few = ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=[
-        _HypothesisInput(statement="`upload` in main.py joins client filenames into disk paths", files=["app/main.py"])]))
+    model = (
+        "The API in app/main.py serves routers under app/routers; services in app/services hold the data "
+        "access. Identity arrives from request headers and file uploads are stored on local disk."
+    )
+    few = ws.record_hypotheses(
+        security,
+        _HypothesesArgs(
+            system_model=model,
+            hypotheses=[
+                _HypothesisInput(
+                    statement="`upload` in main.py joins client filenames into disk paths", files=["app/main.py"]
+                )
+            ],
+        ),
+    )
     assert few.startswith("NOT RECORDED") and "at least 6" in few
     hyps = [_HypothesisInput(statement=text, files=[f]) for text, f in _SPECIFIC_HYPOTHESES]
     out = ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=hyps))
     assert out.startswith("Recorded H-SEC-1, H-SEC-2, H-SEC-3, H-SEC-4, H-SEC-5, H-SEC-6")
     assert len(ws.open_hypotheses("security")) == 6
-    lazy = ws.resolve_hypothesis(security, _ResolveHypothesisArgs(hypothesis_id="H-SEC-1", outcome="ruled_out",
-                                                                  note="looks fine"))
+    lazy = ws.resolve_hypothesis(
+        security, _ResolveHypothesisArgs(hypothesis_id="H-SEC-1", outcome="ruled_out", note="looks fine")
+    )
     assert lazy.startswith("NOT RECORDED")
-    ws.resolve_hypothesis(security, _ResolveHypothesisArgs(hypothesis_id="H-SEC-1", outcome="ruled_out",
-                                                           note="the dependency at app/main.py:3 rejects it"))
+    ws.resolve_hypothesis(
+        security,
+        _ResolveHypothesisArgs(
+            hypothesis_id="H-SEC-1", outcome="ruled_out", note="the dependency at app/main.py:3 rejects it"
+        ),
+    )
     fid = record(ws, "security", "Header identity is trusted by the routers", "High", ("app/routers/auth.py", 5, 6))
-    assert ws.resolve_hypothesis(security, _ResolveHypothesisArgs(hypothesis_id="H-SEC-2", outcome="confirmed",
-                                                                  finding_id=fid)) == "H-SEC-2: confirmed."
+    assert (
+        ws.resolve_hypothesis(
+            security, _ResolveHypothesisArgs(hypothesis_id="H-SEC-2", outcome="confirmed", finding_id=fid)
+        )
+        == "H-SEC-2: confirmed."
+    )
     rows = ws.hypothesis_rows()
     assert any("[ruled out — the dependency at app/main.py:3" in r for r in rows)
     assert any(f"[confirmed → {fid}]" in r for r in rows)
@@ -457,35 +724,61 @@ def test_verdict_about_different_code_is_refused(workspace):
 
     ws = workspace
     coupons = record(ws, "performance", "Unpaginated retrieval of discount coupons", "Medium", ("app/main.py", 20, 22))
-    hashing = record(ws, "performance", "Password hashing blocks the event loop", "Medium",
-                     ("app/routers/auth.py", 19, 19))
-    crossed = ws.submit_verification("performance", _VerifyArgs(
-        finding_id=coupons, verdict="rejected", note="bcrypt runs in a thread pool at app/routers/auth.py:19"))
+    hashing = record(
+        ws, "performance", "Password hashing blocks the event loop", "Medium", ("app/routers/auth.py", 19, 19)
+    )
+    crossed = ws.submit_verification(
+        "performance",
+        _VerifyArgs(
+            finding_id=coupons, verdict="rejected", note="bcrypt runs in a thread pool at app/routers/auth.py:19"
+        ),
+    )
     assert crossed.startswith("NOT RECORDED") and hashing in crossed
-    assert ws.submit_verification("performance", _VerifyArgs(
-        finding_id=hashing, verdict="rejected", note="bcrypt runs in a thread pool at app/routers/auth.py:19"
-    )) == f"{hashing}: rejected."
+    assert (
+        ws.submit_verification(
+            "performance",
+            _VerifyArgs(
+                finding_id=hashing, verdict="rejected", note="bcrypt runs in a thread pool at app/routers/auth.py:19"
+            ),
+        )
+        == f"{hashing}: rejected."
+    )
 
 
 def test_uncited_note_about_another_finding_is_refused(workspace):
     from helpers.review_workspace import _VerifyArgs
 
     ws = workspace
-    fid = record(ws, "correctness", "Exception handler swallows token errors at startup", "Critical",
-                 ("app/routers/auth.py", 36, 37))
-    crossed = ws.submit_verification("correctness", _VerifyArgs(
-        finding_id=fid, verdict="confirmed",
-        note="Confirmed based on client_calls that 20 backend routes are never called by the frontend client."))
+    fid = record(
+        ws,
+        "correctness",
+        "Exception handler swallows token errors at startup",
+        "Critical",
+        ("app/routers/auth.py", 36, 37),
+    )
+    crossed = ws.submit_verification(
+        "correctness",
+        _VerifyArgs(
+            finding_id=fid,
+            verdict="confirmed",
+            note="Confirmed based on client_calls that 20 backend routes are never called by the frontend client.",
+        ),
+    )
     assert crossed.startswith("NOT RECORDED")
-    ok = ws.submit_verification("correctness", _VerifyArgs(
-        finding_id=fid, verdict="confirmed", note="The exception handler in auth.py swallows token errors."))
+    ok = ws.submit_verification(
+        "correctness",
+        _VerifyArgs(
+            finding_id=fid, verdict="confirmed", note="The exception handler in auth.py swallows token errors."
+        ),
+    )
     assert ok == f"{fid}: confirmed."
 
 
 def test_declared_runtimes_are_reported(workspace, tmp_path):
     (workspace.repo_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.14,<4.0"\n')
-    workspace.manifest = workspace.manifest.model_copy(update={"files": workspace.manifest.files + (
-        FileEntry(path="pyproject.toml", language="TOML", size_bytes=40),)})
+    workspace.manifest = workspace.manifest.model_copy(
+        update={"files": workspace.manifest.files + (FileEntry(path="pyproject.toml", language="TOML", size_bytes=40),)}
+    )
     assert workspace.declared_runtimes() == ["pyproject.toml: requires-python >=3.14,<4.0"]
     assert "requires-python >=3.14" in workspace.render_system_overview()
 
@@ -501,27 +794,48 @@ def test_verifier_audits_the_lanes_safe_conclusions(workspace):
 
     ws = workspace
     security = ws.config.category("security")
-    model = ("The API in app/main.py serves routers under app/routers; services in app/services hold the data "
-             "access. Identity arrives from request headers and file uploads are stored on local disk.")
-    ws.record_hypotheses(security, _HypothesesArgs(system_model=model, hypotheses=[
-        _HypothesisInput(statement=text, files=[f]) for text, f in _SPECIFIC_HYPOTHESES]))
+    model = (
+        "The API in app/main.py serves routers under app/routers; services in app/services hold the data "
+        "access. Identity arrives from request headers and file uploads are stored on local disk."
+    )
+    ws.record_hypotheses(
+        security,
+        _HypothesesArgs(
+            system_model=model,
+            hypotheses=[_HypothesisInput(statement=text, files=[f]) for text, f in _SPECIFIC_HYPOTHESES],
+        ),
+    )
     # A note about other code is refused even when it cites a line.
-    crossed = ws.resolve_hypothesis(security, _ResolveHypothesisArgs(
-        hypothesis_id="H-SEC-3", outcome="ruled_out", note="bcrypt hashing is offloaded at app/routers/auth.py:19"))
+    crossed = ws.resolve_hypothesis(
+        security,
+        _ResolveHypothesisArgs(
+            hypothesis_id="H-SEC-3", outcome="ruled_out", note="bcrypt hashing is offloaded at app/routers/auth.py:19"
+        ),
+    )
     assert crossed.startswith("NOT RECORDED")
     for hid, f in (("H-SEC-1", "app/main.py:3"), ("H-SEC-3", "app/services/orders_service.py:4")):
-        ws.resolve_hypothesis(security, _ResolveHypothesisArgs(hypothesis_id=hid, outcome="ruled_out",
-                                                               note=f"guarded at {f}"))
+        ws.resolve_hypothesis(
+            security, _ResolveHypothesisArgs(hypothesis_id=hid, outcome="ruled_out", note=f"guarded at {f}")
+        )
     refs = [i["ref"] for i in ws.negatives_to_audit("security")]
     assert refs == ["H-SEC-1", "H-SEC-3"]
     assert ws.uphold_negative("security", _UpholdArgs(ref="H-SEC-1", note="fine")).startswith("NOT RECORDED")
-    assert ws.uphold_negative("security", _UpholdArgs(ref="H-SEC-1", note="dependency at app/main.py:3")) \
+    assert (
+        ws.uphold_negative("security", _UpholdArgs(ref="H-SEC-1", note="dependency at app/main.py:3"))
         == "H-SEC-1: upheld."
-    out = ws.overturn_negative(security, _OverturnArgs(
-        ref="H-SEC-3", why_wrong="the guard at app/services/orders_service.py:4 only covers one caller",
-        title="Order lookup is not scoped to the caller", severity="High",
-        description="The lookup returns any order by id.", impact="Any user reads other users' orders.",
-        evidence=[{"file": "app/services/orders_service.py", "line_start": 1, "line_end": 2}]))
+    )
+    out = ws.overturn_negative(
+        security,
+        _OverturnArgs(
+            ref="H-SEC-3",
+            why_wrong="the guard at app/services/orders_service.py:4 only covers one caller",
+            title="Order lookup is not scoped to the caller",
+            severity="High",
+            description="The lookup returns any order by id.",
+            impact="Any user reads other users' orders.",
+            evidence=[{"file": "app/services/orders_service.py", "line_start": 1, "line_end": 2}],
+        ),
+    )
     assert "overturned" in out
     fid = out.split("recorded ")[1].split()[0]
     # An overturn is a new claim: it waits for independent verification instead of being pre-confirmed.
@@ -536,15 +850,31 @@ def test_severe_true_positives_must_reach_a_finding(workspace):
     from utils.finding import StaticFinding
 
     ws = workspace
-    cve = StaticFinding(id="sf-cve", tool="pip_audit", file="requirements.txt", line=None, severity="high",
-                        category="GHSA-abcd-1234", message="multipartlib 0.0.5: request body DoS")
-    style = StaticFinding(id="sf-low", tool="pip_audit", file="requirements.txt", line=None, severity="low",
-                          category="GHSA-low", message="otherlib 1.0: minor")
+    cve = StaticFinding(
+        id="sf-cve",
+        tool="pip_audit",
+        file="requirements.txt",
+        line=None,
+        severity="high",
+        category="GHSA-abcd-1234",
+        message="multipartlib 0.0.5: request body DoS",
+    )
+    style = StaticFinding(
+        id="sf-low",
+        tool="pip_audit",
+        file="requirements.txt",
+        line=None,
+        severity="low",
+        category="GHSA-low",
+        message="otherlib 1.0: minor",
+    )
     ws.static_by_id.update({cve.id: cve, style.id: style})
     dependencies = ws.config.category("dependencies")
     assert [g[1] for g in ws.untriaged_groups("dependencies")] == ["GHSA-abcd-1234", "GHSA-low"]
-    ws.triage_static(dependencies, _TriageArgs(finding_ids=["sf-cve", "sf-low"], verdict="true_positive",
-                                               reason="pinned in requirements.txt"))
+    ws.triage_static(
+        dependencies,
+        _TriageArgs(finding_ids=["sf-cve", "sf-low"], verdict="true_positive", reason="pinned in requirements.txt"),
+    )
     rows = ws.unrecorded_true_positives("dependencies")
     assert len(rows) == 1 and rows[0].startswith("sf-cve")
     record(ws, "dependencies", "Vulnerable multipartlib pinned for the upload API", "High", ("app/main.py", 1, 2))
@@ -556,9 +886,14 @@ def test_cleanup_code_does_not_make_persisted_locks_safe():
 
     claim = "`run_pipeline` (background work, db write, lock) (app/services/orders_service.py:40)"
     assert _cleanup_only_reason(claim, "the lock is released in the finally block at app/services/orders_service.py:90")
-    assert _cleanup_only_reason(
-        claim, "released in finally at app/services/orders_service.py:90; a stale lock expires after 10 min "
-               "(app/services/orders_service.py:12)") is None
+    assert (
+        _cleanup_only_reason(
+            claim,
+            "released in finally at app/services/orders_service.py:90; a stale lock expires after 10 min "
+            "(app/services/orders_service.py:12)",
+        )
+        is None
+    )
     assert _cleanup_only_reason("JWT claims are validated", "the except at app/routers/auth.py:9 rejects it") is None
 
 
@@ -567,9 +902,14 @@ def test_rejection_must_be_about_the_code_not_the_checklist(workspace):
 
     ws = workspace
     fid = record(ws, "inputs", "No way to cancel a running processing job", "Medium", ("app/main.py", 20, 22))
-    out = ws.submit_verification("inputs", _VerifyArgs(
-        finding_id=fid, verdict="rejected",
-        note="The review brief does not list job cancellation; jobs start at app/main.py:20."))
+    out = ws.submit_verification(
+        "inputs",
+        _VerifyArgs(
+            finding_id=fid,
+            verdict="rejected",
+            note="The review brief does not list job cancellation; jobs start at app/main.py:20.",
+        ),
+    )
     assert out.startswith("NOT RECORDED")
 
 
@@ -582,43 +922,89 @@ def test_hypotheses_must_be_concrete_distinct_and_confirmed_by_their_own_finding
 
     ws = workspace
     auth = ws.config.category("auth")
-    model = ("The API in app/main.py serves routers under app/routers; services in app/services hold the data "
-             "access. Sessions are cookies issued at login by app/routers/auth.py and checked by a dependency.")
-    vague = ws.record_hypotheses(auth, _HypothesesArgs(system_model=model, hypotheses=[
-        _HypothesisInput(statement="Session management might be insecure, potentially weak or not rotated",
-                         files=["app/routers/auth.py"])]))
+    model = (
+        "The API in app/main.py serves routers under app/routers; services in app/services hold the data "
+        "access. Sessions are cookies issued at login by app/routers/auth.py and checked by a dependency."
+    )
+    vague = ws.record_hypotheses(
+        auth,
+        _HypothesesArgs(
+            system_model=model,
+            hypotheses=[
+                _HypothesisInput(
+                    statement="Session management might be insecure, potentially weak or not rotated",
+                    files=["app/routers/auth.py"],
+                )
+            ],
+        ),
+    )
     assert "name the code you suspect" in vague
-    hedged = ws.record_hypotheses(auth, _HypothesesArgs(system_model=model, hypotheses=[
-        _HypothesisInput(statement="`login` in auth.py might configure sessions insecurely, potentially fixation",
-                         files=["app/routers/auth.py"])]))
+    hedged = ws.record_hypotheses(
+        auth,
+        _HypothesesArgs(
+            system_model=model,
+            hypotheses=[
+                _HypothesisInput(
+                    statement="`login` in auth.py might configure sessions insecurely, potentially fixation",
+                    files=["app/routers/auth.py"],
+                )
+            ],
+        ),
+    )
     assert "one concrete suspicion" in hedged
     hyps = [_HypothesisInput(statement=text, files=[f]) for text, f in _SPECIFIC_HYPOTHESES]
-    hyps.append(_HypothesisInput(statement="`get_current_user` in auth.py trusts the identity header the client sent",
-                                 files=["app/routers/auth.py"]))
+    hyps.append(
+        _HypothesisInput(
+            statement="`get_current_user` in auth.py trusts the identity header the client sent",
+            files=["app/routers/auth.py"],
+        )
+    )
     out = ws.record_hypotheses(auth, _HypothesesArgs(system_model=model, hypotheses=hyps))
     assert "duplicates" in out and len([h for h in ws.hypotheses.values() if h["lane"] == "auth"]) == 6
     cookie = record(ws, "auth", "Session cookie set without the HttpOnly flag", "Medium", ("app/routers/auth.py", 5, 6))
-    unrelated = ws.resolve_hypothesis(auth, _ResolveHypothesisArgs(
-        hypothesis_id="H-AUTH-2", outcome="confirmed", finding_id=cookie))
+    unrelated = ws.resolve_hypothesis(
+        auth, _ResolveHypothesisArgs(hypothesis_id="H-AUTH-2", outcome="confirmed", finding_id=cookie)
+    )
     assert unrelated.startswith("NOT RECORDED") and "different defect" in unrelated
     header = record(ws, "auth", "Identity header trusted by get_current_user", "High", ("app/routers/auth.py", 5, 6))
-    assert ws.resolve_hypothesis(auth, _ResolveHypothesisArgs(
-        hypothesis_id="H-AUTH-2", outcome="confirmed", finding_id=header)) == "H-AUTH-2: confirmed."
+    assert (
+        ws.resolve_hypothesis(
+            auth, _ResolveHypothesisArgs(hypothesis_id="H-AUTH-2", outcome="confirmed", finding_id=header)
+        )
+        == "H-AUTH-2: confirmed."
+    )
 
 
 def test_syntax_claims_are_checked_against_the_code_and_declared_runtime(workspace):
     ws = workspace
-    out = ws.record_finding(ws.config.category("correctness"), _RecordFindingArgs(
-        title="SyntaxError in auth.py prevents the app from starting", severity="Critical", confidence="high",
-        description="d", impact="i", evidence=[EvidenceInput(file="app/routers/auth.py", line_start=3)]))
+    out = ws.record_finding(
+        ws.config.category("correctness"),
+        _RecordFindingArgs(
+            title="SyntaxError in auth.py prevents the app from starting",
+            severity="Critical",
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[EvidenceInput(file="app/routers/auth.py", line_start=3)],
+        ),
+    )
     assert out.startswith("NOT RECORDED") and "compiles" in out
     (ws.repo_path / "app/routers/auth.py").write_text("try:\n    pass\nexcept A, B:\n    pass\n")
     (ws.repo_path / "pyproject.toml").write_text('[project]\nrequires-python = ">=3.99"\n')
-    ws.manifest = ws.manifest.model_copy(update={"files": ws.manifest.files + (
-        FileEntry(path="pyproject.toml", language="TOML", size_bytes=40),)})
-    out = ws.record_finding(ws.config.category("correctness"), _RecordFindingArgs(
-        title="SyntaxError in auth.py prevents the app from starting", severity="Critical", confidence="high",
-        description="d", impact="i", evidence=[EvidenceInput(file="app/routers/auth.py", line_start=3)]))
+    ws.manifest = ws.manifest.model_copy(
+        update={"files": ws.manifest.files + (FileEntry(path="pyproject.toml", language="TOML", size_bytes=40),)}
+    )
+    out = ws.record_finding(
+        ws.config.category("correctness"),
+        _RecordFindingArgs(
+            title="SyntaxError in auth.py prevents the app from starting",
+            severity="Critical",
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[EvidenceInput(file="app/routers/auth.py", line_start=3)],
+        ),
+    )
     assert out.startswith("NOT RECORDED") and "targets Python 3.99+" in out
 
 
@@ -627,15 +1013,37 @@ def test_client_only_evidence_is_outside_a_backend_review(workspace):
     for rel in ("frontend/package.json", "frontend/src/api.ts", "frontend/.env.example"):
         (ws.repo_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (ws.repo_path / rel).write_text("const x = 1\n" * 10)
-    ws.manifest = ws.manifest.model_copy(update={"files": ws.manifest.files + tuple(
-        FileEntry(path=p, language="TypeScript", size_bytes=100, lines=10)
-        for p in ("frontend/package.json", "frontend/src/api.ts", "frontend/.env.example"))})
+    ws.manifest = ws.manifest.model_copy(
+        update={
+            "files": ws.manifest.files
+            + tuple(
+                FileEntry(path=p, language="TypeScript", size_bytes=100, lines=10)
+                for p in ("frontend/package.json", "frontend/src/api.ts", "frontend/.env.example")
+            )
+        }
+    )
     ws.frontend_in_scope = False  # the frontend lane switched off: backend-only review
-    out = ws.record_finding(ws.config.category("testing"), _RecordFindingArgs(
-        title="Weak password in browser tests", severity="Low", confidence="high", description="d", impact="i",
-        evidence=[EvidenceInput(file="frontend/src/api.ts", line_start=2)]))
+    out = ws.record_finding(
+        ws.config.category("testing"),
+        _RecordFindingArgs(
+            title="Weak password in browser tests",
+            severity="Low",
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[EvidenceInput(file="frontend/src/api.ts", line_start=2)],
+        ),
+    )
     assert out.startswith("NOT RECORDED") and "browser-client" in out
-    ok = ws.record_finding(ws.config.category("secrets"), _RecordFindingArgs(
-        title="Backend API key handed to the browser through VITE_API_KEY", severity="High", confidence="high",
-        description="d", impact="i", evidence=[EvidenceInput(file="frontend/.env.example", line_start=2)]))
+    ok = ws.record_finding(
+        ws.config.category("secrets"),
+        _RecordFindingArgs(
+            title="Backend API key handed to the browser through VITE_API_KEY",
+            severity="High",
+            confidence="high",
+            description="d",
+            impact="i",
+            evidence=[EvidenceInput(file="frontend/.env.example", line_start=2)],
+        ),
+    )
     assert ok.startswith("Recorded ")

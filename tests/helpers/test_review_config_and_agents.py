@@ -270,8 +270,13 @@ class TestRunAgentResume:
     async def test_completion_check_resumes_once_with_its_message(self):
         from helpers.review_agents import run_agent
 
-        agent = _FakeAgent([AIMessage(content="All done."), AIMessage(content="Recorded 3 findings."),
-                            AIMessage(content="Still nothing.")])
+        agent = _FakeAgent(
+            [
+                AIMessage(content="All done."),
+                AIMessage(content="Recorded 3 findings."),
+                AIMessage(content="Still nothing."),
+            ]
+        )
         checks = []
 
         def nothing_recorded():
@@ -303,7 +308,11 @@ class TestRunAgentResume:
         agent = _FakeAgent([AIMessage(content=""), AIMessage(content="Verified."), AIMessage(content="Verified.")])
         pending = ["BUG-1"]
         stats = await run_agent(
-            agent, name="verifier:x", kickoff="go", files={}, timeout_seconds=30,
+            agent,
+            name="verifier:x",
+            kickoff="go",
+            files={},
+            timeout_seconds=30,
             completion_check=lambda: f"No verdict yet: {pending[0]}" if pending else None,
         )
         assert stats.status == "completed" and len(agent.inputs) == 3
@@ -331,8 +340,9 @@ class TestRunAgentResume:
             return result
 
         agent.ainvoke = tracking
-        stats = await run_agent(agent, name="verifier:x", kickoff="go", files={}, timeout_seconds=30,
-                                completion_check=check)
+        stats = await run_agent(
+            agent, name="verifier:x", kickoff="go", files={}, timeout_seconds=30, completion_check=check
+        )
         assert stats.status == "completed"
         # 1 initial + resumes while the pending list shrinks; a round that changes nothing is escalated
         # once, and the second unchanged round ends it.
@@ -379,8 +389,15 @@ def test_strong_lane_specialist_runs_on_the_judge_model(monkeypatch, tmp_path):
     monkeypatch.setattr(review_agents, "create_deep_agent", lambda **kwargs: kwargs)
     for strong in (False, True):
         review_agents.build_agent(
-            settings=cfg, repo_path=tmp_path, role="specialist", name="s", system_prompt="p",
-            tools=[], explorer_tools=[], model_calls=5, strong=strong,
+            settings=cfg,
+            repo_path=tmp_path,
+            role="specialist",
+            name="s",
+            system_prompt="p",
+            tools=[],
+            explorer_tools=[],
+            model_calls=5,
+            strong=strong,
         )
     assert "specialist" in roles and "verifier" in roles
 
@@ -410,6 +427,7 @@ def test_run_budget_is_shared_across_resumes_and_warns_on_time():
             def override(self, messages):
                 self.messages = messages
                 return self
+
         budget.limit, budget.used = 100, 0
         assert len(mw._nudge(_Req()).messages) == 1  # plenty of calls and time: no notice
         budget.deadline = _time.monotonic() + 60  # 6% of the timeout left
@@ -476,7 +494,6 @@ def test_lane_reads_are_tracked_per_agent_including_explorers():
     finally:
         _LANE_READS.reset(lane_token)
         REVIEW_READS.reset(shared_token)
-
 
 
 async def test_a_model_call_never_outlives_the_lane_clock():

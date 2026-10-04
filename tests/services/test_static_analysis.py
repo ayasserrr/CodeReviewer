@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,14 +14,16 @@ def _make_manifest(files: list[FileEntry] | None = None) -> RepositoryManifest:
         repository_id="12345678-1234-5678-1234-567812345678",
         head_sha="a" * 40,
         cache_key="key",
-        generated_at=datetime.now(timezone.utc),
+        generated_at=datetime.now(UTC),
         files=tuple(files or []),
     )
 
 
 class TestRunToolSafely:
     def test_returns_method_result_on_success(self):
-        result = _run_tool_safely("ruff", lambda path, files: {"status": "success", "findings": [], "error": None}, ".", [])
+        result = _run_tool_safely(
+            "ruff", lambda path, files: {"status": "success", "findings": [], "error": None}, ".", []
+        )
         assert result["status"] == "success"
 
     def test_controller_exception_degrades_to_error_entry(self):
@@ -72,9 +74,11 @@ class TestRunAnalysisSync:
             {"tool": "gitleaks", "status": "success", "findings": [], "error": None},
         ]
 
-        with patch("services.static_analysis.verify_tools_available"), patch(
-            "services.static_analysis.StaticAnalysisController"
-        ) as MockStatic, patch("services.static_analysis.SecurityEngineController") as MockSecurity:
+        with (
+            patch("services.static_analysis.verify_tools_available"),
+            patch("services.static_analysis.StaticAnalysisController") as MockStatic,
+            patch("services.static_analysis.SecurityEngineController") as MockSecurity,
+        ):
             MockStatic.return_value.run_methods = {"ruff": lambda path, files: fake_static_result}
             MockSecurity.return_value.run_security_scan.return_value = fake_security_results
 
@@ -100,11 +104,14 @@ class TestRunAnalysisSync:
             def _run(repo_path, files):
                 captured[tool_name] = files
                 return {"status": "success", "findings": [], "error": None}
+
             return _run
 
-        with patch("services.static_analysis.verify_tools_available"), patch(
-            "services.static_analysis.StaticAnalysisController"
-        ) as MockStatic, patch("services.static_analysis.SecurityEngineController") as MockSecurity:
+        with (
+            patch("services.static_analysis.verify_tools_available"),
+            patch("services.static_analysis.StaticAnalysisController") as MockStatic,
+            patch("services.static_analysis.SecurityEngineController") as MockSecurity,
+        ):
             MockStatic.return_value.run_methods = {
                 "ruff": make_capturing_method("ruff"),
                 "jscpd": make_capturing_method("jscpd"),
@@ -129,9 +136,11 @@ class TestRunAnalysisSync:
             captured["files"] = files_to_analyze
             return []
 
-        with patch("services.static_analysis.verify_tools_available"), patch(
-            "services.static_analysis.StaticAnalysisController"
-        ) as MockStatic, patch("services.static_analysis.SecurityEngineController") as MockSecurity:
+        with (
+            patch("services.static_analysis.verify_tools_available"),
+            patch("services.static_analysis.StaticAnalysisController") as MockStatic,
+            patch("services.static_analysis.SecurityEngineController") as MockSecurity,
+        ):
             MockStatic.return_value.run_methods = {}
             MockSecurity.return_value.run_security_scan.side_effect = capture_scan
 
@@ -142,13 +151,19 @@ class TestRunAnalysisSync:
 
 class TestAnalyzePersistence:
     async def test_persists_findings_via_static_finding_repository(self, tmp_path):
-        fake_finding = MagicMock(id="abc123", tool="ruff", file="a.py", line=1, severity="warning", category="F401", message="x")
+        fake_finding = MagicMock(
+            id="abc123", tool="ruff", file="a.py", line=1, severity="warning", category="F401", message="x"
+        )
 
-        with patch("services.static_analysis.verify_tools_available"), patch(
-            "services.static_analysis._run_analysis_sync", return_value=([fake_finding], {"ruff": {"status": "success"}})
-        ), patch("services.static_analysis.StaticFindingRepository") as MockRepo, patch(
-            "services.static_analysis.save_static_findings", new=AsyncMock()
-        ) as mock_save:
+        with (
+            patch("services.static_analysis.verify_tools_available"),
+            patch(
+                "services.static_analysis._run_analysis_sync",
+                return_value=([fake_finding], {"ruff": {"status": "success"}}),
+            ),
+            patch("services.static_analysis.StaticFindingRepository") as MockRepo,
+            patch("services.static_analysis.save_static_findings", new=AsyncMock()) as mock_save,
+        ):
             db_session = MagicMock()
             manifest = _make_manifest()
             findings, tool_results = await analyze(tmp_path, manifest, db_session)

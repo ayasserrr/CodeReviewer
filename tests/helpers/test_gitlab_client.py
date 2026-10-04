@@ -22,38 +22,33 @@ async def test_resolve_project_success():
 @pytest.mark.parametrize("status_code", [401, 403])
 async def test_resolve_project_auth_failure(status_code):
     mock_get = AsyncMock(return_value=_response(status_code))
-    with patch("httpx.AsyncClient.get", new=mock_get):
-        with pytest.raises(AuthenticationError):
-            await resolve_project("https://gitlab.example.com", "group/project", "bad-token")
+    with patch("httpx.AsyncClient.get", new=mock_get), pytest.raises(AuthenticationError):
+        await resolve_project("https://gitlab.example.com", "group/project", "bad-token")
 
 
 async def test_resolve_project_not_found():
     mock_get = AsyncMock(return_value=_response(404))
-    with patch("httpx.AsyncClient.get", new=mock_get):
-        with pytest.raises(RepoNotFoundError):
-            await resolve_project("https://gitlab.example.com", "group/project", "token")
+    with patch("httpx.AsyncClient.get", new=mock_get), pytest.raises(RepoNotFoundError):
+        await resolve_project("https://gitlab.example.com", "group/project", "token")
 
 
 @pytest.mark.parametrize("status_code", [429, 500, 502, 503])
 async def test_resolve_project_upstream_error(status_code):
     mock_get = AsyncMock(return_value=_response(status_code))
-    with patch("httpx.AsyncClient.get", new=mock_get):
-        with pytest.raises(NetworkError):
-            await resolve_project("https://gitlab.example.com", "group/project", "token")
+    with patch("httpx.AsyncClient.get", new=mock_get), pytest.raises(NetworkError):
+        await resolve_project("https://gitlab.example.com", "group/project", "token")
 
 
 async def test_resolve_project_timeout():
     mock_get = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
-    with patch("httpx.AsyncClient.get", new=mock_get):
-        with pytest.raises(NetworkError, match="timed out"):
-            await resolve_project("https://gitlab.example.com", "group/project", "token")
+    with patch("httpx.AsyncClient.get", new=mock_get), pytest.raises(NetworkError, match="timed out"):
+        await resolve_project("https://gitlab.example.com", "group/project", "token")
 
 
 async def test_resolve_project_connection_error():
     mock_get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
-    with patch("httpx.AsyncClient.get", new=mock_get):
-        with pytest.raises(NetworkError):
-            await resolve_project("https://gitlab.example.com", "group/project", "token")
+    with patch("httpx.AsyncClient.get", new=mock_get), pytest.raises(NetworkError):
+        await resolve_project("https://gitlab.example.com", "group/project", "token")
 
 
 async def test_resolve_project_encodes_nested_group_path():

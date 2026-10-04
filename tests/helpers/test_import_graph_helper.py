@@ -11,9 +11,14 @@ from utils import DiscoveryStatistics, FileEntry, RepositoryManifest
 
 def _manifest(files: tuple[FileEntry, ...], source_roots: tuple[str, ...]) -> RepositoryManifest:
     return RepositoryManifest(
-        schema_version="1.0.0", discovery_engine_version="1.0.0", repository_id=str(uuid4()),
-        head_sha="a" * 40, cache_key="key", generated_at=datetime.now(UTC),
-        files=files, statistics=DiscoveryStatistics(source_roots=source_roots),
+        schema_version="1.0.0",
+        discovery_engine_version="1.0.0",
+        repository_id=str(uuid4()),
+        head_sha="a" * 40,
+        cache_key="key",
+        generated_at=datetime.now(UTC),
+        files=files,
+        statistics=DiscoveryStatistics(source_roots=source_roots),
     )
 
 
@@ -109,8 +114,13 @@ def test_non_identifier_top_level_folder_is_an_import_root():
     from utils import DiscoveryStatistics, FileEntry, RepositoryManifest
 
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id="r", head_sha="a" * 40, cache_key="k",
-        generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id="r",
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
         files=tuple(
             FileEntry(path=p, language="Python", size_bytes=1, lines=1)
             for p in ("my-service/app/main.py", "my-service/src/util.py", "tools/x.py", "setup.py")

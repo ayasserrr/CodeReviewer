@@ -17,7 +17,7 @@ from config import settings
 
 pytestmark = pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")
 
-_PYTHON = '''\
+_PYTHON = """\
 import os
 import requests
 import random
@@ -73,9 +73,9 @@ def call():
         return requests.get("https://example.com")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-'''
+"""
 
-_TSX = '''\
+_TSX = """\
 import ExcelJS from 'exceljs'
 
 const key = import.meta.env.VITE_API_KEY
@@ -90,7 +90,7 @@ export async function exportRows(rows: string[][]) {
   rows.forEach((r) => sheet.addRow(r))
   return workbook.xlsx.writeBuffer()
 }
-'''
+"""
 
 
 @pytest.fixture(scope="module")
@@ -99,9 +99,24 @@ def results(tmp_path_factory) -> dict:
     (repo / "app.py").write_text(_PYTHON)
     (repo / "web.tsx").write_text(_TSX)
     completed = subprocess.run(
-        ["semgrep", "scan", "--json", "--quiet", "--metrics=off", "--disable-version-check",
-         f"--config={settings.SEMGREP_CONFIG}", "app.py", "web.tsx"],
-        cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, check=False,
+        [
+            "semgrep",
+            "scan",
+            "--json",
+            "--quiet",
+            "--metrics=off",
+            "--disable-version-check",
+            f"--config={settings.SEMGREP_CONFIG}",
+            "app.py",
+            "web.tsx",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        check=False,
         env={**os.environ, "SEMGREP_ENABLE_VERSION_CHECK": "0"},
     )
     assert completed.returncode in (0, 1), completed.stderr[-2000:]
@@ -116,7 +131,9 @@ def _hits(results: dict) -> dict[str, list[int]]:
 
 
 def test_rulesets_load_without_config_errors(results):
-    config_errors = [e for e in results["errors"] if "Invalid" in str(e.get("message", "")) or e.get("level") == "error"]
+    config_errors = [
+        e for e in results["errors"] if "Invalid" in str(e.get("message", "")) or e.get("level") == "error"
+    ]
     assert config_errors == []
     assert Path(settings.SEMGREP_CONFIG, "web-security.yml").is_file()
 

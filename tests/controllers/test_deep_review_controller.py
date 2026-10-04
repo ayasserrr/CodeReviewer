@@ -57,8 +57,11 @@ def _script(system: str, turn: int) -> AIMessage:
                 content="",
                 tool_calls=[
                     _call(
-                        "assess_security_kpi", kpi_id="KPI-02", status="open",
-                        summary="Docs always on.", evidence=[{"file": "app/main.py", "line_start": 1}],
+                        "assess_security_kpi",
+                        kpi_id="KPI-02",
+                        status="open",
+                        summary="Docs always on.",
+                        evidence=[{"file": "app/main.py", "line_start": 1}],
                     )
                 ],
             )
@@ -70,8 +73,12 @@ def _script(system: str, turn: int) -> AIMessage:
                 tool_calls=[
                     _call("write_plan", plan="- [ ] check handler"),
                     _call(
-                        "record_finding", title="Handler returns secrets", severity="High", confidence="high",
-                        description="`app/main.py:4` returns the secret.", impact="Anyone can read it.",
+                        "record_finding",
+                        title="Handler returns secrets",
+                        severity="High",
+                        confidence="high",
+                        description="`app/main.py:4` returns the secret.",
+                        impact="Anyone can read it.",
                         evidence=[{"file": "app/main.py", "line_start": 4, "line_end": 5}],
                     ),
                 ],
@@ -83,8 +90,13 @@ def _script(system: str, turn: int) -> AIMessage:
                 content="",
                 tool_calls=[
                     _call(
-                        "record_finding", title="Speculative issue", severity="Medium", confidence="high",
-                        description="Not real.", impact="None.", evidence=[{"file": "app/main.py", "line_start": 1}],
+                        "record_finding",
+                        title="Speculative issue",
+                        severity="Medium",
+                        confidence="high",
+                        description="Not real.",
+                        impact="None.",
+                        evidence=[{"file": "app/main.py", "line_start": 1}],
                     ),
                 ],
             )
@@ -93,7 +105,9 @@ def _script(system: str, turn: int) -> AIMessage:
         if turn == 0:
             return AIMessage(
                 content="",
-                tool_calls=[_call("triage_static_rule", tool="ruff", rule="F401", verdict="false_positive", reason="re-export")],
+                tool_calls=[
+                    _call("triage_static_rule", tool="ruff", rule="F401", verdict="false_positive", reason="re-export")
+                ],
             )
         return done
     if "independent verification (Security & Authorization)" in system:
@@ -102,7 +116,12 @@ def _script(system: str, turn: int) -> AIMessage:
                 content="",
                 tool_calls=[
                     _call("submit_verification", finding_id="SEC-1", verdict="confirmed", note="Read app/main.py:4."),
-                    _call("submit_verification", finding_id="SEC-2", verdict="rejected", note="Guarded upstream at app/main.py:2."),
+                    _call(
+                        "submit_verification",
+                        finding_id="SEC-2",
+                        verdict="rejected",
+                        note="Guarded upstream at app/main.py:2.",
+                    ),
                 ],
             )
         return done
@@ -112,7 +131,9 @@ def _script(system: str, turn: int) -> AIMessage:
                 content="",
                 tool_calls=[
                     _call(
-                        "submit_executive_summary", scope="A tiny FastAPI app.", verdict="Not production-ready.",
+                        "submit_executive_summary",
+                        scope="A tiny FastAPI app.",
+                        verdict="Not production-ready.",
                         priority_order=[{"title": "Secrets", "rationale": "Leaks.", "finding_ids": ["SEC-1"]}],
                         cross_cutting=[{"title": "No auth", "explanation": "Root cause.", "finding_ids": ["SEC-1"]}],
                         verification_note="SEC-1 confirmed in code.",
@@ -126,23 +147,35 @@ def _script(system: str, turn: int) -> AIMessage:
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     (tmp_path / "app").mkdir()
-    (tmp_path / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\ndef h():\n    return SECRET\n")
+    (tmp_path / "app" / "main.py").write_text(
+        "from fastapi import FastAPI\n\napp = FastAPI()\ndef h():\n    return SECRET\n"
+    )
     return tmp_path
 
 
 def _inputs(repo: Path):
     manifest = RepositoryManifest(
-        schema_version="1", discovery_engine_version="1", repository_id=str(uuid4()), head_sha="a" * 40,
-        cache_key="k", generated_at=datetime.now(UTC), statistics=DiscoveryStatistics(source_roots=(".",)),
+        schema_version="1",
+        discovery_engine_version="1",
+        repository_id=str(uuid4()),
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
+        statistics=DiscoveryStatistics(source_roots=(".",)),
         files=(FileEntry(path="app/main.py", language="Python", size_bytes=10, lines=5),),
     )
     graph = DependencyGraph(
-        schema_version="1", engine_version="1", repository_id=manifest.repository_id, head_sha="a" * 40,
-        cache_key="k", generated_at=datetime.now(UTC),
+        schema_version="1",
+        engine_version="1",
+        repository_id=manifest.repository_id,
+        head_sha="a" * 40,
+        cache_key="k",
+        generated_at=datetime.now(UTC),
     )
     static = [
         StaticFinding.from_normalized(
-            "ruff", {"file": "app/main.py", "line": 1, "severity": "warning", "category": "F401", "message": "unused import"}
+            "ruff",
+            {"file": "app/main.py", "line": 1, "severity": "warning", "category": "F401", "message": "unused import"},
         )
     ]
     return manifest, graph, static
@@ -165,8 +198,14 @@ async def test_full_review_with_scripted_agents(repo: Path, scripted_models, mon
     manifest, graph, static = _inputs(repo)
 
     report, markdown = await DeepReviewController().review(
-        repository_id=manifest.repository_id, repository_name="demo", repo_path=repo, head_sha="a" * 40,
-        cache_key="ck", manifest=manifest, static_findings=static, tool_results={"ruff": {"status": "success"}},
+        repository_id=manifest.repository_id,
+        repository_name="demo",
+        repo_path=repo,
+        head_sha="a" * 40,
+        cache_key="ck",
+        manifest=manifest,
+        static_findings=static,
+        tool_results={"ruff": {"status": "success"}},
         graph=graph,
     )
 
@@ -236,8 +275,15 @@ async def test_failed_agent_degrades_to_coverage_warning(repo: Path, monkeypatch
 
         no_retry.side_effect = lambda **_: type("NoRetry", (AgentMiddleware,), {})()
         report, markdown = await DeepReviewController().review(
-            repository_id=manifest.repository_id, repository_name="demo", repo_path=repo, head_sha="a" * 40,
-            cache_key="ck", manifest=manifest, static_findings=static, tool_results={}, graph=graph,
+            repository_id=manifest.repository_id,
+            repository_name="demo",
+            repo_path=repo,
+            head_sha="a" * 40,
+            cache_key="ck",
+            manifest=manifest,
+            static_findings=static,
+            tool_results={},
+            graph=graph,
         )
 
     runs = {r.agent: r for r in report.agent_runs}
